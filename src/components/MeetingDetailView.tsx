@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { CopyButton } from "@/components/CopyButton";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
 import { formatMeetingDate, STATUS_LABELS } from "@/lib/meetingLabels";
 import { formatDuration } from "@/lib/recorder";
+import { formatSummaryMarkdown } from "@/lib/summaryMarkdown";
 
 export interface Segment {
   start: number;
@@ -22,13 +24,6 @@ export interface MeetingDetailData {
   segments: Segment[];
   summary: Summary | null;
   hasAudio: boolean;
-}
-
-// The next Claude Code command for this meeting's lifecycle stage. null when there
-// is nothing to run yet (still transcribing) or already summarized.
-function nextCommand(status: StatusJson["status"]): string | null {
-  if (status === "transcribed") return "/meeting-summarize";
-  return null;
 }
 
 function Section({ title, items }: { title: string; items: string[] }) {
@@ -51,8 +46,46 @@ function Section({ title, items }: { title: string; items: string[] }) {
 }
 
 export function MeetingDetailView({ id, status, transcript, segments, summary, hasAudio }: MeetingDetailData) {
+  const router = useRouter();
   const [tab, setTab] = useState<"script" | "summary">("script");
-  const command = nextCommand(status.status);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [retrying, setRetrying] = useState(false);
+
+  // Learn whether a summarizer model is set so the `transcribed` hint can point to
+  // settings when it is missing. The app summarizes in-process; it never calls an LLM here.
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/settings/llm/health", { cache: "no-store" });
+        const data = (await res.json()) as { configured: boolean };
+        if (active) setConfigured(data.configured);
+      } catch {
+        // Leave unknown — the hint stays neutral.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // While summarizing, refresh server data so the finished summary appears without a
+  // manual reload (status is file-derived by the server page).
+  useEffect(() => {
+    if (status.status !== "summarizing") return;
+    const timer = setInterval(() => router.refresh(), 3000);
+    return () => clearInterval(timer);
+  }, [status.status, router]);
+
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await fetch(`/api/meetings/${id}/summarize`, { method: "POST" });
+      router.refresh();
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   return (
     <main className="mx-auto max-w-5xl space-y-8 px-6 py-12">
@@ -69,21 +102,15 @@ export function MeetingDetailView({ id, status, transcript, segments, summary, h
         <p className="mt-1 font-mono text-[12px] text-inkSoft">{formatMeetingDate(status.startedAt)}</p>
       </div>
 
-      {command && (
-        <div className="overflow-hidden rounded-[12px] border border-line">
-          <div className="flex items-center gap-1.5 bg-chrome px-4 py-2.5">
-            <span className="h-3 w-3 rounded-full bg-error/70" aria-hidden="true" />
-            <span className="h-3 w-3 rounded-full bg-warn/70" aria-hidden="true" />
-            <span className="h-3 w-3 rounded-full bg-success/70" aria-hidden="true" />
-            <span className="ml-2 text-[12px] text-inkSoft">다음 단계 — 터미널에서 실행</span>
-          </div>
-          <div className="flex items-center justify-between gap-4 bg-ink px-4 py-3">
-            <code className="font-mono text-[14px] text-bg">
-              {command} {id}
-            </code>
-            <CopyButton text={`${command} ${id}`} label="복사" />
-          </div>
-        </div>
+      <StatusCard status={status} configured={configured} onRetry={() => void retry()} retrying={retrying} />
+
+      {status.status === "summarized" && summary && (
+        <ExportToolbar
+          id={id}
+          summary={summary}
+          transcript={transcript.text}
+          participants={status.review.participants}
+        />
       )}
 
       <div>
@@ -133,6 +160,137 @@ export function MeetingDetailView({ id, status, transcript, segments, summary, h
   );
 }
 
+function Spinner() {
+  return (
+    <span
+      className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-line border-t-accent motion-reduce:animate-none"
+      aria-hidden="true"
+    />
+  );
+}
+
+// Lifecycle card above the tabs: surfaces a summarize failure (with retry), the
+// in-progress spinner, or the transcribed→summary hint. null once summarized.
+function StatusCard({
+  status,
+  configured,
+  onRetry,
+  retrying,
+}: {
+  status: StatusJson;
+  configured: boolean | null;
+  onRetry: () => void;
+  retrying: boolean;
+}) {
+  if (status.error?.action === "retry_summary") {
+    return (
+      <div className="flex items-center justify-between gap-4 rounded-[12px] border border-error/40 bg-error/10 px-5 py-4">
+        <p className="text-[14px] text-ink">
+          <span className="font-semibold text-error">요약 실패</span> — {status.error.message}
+        </p>
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={retrying}
+          className="shrink-0 rounded-full bg-ink px-5 py-2 text-[14px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50"
+        >
+          {retrying ? "재시도 중…" : "재시도"}
+        </button>
+      </div>
+    );
+  }
+
+  if (status.status === "summarizing") {
+    return (
+      <div className="flex items-center gap-3 rounded-[12px] border border-line bg-panel px-5 py-4">
+        <Spinner />
+        <p className="text-[14px] text-ink">요약 생성 중…</p>
+      </div>
+    );
+  }
+
+  if (status.status === "transcribed") {
+    if (configured === false) {
+      return (
+        <div className="flex items-center justify-between gap-4 rounded-[12px] border border-warn/40 bg-warnBg px-5 py-4">
+          <p className="text-[14px] text-ink">요약하려면 모델을 설정하세요.</p>
+          <Link
+            href="/settings"
+            className="shrink-0 rounded-md border border-line bg-panel px-3 py-1.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft"
+          >
+            설정
+          </Link>
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center gap-3 rounded-[12px] border border-line bg-panel px-5 py-4">
+        <span
+          className="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-accent motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+        <p className="text-[14px] text-ink">요약 대기 · 자동 생성 중…</p>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// Export/copy actions for a finished summary. Copies reuse the already-loaded
+// summary/transcript; downloads are plain anchors; 폴더 열기 opens the local folder.
+function ExportToolbar({
+  id,
+  summary,
+  transcript,
+  participants,
+}: {
+  id: string;
+  summary: Summary;
+  transcript: string;
+  participants: string[];
+}) {
+  const anchor =
+    "shrink-0 rounded-md border border-line bg-panel px-3 py-1.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft";
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <CopyButton text={formatSummaryMarkdown(summary, participants)} label="요약 복사" />
+      <CopyButton text={transcript} label="전사 복사" />
+      <a href={`/api/meetings/${id}/export?fmt=md`} download className={anchor}>
+        요약 다운로드(.md)
+      </a>
+      <a href={`/api/meetings/${id}/export?fmt=json`} download className={anchor}>
+        JSON(.json)
+      </a>
+      <RevealButton id={id} />
+    </div>
+  );
+}
+
+function RevealButton({ id }: { id: string }) {
+  const [pending, setPending] = useState(false);
+  const open = async () => {
+    setPending(true);
+    try {
+      await fetch(`/api/meetings/${id}/reveal`, { method: "POST" });
+    } catch {
+      // Best-effort — local folder reveal only.
+    } finally {
+      setPending(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void open()}
+      disabled={pending}
+      className="shrink-0 rounded-md border border-line bg-panel px-3 py-1.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft disabled:opacity-50"
+    >
+      {pending ? "여는 중…" : "폴더 열기"}
+    </button>
+  );
+}
+
 function ScriptTab({ transcript, segments }: { transcript: MeetingDetailData["transcript"]; segments: Segment[] }) {
   if (!transcript.text.trim()) {
     return <p className="text-[14px] text-inkSoft">아직 전사가 없습니다.</p>;
@@ -176,11 +334,7 @@ function ScriptTab({ transcript, segments }: { transcript: MeetingDetailData["tr
 
 function SummaryTab({ summary }: { summary: Summary | null }) {
   if (!summary) {
-    return (
-      <p className="text-[14px] text-inkSoft">
-        아직 요약이 없습니다 — 터미널에서 <code className="font-mono text-accent">/meeting-summarize</code> 실행
-      </p>
-    );
+    return <p className="text-[14px] text-inkSoft">아직 요약이 없습니다.</p>;
   }
 
   const actionLines = summary.actionItems.map((a) => `${a.owner} — ${a.task} (기한: ${a.due})`);

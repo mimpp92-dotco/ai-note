@@ -9,13 +9,28 @@ import { promisify } from "node:util";
 // mirrors FAKE_WHISPER so route tests stay hermetic (no ffmpeg install needed).
 
 const execFileAsync = promisify(execFile);
-const FFMPEG_FALLBACK = "/opt/homebrew/bin/ffmpeg";
 
-export function ffmpegPath(): string | null {
+// Cross-platform discovery. FFMPEG_PATH wins; then known install locations; then
+// the bare name resolved via PATH at exec time (covers Windows `ffmpeg.exe`).
+const FFMPEG_CANDIDATES = [
+  "/opt/homebrew/bin/ffmpeg", // macOS (Apple Silicon Homebrew)
+  "/usr/local/bin/ffmpeg", // macOS (Intel Homebrew) / common *nix
+  "/usr/bin/ffmpeg", // Debian/Ubuntu apt
+];
+
+const FFMPEG_NOT_FOUND =
+  "ffmpeg not found. Set FFMPEG_PATH or install it — " +
+  "macOS: `brew install ffmpeg` · Debian/Ubuntu: `apt install ffmpeg` · " +
+  "Windows: `choco install ffmpeg` (or download from ffmpeg.org). " +
+  "It is required to remux the recording.";
+
+export function ffmpegPath(): string {
   const fromEnv = process.env.FFMPEG_PATH;
   if (fromEnv && existsSync(fromEnv)) return fromEnv;
-  if (existsSync(FFMPEG_FALLBACK)) return FFMPEG_FALLBACK;
-  return null;
+  for (const candidate of FFMPEG_CANDIDATES) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return "ffmpeg"; // relies on PATH at exec time
 }
 
 export async function remuxToPlay(audioPath: string, playPath: string): Promise<void> {
@@ -27,13 +42,15 @@ export async function remuxToPlay(audioPath: string, playPath: string): Promise<
       await copyFile(audioPath, tmpPath);
     } else {
       const bin = ffmpegPath();
-      if (!bin) {
-        throw new Error(
-          "ffmpeg not found. Install it (`brew install ffmpeg`) — it is required to remux the recording.",
-        );
-      }
       // -c copy: container remux only, no re-encode. -y: overwrite the temp.
-      await execFileAsync(bin, ["-y", "-i", audioPath, "-c", "copy", tmpPath]);
+      try {
+        await execFileAsync(bin, ["-y", "-i", audioPath, "-c", "copy", tmpPath]);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new Error(FFMPEG_NOT_FOUND);
+        }
+        throw err;
+      }
     }
     await rename(tmpPath, playPath);
   } catch (err) {

@@ -1,8 +1,8 @@
 # evals/ — AI 기능 품질 채점 (Agent Performance Outcomes)
 
-이 프로젝트의 유일한 AI 기능은 `/meeting-summarize`(원문 전사 → 교정 + 구조화 요약)다. 여기서 **회귀 없이 잘 작동하는지 정량 측정**한다. 프롬프트를 고치기 전에 이 채점표부터 본다 — "감"이 아니라 pass-rate로.
+이 프로젝트의 핵심 AI 기능은 **요약**(원문 전사 → 교정 + 구조화 요약)이다. 백그라운드 워커(`src/lib/summarizeWorker.ts`)가 사용자의 로컬 CLI(claude/codex)나 Ollama로 이를 수행한다. 여기서 **회귀 없이 잘 작동하는지 정량 측정**한다. 프롬프트를 고치기 전에 이 채점표부터 본다 — "감"이 아니라 pass-rate로.
 
-> **주의(Note):** 앱 코드는 LLM을 호출하지 않으므로(§AGENTS.md $0 원칙), eval은 Claude Code 커맨드 실행 결과를 골드 케이스와 대조한다. 결정론적 후처리는 `src/lib/summarizeCore.ts`.
+> **주의(Note):** 앱은 사용자의 로컬 CLI/Ollama로 요약하므로(§AGENTS.md — API 키 미저장·$0 원칙) 유료 API를 호출하지 않는다. eval은 이 로컬 요약 실행 결과를 골드 케이스와 대조한다. 결정론적 후처리는 `src/lib/summarizeCore.ts`.
 
 ## 무엇을 재나
 

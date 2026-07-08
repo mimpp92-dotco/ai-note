@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import type { MeetingStatus } from "@/domain/meeting";
+import type { MeetingStatus, StatusError } from "@/domain/meeting";
 import { formatMeetingDate, STATUS_LABELS } from "@/lib/meetingLabels";
 
 export interface MeetingListItem {
@@ -8,9 +8,12 @@ export interface MeetingListItem {
   title: string;
   status: MeetingStatus;
   startedAt: string;
+  error: StatusError | null;
 }
 
-// Meeting cards (title · date · status label). Each links to its detail page.
+// Meeting cards (title · date · status label). Each links to its detail page. The
+// status badge surfaces the summarizer lifecycle: a spinner while summarizing and
+// a "요약 실패" badge when a summarize error awaits a manual retry.
 export function MeetingList({ meetings }: { meetings: MeetingListItem[] }) {
   return (
     <ul className="space-y-3">
@@ -26,12 +29,39 @@ export function MeetingList({ meetings }: { meetings: MeetingListItem[] }) {
                 {formatMeetingDate(m.startedAt)}
               </span>
             </span>
-            <span className="shrink-0 rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
-              {STATUS_LABELS[m.status]}
-            </span>
+            <StatusBadge status={m.status} error={m.error} />
           </Link>
         </li>
       ))}
     </ul>
+  );
+}
+
+function StatusBadge({ status, error }: { status: MeetingStatus; error: StatusError | null }) {
+  if (error?.action === "retry_summary") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-error/10 px-3 py-1 text-[12px] font-medium text-error">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-error" aria-hidden="true" />
+        요약 실패
+      </span>
+    );
+  }
+
+  if (status === "summarizing") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
+        <span
+          className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+        요약 중
+      </span>
+    );
+  }
+
+  return (
+    <span className="shrink-0 rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
+      {STATUS_LABELS[status]}
+    </span>
   );
 }

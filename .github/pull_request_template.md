@@ -1,15 +1,22 @@
-<!-- AGENTS.md "작업 원칙"과 커밋·PR 규약을 따른다. -->
+<!-- Thanks for contributing! Keep it focused — see CONTRIBUTING.md. -->
 
-## 목표 / 범위
-<!-- 무엇을·왜. 비범위도 한 줄. -->
+## What & why
 
-## 변경 요약
-<!-- 핵심 변경 bullet. -->
+<!-- What does this change do, and why? Link any related issue (e.g. Closes #123). -->
 
-## 검증
-- [ ] typecheck 통과
-- [ ] test 통과
-- [ ] `npm run check:links` (죽은 링크 0)
-- [ ] **관련 문서 갱신** (AGENTS.md / ARCHITECTURE.md)
-- [ ] **비자명한 결정은 ADR 추가** (docs/decisions/)
-- [ ] AI 기능 변경 시 `evals/` 재실행/갱신
+## Testing done
+
+<!-- How did you verify this works? Commands run, cases covered, manual steps. -->
+
+## Checklist
+
+- [ ] `npm run typecheck` passes
+- [ ] `npm run lint` passes
+- [ ] `npm test` passes
+- [ ] `npm run check:links` passes (no dead links)
+- [ ] `npm run build` passes (no secrets/env needed)
+- [ ] Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
+
+## Screenshots
+
+<!-- Required for UI changes. Delete this section if not applicable. -->

@@ -91,3 +91,16 @@ Module boundaries & data flow → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 
 ## License
 
 [MIT](LICENSE) © 2026 Dylan
+
+## Acknowledgements
+
+AI NOTE stands on excellent open-source work:
+
+- [OpenAI Whisper](https://github.com/openai/whisper) — the speech-recognition
+  model behind local transcription.
+- [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) —
+  fast Whisper inference on Apple Silicon.
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — the CPU fallback
+  for Linux / Windows / Intel Mac.
+- [ffmpeg](https://ffmpeg.org) — audio decoding and conversion.
+- [Next.js](https://nextjs.org) — the app framework.
