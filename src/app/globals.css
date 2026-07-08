@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Pretendard font stack (font files loaded later; variable prepared now). */
+  --font-pretendard: "Pretendard", -apple-system, BlinkMacSystemFont,
+    "Apple SD Gothic Neo", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+body {
+  background-color: #faf8f4;
+  color: #2a2420;
+  font-family: var(--font-pretendard);
+}

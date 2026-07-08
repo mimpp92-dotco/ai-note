@@ -1,0 +1,9 @@
+{
+  "feature": "meeting-summarize",
+  "updated": null,
+  "runner": "TODO(미구현)",
+  "cases": [
+    { "id": "G1", "input": "fixtures/raw.md", "expected": "fixtures/summary.happy.json", "status": "pending", "scores": null },
+    { "id": "G2", "input": "fallback-parse-failure", "expected": "fixtures/summary.fallback.json", "status": "pending", "scores": null }
+  ]
+}

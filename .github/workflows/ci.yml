@@ -1,0 +1,30 @@
+name: CI
+
+# 머지 게이트: "체크 통과해야 머지"의 실체.
+# 이 잡이 초록이어야 PR 머지 (브랜치 보호에서 required로 지정 시 하드 차단).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Docs · context 링크 무결성 (죽은 링크 0)
+        run: npm run check:links
+      - name: Build (build-green — 시크릿/DB/env 없이 통과)
+        run: npm run build
