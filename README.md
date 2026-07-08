@@ -51,10 +51,13 @@ The first run downloads a Whisper model. The default (`large-v3`) is multi-GB; s
 
 ```bash
 npm install        # deps (+ husky hooks)
+npm run setup      # check prerequisites (Node/uv/ffmpeg/summarizer) — optional but helpful
 npm run dev        # Next.js + local Whisper service (needs uv)
 ```
 
 Open http://localhost:3000, pick a summarizer in **Settings**, and record.
+
+Using an AI agent? Point Claude Code or Codex at this repo and ask it to install — it follows the step-by-step `## 설치` procedure in [AGENTS.md](AGENTS.md). (`npm run setup` is the same check the agent runs.)
 
 ```bash
 npm test           # vitest

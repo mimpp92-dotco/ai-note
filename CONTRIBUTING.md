@@ -24,6 +24,7 @@ Then:
 
 ```bash
 npm install        # deps (+ husky hooks)
+npm run setup      # check prerequisites (Node/uv/ffmpeg/summarizer)
 npm run dev        # Next.js + local Whisper service
 ```
 
