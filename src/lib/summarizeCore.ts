@@ -66,7 +66,9 @@ export async function summarizeCore(
 
 // Over-edit guard: keep the raw transcript if the correction collapsed to under
 // 30% of the original length (a healthy STT correction stays roughly the same size).
-function resolveTranscript(raw: string, correction: string): string {
+// Exported so the summarizer feeds the SAME resolved transcript to the summary
+// prompt that gets persisted as transcript.md.
+export function resolveTranscript(raw: string, correction: string): string {
   const cleaned = stripWrappers(correction);
   const floor = Math.max(8, Math.floor(raw.length * 0.3));
   if (cleaned.length < floor) return raw;
