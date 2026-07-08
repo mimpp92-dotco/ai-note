@@ -14,12 +14,20 @@ const MEETINGS_POLL_MS = 3000;
 const HEALTH_POLL_MS = 5000;
 const LLM_HEALTH_POLL_MS = 10000;
 
+// Module-level caches (persist across client navigations, e.g. Settings → back).
+// Seeding state from these avoids the "확인 중" flash + a cold refetch on every
+// remount; the effects still refetch immediately, so a real change is reflected
+// (stale-while-revalidate). "확인 중" only shows on the very first load.
+let meetingsCache: MeetingListItem[] | null = null;
+let whisperHealthCache: { connected: boolean } | null = null;
+let llmHealthCache: LlmHealthState | null = null;
+
 // Client home dashboard. Reads state through app-api (force-dynamic routes) with
 // no-store polling; never touches the filesystem or an LLM directly.
 export function HomeClient() {
-  const [meetings, setMeetings] = useState<MeetingListItem[] | null>(null);
-  const [health, setHealth] = useState<{ connected: boolean } | null>(null);
-  const [llmHealth, setLlmHealth] = useState<LlmHealthState | null>(null);
+  const [meetings, setMeetings] = useState<MeetingListItem[] | null>(meetingsCache);
+  const [health, setHealth] = useState<{ connected: boolean } | null>(whisperHealthCache);
+  const [llmHealth, setLlmHealth] = useState<LlmHealthState | null>(llmHealthCache);
 
   useEffect(() => {
     let active = true;
@@ -28,6 +36,7 @@ export function HomeClient() {
         const res = await fetch("/api/meetings", { cache: "no-store" });
         if (!res.ok) return;
         const data = (await res.json()) as { meetings: MeetingListItem[] };
+        meetingsCache = data.meetings;
         if (active) setMeetings(data.meetings);
       } catch {
         // Transient — keep the last known list.
@@ -47,8 +56,10 @@ export function HomeClient() {
       try {
         const res = await fetch("/api/whisper/health", { cache: "no-store" });
         const data = (await res.json()) as { connected: boolean };
+        whisperHealthCache = data;
         if (active) setHealth(data);
       } catch {
+        whisperHealthCache = { connected: false };
         if (active) setHealth({ connected: false });
       }
     };
@@ -66,6 +77,7 @@ export function HomeClient() {
       try {
         const res = await fetch("/api/settings/llm/health", { cache: "no-store" });
         const data = (await res.json()) as LlmHealthState;
+        llmHealthCache = data;
         if (active) setLlmHealth(data);
       } catch {
         // Transient — keep the last known state.
