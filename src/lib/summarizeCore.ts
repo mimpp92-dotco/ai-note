@@ -72,7 +72,35 @@ export function resolveTranscript(raw: string, correction: string): string {
   const cleaned = stripWrappers(correction);
   const floor = Math.max(8, Math.floor(raw.length * 0.3));
   if (cleaned.length < floor) return raw;
+  // Contamination guard: models sometimes ignore "output only the corrected text"
+  // and return their reasoning/preamble (often in English) instead of a faithful
+  // correction. If the correction's script diverges sharply from the raw (raw is
+  // predominantly non-Latin, e.g. Korean, but the correction turned mostly Latin
+  // prose), it isn't a correction — keep the raw STT rather than persist chatter.
+  if (looksContaminated(raw, cleaned)) return raw;
   return cleaned;
+}
+
+function scriptCounts(s: string): { latin: number; cjk: number } {
+  let latin = 0;
+  let cjk = 0;
+  for (const ch of s) {
+    if (ch >= "A" && ch <= "Z") latin++;
+    else if (ch >= "a" && ch <= "z") latin++;
+    else if (/[가-힣぀-ヿ一-鿿]/.test(ch)) cjk++;
+  }
+  return { latin, cjk };
+}
+
+function looksContaminated(raw: string, correction: string): boolean {
+  const r = scriptCounts(raw);
+  const c = scriptCounts(correction);
+  const rawTotal = r.latin + r.cjk;
+  const corrTotal = c.latin + c.cjk;
+  if (rawTotal < 10 || corrTotal < 10) return false; // too little signal to judge
+  const rawLatinFrac = r.latin / rawTotal;
+  const corrLatinFrac = c.latin / corrTotal;
+  return rawLatinFrac < 0.2 && corrLatinFrac > 0.4;
 }
 
 function stripWrappers(text: string): string {
