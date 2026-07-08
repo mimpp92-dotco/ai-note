@@ -161,6 +161,28 @@ describe("summarizeCore", () => {
     expect(await readFile(transcriptPath, "utf-8")).toBe(RAW);
   });
 
+  // contamination guard: model returned its English reasoning instead of a
+  // faithful correction of the Korean transcript → keep the raw STT.
+  it("keeps the raw transcript when the correction is leaked model reasoning", async () => {
+    const leaked = [
+      "This is a summarizer worker task — I've been handed raw STT text and asked",
+      "to output only the corrected transcription. The transcript is essentially",
+      "degenerate. Wait — I must not add content. Let me just clean it faithfully.",
+    ].join(" ");
+    const { transcriptPath, summaryPath } = targets();
+
+    await summarizeCore({
+      title: "회의",
+      raw: RAW,
+      correction: leaked,
+      summaryOutput: JSON.stringify({ oneLine: "요약", discussion: ["내용"] }),
+      transcriptPath,
+      summaryPath,
+    });
+
+    expect(await readFile(transcriptPath, "utf-8")).toBe(RAW);
+  });
+
   it("uses the correction when it is a healthy length", async () => {
     const corrected = RAW.replace("RIDE", "라이드(RIDE)");
     const { transcriptPath, summaryPath } = targets();
