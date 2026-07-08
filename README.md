@@ -6,6 +6,12 @@ The summary is yours — a `summary.json` and a Markdown transcript you can copy
 
 > UI strings are currently Korean (v0.1). Internationalization is planned — see [Roadmap](#roadmap).
 
+## Screenshots
+
+| Home | Structured summary | Model settings |
+|:---:|:---:|:---:|
+| ![Home — record and meeting list](docs/media/home.png) | ![Meeting detail with structured summary and export toolbar](docs/media/detail.png) | ![Keyless model settings](docs/media/settings.png) |
+
 ## Why it's private
 
 - **All local.** Audio → transcription → summary all happen on your machine. The web server and the transcription service bind to `127.0.0.1` only (never your LAN).
