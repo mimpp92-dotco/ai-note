@@ -6,6 +6,7 @@
 저장소 유지보수용 Node 스크립트를 소유한다.
 
 - `scripts/check-links.mjs` — 마크다운 링크 무결성 체커(CI 게이트). 저장소 내 모든 `.md`의 상대 링크가 실재 파일/디렉토리를 가리키는지 검사, 깨진 링크가 하나라도 있으면 exit 1.
+- `scripts/setup.mjs` — 설치 닥터(`npm run setup`). Node·`uv`·`ffmpeg`·요약기·`.env.local`을 점검해 ✓/⚠/✗ 안내. **읽기 전용·무의존**(node: 빌트인 + 글로벌 fetch만 — `npm install` 전에도 실행). 바이너리는 실행하지 않고 PATH 존재만 확인(인증 프롬프트 hang 회피). 순수 함수는 export하고 부수효과는 CLI 가드 뒤에서만 → `scripts/__tests__/setup.test.mjs`가 순수 함수를 주입식 의존으로 검증. CI/`postinstall`에 연결하지 않는다.
 
 ## 자주 하는 변경 Common changes (patterns)
 - **링크 검사 규칙 변경**: `scripts/check-links.mjs`의 `IGNORE_DIRS`/`LINK_RE`만 수정. 생성물·의존성 디렉토리(`node_modules`·`.next`·`data` 등)는 스캔에서 제외한다.
