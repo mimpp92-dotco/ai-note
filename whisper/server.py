@@ -51,6 +51,10 @@ PORT = int(os.environ.get("LOCAL_STT_PORT", "8123"))
 MODEL = os.environ.get("LOCAL_STT_MODEL", "large-v3")
 # Decode language. Default "ko"; "auto" = language detection; any Whisper code (e.g. "en").
 STT_LANG = os.environ.get("LOCAL_STT_LANG", "ko")
+# Silence/hallucination filter. On by default: strips silence (Silero VAD on the
+# faster-whisper backend) and disables previous-text conditioning so near-silent or
+# very short audio doesn't spiral into repeated-phrase hallucinations. Set to "0" off.
+STT_VAD = os.environ.get("LOCAL_STT_VAD", "1") != "0"
 FAKE = os.environ.get("FAKE_WHISPER") == "1"
 
 # Cross-platform ffmpeg discovery. FFMPEG_PATH wins; else PATH (shutil.which);
@@ -122,7 +126,16 @@ def _transcribe_real(audio_path: str) -> list:
         import mlx_whisper  # type: ignore
 
         repo = os.environ.get("LOCAL_STT_MLX_REPO", f"mlx-community/whisper-{MODEL}-mlx")
-        result = mlx_whisper.transcribe(audio_path, path_or_hf_repo=repo, language=lang)
+        # mlx has no built-in VAD; the decode-level anti-hallucination options are the
+        # equivalent — don't condition on prior text (breaks the repeat-loop on quiet
+        # audio) and drop no-speech segments. Guard kwargs across mlx versions.
+        mlx_opts = {"path_or_hf_repo": repo, "language": lang}
+        if STT_VAD:
+            mlx_opts.update(condition_on_previous_text=False, no_speech_threshold=0.6)
+        try:
+            result = mlx_whisper.transcribe(audio_path, **mlx_opts)
+        except TypeError:
+            result = mlx_whisper.transcribe(audio_path, path_or_hf_repo=repo, language=lang)
         return [
             {"start": float(seg["start"]), "end": float(seg["end"]), "text": (seg.get("text") or "").strip()}
             for seg in result.get("segments", [])
@@ -131,7 +144,12 @@ def _transcribe_real(audio_path: str) -> list:
         from faster_whisper import WhisperModel  # type: ignore
 
         model = WhisperModel(MODEL, device="cpu", compute_type="int8")
-        segments, _info = model.transcribe(audio_path, language=lang)
+        # Silero VAD strips silence before decoding (the "무음 필터"); disabling
+        # previous-text conditioning stops repetition loops on quiet audio.
+        fw_opts = {"language": lang}
+        if STT_VAD:
+            fw_opts.update(vad_filter=True, condition_on_previous_text=False)
+        segments, _info = model.transcribe(audio_path, **fw_opts)
         return [
             {"start": float(seg.start), "end": float(seg.end), "text": (seg.text or "").strip()}
             for seg in segments
