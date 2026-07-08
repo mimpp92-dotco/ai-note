@@ -1,0 +1,31 @@
+node_modules/
+.next/
+out/
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# internal build scaffolding — never published
+BUILD_PLAN.md
+
+# runtime meeting data (audio = PII, transcripts) — never commit
+data/
+
+# python whisper venv + caches + downloaded models
+.venv/
+whisper/.venv/
+__pycache__/
+*.pyc
+.cache/
+**/huggingface/
+**/mlx_models/
+
+# audio artifacts (never commit real recordings)
+*.webm
+*.mp4
+*.ogg
+*.wav
+*.m4a
+
+# but DO commit tiny test fixtures
+!fixtures/**
+.DS_Store

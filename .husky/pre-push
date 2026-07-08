@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# pre-push 게이트: 푸시 전 로컬에서 빠른 검증(링크·타입). 활성화: `npm install`(husky v9).
+npm run typecheck
+npm run check:links

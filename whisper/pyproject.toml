@@ -1,0 +1,15 @@
+[project]
+name = "meeting-whisper"
+version = "0.1.0"
+description = "Local batch STT for Meeting Recorder — mlx-whisper (Apple Silicon), faster-whisper fallback."
+# Pin to 3.11/3.12 — the system 3.14 is unsupported by mlx/faster-whisper wheels.
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "mlx-whisper>=0.4.0 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "faster-whisper>=1.0.0",
+]
+
+[tool.uv]
+# Manage a dependency venv only; server.py is a plain script, not an installable package.
+# NOTE: `uv sync` runs at runtime (`npm run dev`) only — never in build/test sessions.
+package = false
