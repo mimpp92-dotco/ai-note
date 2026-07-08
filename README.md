@@ -72,6 +72,7 @@ Copy `.env.example` to `.env.local` and adjust as needed. Common knobs:
 |---|---|---|
 | `LOCAL_STT_MODEL` | `large-v3` | Whisper model (`base`/`small` for speed) |
 | `LOCAL_STT_LANG` | `ko` | Whisper decode language (`auto` to detect) |
+| `LOCAL_STT_VAD` | `1` | Silence/hallucination filter (VAD); `0` to disable |
 | `LOCAL_STT_HOST` / `LOCAL_STT_PORT` | `127.0.0.1` / `8123` | Whisper service address |
 | `FFMPEG_PATH` | (from `PATH`) | Explicit ffmpeg binary |
 
