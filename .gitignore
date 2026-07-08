@@ -10,6 +10,9 @@ BUILD_PLAN.md
 # runtime meeting data (audio = PII, transcripts) — never commit
 data/
 
+# user's personal glossary (may hold private domain terms); ship glossary.example.json only
+glossary.json
+
 # python whisper venv + caches + downloaded models
 .venv/
 whisper/.venv/

@@ -8,8 +8,8 @@
 ## 새 ADR 추가
 
 ```bash
-cp docs/decisions/0000-template.md docs/decisions/0008-내-결정.md
-$EDITOR docs/decisions/0008-내-결정.md   # 5칸 채우고 아래 목록에 추가
+cp docs/decisions/0000-template.md docs/decisions/0007-내-결정.md
+$EDITOR docs/decisions/0007-내-결정.md   # 5칸 채우고 아래 목록에 추가
 ```
 
 ## 목록
