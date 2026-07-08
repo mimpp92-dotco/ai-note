@@ -14,6 +14,7 @@
   "scripts": {
     "dev": "concurrently \"next dev\" \"uv run --project whisper python whisper/server.py\"",
     "build": "next build",
+    "start": "next start",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",

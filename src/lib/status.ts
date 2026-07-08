@@ -65,6 +65,9 @@ export async function readStatus(id: string): Promise<StatusJson | null> {
     return JSON.parse(raw) as StatusJson;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    // A corrupt/hand-edited status.json shouldn't 500 the list route or stall the
+    // worker — treat it as absent (the meeting is re-derivable from its artifacts).
+    if (err instanceof SyntaxError) return null;
     throw err;
   }
 }
