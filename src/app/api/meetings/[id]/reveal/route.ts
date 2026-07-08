@@ -35,6 +35,10 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
 
   try {
     const child = spawn(cmd, [dir], { detached: true, stdio: "ignore" });
+    // The failure of a missing viewer (e.g. no xdg-open on a headless Linux box)
+    // arrives async via 'error' AFTER this try returns; without a listener that
+    // would be an uncaughtException and crash the server. Swallow it.
+    child.on("error", () => {});
     child.unref();
   } catch (err) {
     return NextResponse.json(

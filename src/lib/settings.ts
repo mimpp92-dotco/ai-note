@@ -26,6 +26,9 @@ export async function readSettings(): Promise<LlmSettings | null> {
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    // A corrupt settings.json shouldn't 500 the (polled) health endpoint — treat
+    // it as unconfigured so the UI prompts the user to set a model again.
+    if (err instanceof SyntaxError) return null;
     throw err;
   }
 }

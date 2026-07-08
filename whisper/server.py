@@ -22,6 +22,30 @@ from pathlib import Path
 # They are lazy-imported inside the real transcription path only, so this module
 # (and FAKE_WHISPER mode) loads with pure stdlib — no venv, no model, no network.
 
+
+def _load_env_local() -> None:
+    # This service is spawned as a sibling of `next dev`, which auto-loads the
+    # repo-root .env.local — but this process would not, so LOCAL_STT_* set there
+    # (model, language, host/port) would be silently ignored. Load it ourselves.
+    # Real shell env wins (setdefault), matching Next's precedence.
+    env_path = Path(__file__).resolve().parent.parent / ".env.local"
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_env_local()
+
 HOST = os.environ.get("LOCAL_STT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("LOCAL_STT_PORT", "8123"))
 MODEL = os.environ.get("LOCAL_STT_MODEL", "large-v3")
