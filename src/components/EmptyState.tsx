@@ -1,9 +1,9 @@
 // Home empty state: shown when no meetings exist yet. The recorder above is the
-// "big record button"; this adds the guidance + the 3-step manual seam so a first
-// user knows the flow (record → /meeting-summarize → 요약 확인).
+// "big record button"; this adds the guidance + the 3-step flow so a first user
+// knows what happens (record → auto-transcribe → auto-summarize).
 const STEPS = [
   { n: 1, text: "위 버튼으로 회의를 녹음합니다. 종료하면 자동으로 전사됩니다." },
-  { n: 2, text: "터미널에서 /meeting-summarize 를 실행해 교정·요약합니다." },
+  { n: 2, text: "요약 모델이 설정되어 있으면 회의록 요약이 자동으로 생성됩니다." },
   { n: 3, text: "완성된 회의록 요약을 상세 화면에서 확인합니다." },
 ];
 

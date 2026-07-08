@@ -25,9 +25,17 @@ from pathlib import Path
 HOST = os.environ.get("LOCAL_STT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("LOCAL_STT_PORT", "8123"))
 MODEL = os.environ.get("LOCAL_STT_MODEL", "large-v3")
+# Decode language. Default "ko"; "auto" = language detection; any Whisper code (e.g. "en").
+STT_LANG = os.environ.get("LOCAL_STT_LANG", "ko")
 FAKE = os.environ.get("FAKE_WHISPER") == "1"
 
-FFMPEG_FALLBACK = "/opt/homebrew/bin/ffmpeg"
+# Cross-platform ffmpeg discovery. FFMPEG_PATH wins; else PATH (shutil.which);
+# else these known install locations. None if truly absent (health surfaces it).
+FFMPEG_CANDIDATES = (
+    "/opt/homebrew/bin/ffmpeg",  # macOS (Apple Silicon Homebrew)
+    "/usr/local/bin/ffmpeg",  # macOS (Intel Homebrew) / common *nix
+    "/usr/bin/ffmpeg",  # Debian/Ubuntu apt
+)
 
 # Canned segments for FAKE mode (hermetic tests). Pure stdlib — no model load.
 FAKE_SEGMENTS = [
@@ -41,7 +49,13 @@ _jobs_lock = threading.Lock()
 
 
 def ffmpeg_path() -> str | None:
-    return shutil.which("ffmpeg") or (FFMPEG_FALLBACK if Path(FFMPEG_FALLBACK).exists() else None)
+    env = os.environ.get("FFMPEG_PATH")
+    if env and Path(env).exists():
+        return env
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    return next((c for c in FFMPEG_CANDIDATES if Path(c).exists()), None)
 
 
 def health() -> dict:
@@ -51,8 +65,9 @@ def health() -> dict:
     payload = {"ok": True, "model": MODEL, "ready": ready}
     if not ready:
         payload["message"] = (
-            "ffmpeg not found. Install it (`brew install ffmpeg`) before transcribing; "
-            "mlx-whisper shells out to the ffmpeg CLI."
+            "ffmpeg not found. Set FFMPEG_PATH or install it before transcribing "
+            "(macOS: `brew install ffmpeg` · Debian/Ubuntu: `apt install ffmpeg` · "
+            "Windows: `choco install ffmpeg`); mlx-whisper shells out to the ffmpeg CLI."
         )
     return payload
 
@@ -77,11 +92,13 @@ def atomic_write(path: Path, data: str) -> None:
 
 def _transcribe_real(audio_path: str) -> list:
     # Lazy imports — keep 3rd-party out of module import so FAKE mode stays pure stdlib.
+    # "auto" → None so both backends run their own language detection.
+    lang = None if STT_LANG == "auto" else STT_LANG
     try:
         import mlx_whisper  # type: ignore
 
         repo = os.environ.get("LOCAL_STT_MLX_REPO", f"mlx-community/whisper-{MODEL}-mlx")
-        result = mlx_whisper.transcribe(audio_path, path_or_hf_repo=repo, language="ko")
+        result = mlx_whisper.transcribe(audio_path, path_or_hf_repo=repo, language=lang)
         return [
             {"start": float(seg["start"]), "end": float(seg["end"]), "text": (seg.get("text") or "").strip()}
             for seg in result.get("segments", [])
@@ -90,7 +107,7 @@ def _transcribe_real(audio_path: str) -> list:
         from faster_whisper import WhisperModel  # type: ignore
 
         model = WhisperModel(MODEL, device="cpu", compute_type="int8")
-        segments, _info = model.transcribe(audio_path, language="ko")
+        segments, _info = model.transcribe(audio_path, language=lang)
         return [
             {"start": float(seg.start), "end": float(seg.end), "text": (seg.text or "").strip()}
             for seg in segments
