@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AiModelPill, type LlmHealthState } from "@/components/AiModelPill";
 import { EmptyState } from "@/components/EmptyState";
@@ -28,16 +28,23 @@ export function HomeClient() {
   const [meetings, setMeetings] = useState<MeetingListItem[] | null>(meetingsCache);
   const [health, setHealth] = useState<{ connected: boolean } | null>(whisperHealthCache);
   const [llmHealth, setLlmHealth] = useState<LlmHealthState | null>(llmHealthCache);
+  // Bumped on every optimistic row mutation so an in-flight poll dispatched before
+  // the mutation can't clobber it with a pre-mutation server snapshot.
+  const mutationEpoch = useRef(0);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
+      const startEpoch = mutationEpoch.current;
       try {
         const res = await fetch("/api/meetings", { cache: "no-store" });
         if (!res.ok) return;
         const data = (await res.json()) as { meetings: MeetingListItem[] };
+        // Drop a snapshot that predates a rename/delete made while it was in
+        // flight — the next poll supplies the authoritative (post-mutation) list.
+        if (!active || mutationEpoch.current !== startEpoch) return;
         meetingsCache = data.meetings;
-        if (active) setMeetings(data.meetings);
+        setMeetings(data.meetings);
       } catch {
         // Transient — keep the last known list.
       }
@@ -94,6 +101,26 @@ export function HomeClient() {
   const pendingCount = (meetings ?? []).filter((m) => m.status === "transcribed").length;
   const modelConfigured = llmHealth === null ? null : llmHealth.configured;
 
+  // Row-action callbacks: merge/remove the one item (server already persisted the
+  // change, so the next 3s poll confirms). Update meetingsCache too so a remount
+  // before the next poll doesn't flash the stale entry.
+  const handleRenamed = (id: string, title: string) => {
+    mutationEpoch.current += 1;
+    setMeetings((prev) => {
+      const next = (prev ?? []).map((m) => (m.id === id ? { ...m, title } : m));
+      meetingsCache = next;
+      return next;
+    });
+  };
+  const handleDeleted = (id: string) => {
+    mutationEpoch.current += 1;
+    setMeetings((prev) => {
+      const next = (prev ?? []).filter((m) => m.id !== id);
+      meetingsCache = next;
+      return next;
+    });
+  };
+
   return (
     <main className="mx-auto max-w-5xl space-y-8 px-6 py-12">
       <header className="flex items-start justify-between gap-4">
@@ -141,7 +168,7 @@ export function HomeClient() {
         ) : (
           <section className="space-y-4">
             <h2 className="text-[16px] font-bold text-ink">회의 목록</h2>
-            <MeetingList meetings={meetings} />
+            <MeetingList meetings={meetings} onRenamed={handleRenamed} onDeleted={handleDeleted} />
           </section>
         ))}
     </main>

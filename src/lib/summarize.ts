@@ -34,6 +34,13 @@ const inflight: Set<string> = ((
   globalThis as typeof globalThis & { __aiNoteSummarizeInflight?: Set<string> }
 ).__aiNoteSummarizeInflight ??= new Set<string>());
 
+// True while a summarize (worker or manual) holds the lock for this id. Read-only
+// view of the same globalThis-anchored Set — the DELETE route uses it to refuse
+// removing a meeting whose summarizer could re-create status.json underneath it.
+export function isSummarizeInflight(id: string): boolean {
+  return inflight.has(id);
+}
+
 export async function runSummarize(id: string): Promise<SummarizeResult> {
   if (inflight.has(id)) return { ok: false, reason: "in_progress" };
   inflight.add(id);

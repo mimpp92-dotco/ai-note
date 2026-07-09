@@ -1,10 +1,13 @@
 import { existsSync } from "node:fs";
+import { rename, rm } from "node:fs/promises";
+import { join } from "node:path";
 
 import { NextResponse } from "next/server";
 
 import { assertSafeId } from "@/lib/meetingId";
-import { meetingPaths } from "@/lib/paths";
+import { meetingPaths, meetingsRoot } from "@/lib/paths";
 import { deriveStatus, readStatus, writeStatus } from "@/lib/status";
+import { isSummarizeInflight } from "@/lib/summarize";
 import { fetchWhisperJob } from "@/services/whisperClient";
 
 // GET /api/meetings/[id] — the meeting's status, folding in artifact-file existence
@@ -49,4 +52,43 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const { status, changed } = deriveStatus(id, working);
   if (changed || dirty) await writeStatus(id, status);
   return NextResponse.json(status);
+}
+
+// DELETE /api/meetings/[id] — permanently remove the whole meeting folder. Refused
+// while a summarize holds the lock (it would re-create status.json under us).
+// Deletion is rename-then-rm: the folder is first renamed to a "."-prefixed trash
+// name (isSafeId rejects leading dots → listMeetingIds excludes it) so a slow or
+// partial rm never leaves a half-deleted meeting visible in the list.
+export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  let id: string;
+  try {
+    id = assertSafeId((await params).id);
+  } catch {
+    return NextResponse.json({ error: "invalid meeting id" }, { status: 400 });
+  }
+
+  const dir = meetingPaths(id).dir;
+  if (!existsSync(dir)) {
+    // Idempotent: already gone. The UI treats 404 as "already deleted".
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+  if (isSummarizeInflight(id)) {
+    return NextResponse.json({ error: "summarize in progress" }, { status: 409 });
+  }
+
+  const trash = join(meetingsRoot(), `.trash-${id}-${Date.now()}`);
+  try {
+    await rename(dir, trash);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return NextResponse.json({ error: "not found" }, { status: 404 });
+    }
+    throw err;
+  }
+  // Best-effort teardown; the trash name is already invisible to the list, so a
+  // failed rm degrades to a hidden orphan rather than a resurrected meeting.
+  await rm(trash, { recursive: true, force: true }).catch((err) => {
+    console.error(`[delete] failed to remove ${trash}:`, err);
+  });
+  return NextResponse.json({ ok: true });
 }

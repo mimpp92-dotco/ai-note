@@ -33,6 +33,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const fmt = new URL(request.url).searchParams.get("fmt") ?? "md";
 
   if (fmt === "json") {
+    // json stays the raw summary contract (summary.json verbatim) — the manual
+    // titleOverride is a display-layer concern and is NOT overlaid here. Only the
+    // human-facing md gets the effective title (below).
     return new Response(JSON.stringify(summary, null, 2) + "\n", {
       headers: {
         "content-type": "application/json",
@@ -44,7 +47,17 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const transcript = existsSync(p.transcript) ? await readFile(p.transcript, "utf-8") : "";
   const status = await readStatus(id);
-  const md = formatMeetingMarkdown(summary, transcript, status?.review.participants ?? []);
+  // md is the human hand-off doc, so its H1 reflects the effective title, matching
+  // deriveStatus display semantics: a user override wins, else the summarizer's
+  // title. (status.title is only a mirror of summary.title and is NOT reconciled
+  // on this path — e.g. worker/manual-skill summaries leave it at the auto
+  // placeholder — so it must not sit between the two.)
+  const effectiveTitle = status?.titleOverride ?? summary.title;
+  const md = formatMeetingMarkdown(
+    { ...summary, title: effectiveTitle },
+    transcript,
+    status?.review.participants ?? [],
+  );
 
   return new Response(md, {
     headers: {

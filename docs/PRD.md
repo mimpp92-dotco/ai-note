@@ -15,6 +15,7 @@
 3. **교정 + 요약** — 전사가 끝나면 앱의 백그라운드 워커가 로컬 CLI(claude/codex)나 Ollama로 오타·문단 교정(`transcript.md`) + 구조화 요약(`summary.json`)을 만든다. 외부 API 키 불필요(구독/로컬 모델, 비용 $0).
 4. **2탭 상세** — 웹에서 회의별 상세를 **전체 스크립트 / 회의록 요약** 두 탭으로 열람. 참석자·프로젝트를 검토 단계에서 입력.
 5. **내보내기(export)** — 완성된 회의록 요약을 열람하고 파일로 내보낸다. 이후 활용(공유·아카이브 등)은 사용자가 결정한다.
+6. **회의록 관리** — 회의 목록에서 요약 완료된 회의의 **제목 수정**(AI 자동 제목을 사람이 교정, `titleOverride`로 보존)과 불필요한 회의록 **영구 삭제**(인라인 확인).
 
 ## MVP 제외 사항 (비목표)
 
@@ -25,7 +26,7 @@
 - **실시간 자막** — 품질 우선을 위해 배치 전사를 택함(사용자 확정 결정)
 
 ### v2로 명시적 연기
-chunk-append 크래시 복구 + 디코드 게이트 · 전체 상태 FSM + stale-job 워치독 · map-reduce 요약/refine 청킹 · auto-queue-on-green · 인라인 rename · 세그먼트 클릭 재생 · 무음 워치독/장치 선택/일시정지 · capture_id 재스캔 idempotency · Playwright e2e.
+chunk-append 크래시 복구 + 디코드 게이트 · 전체 상태 FSM + stale-job 워치독 · map-reduce 요약/refine 청킹 · auto-queue-on-green · 세그먼트 클릭 재생 · 무음 워치독/장치 선택/일시정지 · capture_id 재스캔 idempotency · Playwright e2e.
 
 ## 아키텍처/제품 상 유의점
 

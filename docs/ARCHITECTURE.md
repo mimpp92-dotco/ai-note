@@ -40,7 +40,7 @@ flowchart LR
 ## 파일 소유권 (단일 writer, 동시성 없음 — 1인/1탭)
 | 파일 | writer | 비고 |
 |------|--------|------|
-| `status.json` | **app-api만** | 생명주기 + `review`. `summarized`는 `summary.json` 존재로 파생 |
+| `status.json` | **app-api만** | 생명주기 + `review` + `titleOverride`. `summarized`는 `summary.json` 존재로 파생. 삭제(`DELETE`)는 폴더 전체 폐기(ADR 0007) |
 | `audio.webm` / `play.webm` | app-api | 원본 불변 / 리먹스 |
 | `raw.md` + `segments.json` | whisper | 원본 불변 |
 | `transcript.md` + `summary.json` | 요약 워커 | 재생성 가능 |
@@ -51,13 +51,15 @@ flowchart LR
 ```jsonc
 {
   "id": "uuid",                 // 경로 traversal 방지: 생성 UUID/안전 slug만
-  "title": "회의 2026-07-05 22:30",   // 자동; summarize 시 app-api가 summary.title로 승격
+  "title": "회의 2026-07-05 22:30",   // 자동; summarize 시 app-api가 summary.title로 승격(단 titleOverride가 있으면 미승격)
+  "titleOverride": "사용자 지정 제목", // 선택. 사용자가 목록에서 수정한 표시 제목. deriveStatus가 summary.title보다 우선 사용(ADR 0008). 없으면 자동 승격
   "status": "recording|recorded|transcribing|transcribed|summarizing|summarized",
   "error": { "message": "...", "action": "retry_transcription|retry_summary|..." } | null,
   "startedAt": "ISO", "endedAt": "ISO|null", "durationMs": 0, "audioMime": "audio/webm;codecs=opus",
   "whisper": { "jobId": "...|null", "progress": 0.0 },
   "paths": { "audio":"...","play":"...","raw":"...","transcript":"...","summary":"...","segments":"..." },
   "review": { "participants": [] },  // 상세 UI(app-api 경유) 입력
+  "summarizeAttempts": 0,            // 선택. 요약 실패 횟수(워커 백오프용). 성공/수동 재시도 시 0으로 리셋
   "updatedAt": "ISO"
 }
 ```

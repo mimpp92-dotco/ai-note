@@ -1,18 +1,21 @@
 // @vitest-environment node
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { GET as exportGET } from "@/app/api/meetings/[id]/export/route";
 import { POST as finalizePOST } from "@/app/api/meetings/[id]/finalize/route";
-import { GET as getMeeting } from "@/app/api/meetings/[id]/route";
+import { DELETE as deleteMeeting, GET as getMeeting } from "@/app/api/meetings/[id]/route";
 import { POST as reviewPOST } from "@/app/api/meetings/[id]/review/route";
+import { POST as titlePOST } from "@/app/api/meetings/[id]/title/route";
 import { GET as listMeetings } from "@/app/api/meetings/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
 import { meetingPaths } from "@/lib/paths";
+import { initialStatus, writeStatus } from "@/lib/status";
 
 // Integration test for the app-api route handlers. Boots the whisper service with
 // FAKE_WHISPER=1 (pure stdlib, no venv/model/network) and FAKE_FFMPEG=1 (byte copy,
@@ -181,5 +184,103 @@ describe("app-api routes", () => {
   it("returns 404 for an unknown meeting", async () => {
     const res = await getMeeting(new Request("http://t/api/meetings/nope"), ctx("nope"));
     expect(res.status).toBe(404);
+  });
+});
+
+const INIT = {
+  startedAt: "2026-07-05T13:30:00.000Z",
+  endedAt: "2026-07-05T14:00:00.000Z",
+  durationMs: 1_800_000,
+  audioMime: "audio/webm;codecs=opus",
+};
+
+// Seed a meeting whose status.json lags at "transcribed" while summary.json exists
+// (the shape a manual /meeting-summarize leaves) → derived state is "summarized".
+async function seedSummarized(id: string) {
+  const p = meetingPaths(id);
+  mkdirSync(p.dir, { recursive: true });
+  await writeStatus(id, { ...initialStatus(id, INIT), status: "transcribed" });
+  writeFileSync(p.transcript, "교정된 전사\n");
+  writeFileSync(p.summary, readFileSync(join(originalCwd, "fixtures", "summary.happy.json"), "utf-8"));
+}
+
+const titleReq = (id: string, body: unknown) =>
+  new Request(`http://t/api/meetings/${id}/title`, { method: "POST", body: JSON.stringify(body) });
+const deleteReq = (id: string) => new Request(`http://t/api/meetings/${id}`, { method: "DELETE" });
+
+describe("title edit / delete / export overlay", () => {
+  it("POST title on a summarized meeting sets titleOverride and it survives re-derive", async () => {
+    const id = "m-title-ok";
+    await seedSummarized(id);
+    const res = await titlePOST(titleReq(id, { title: "내가 고친 제목" }), ctx(id));
+    expect(res.status).toBe(200);
+
+    const got = await (await getMeeting(new Request(`http://t/api/meetings/${id}`), ctx(id))).json();
+    expect(got.title).toBe("내가 고친 제목"); // not re-promoted from summary.title
+    expect(got.titleOverride).toBe("내가 고친 제목");
+    expect(got.status).toBe("summarized");
+  });
+
+  it("POST title on a not-yet-summarized meeting returns 409", async () => {
+    const id = "m-title-409";
+    const p = meetingPaths(id);
+    mkdirSync(p.dir, { recursive: true });
+    await writeStatus(id, { ...initialStatus(id, INIT), status: "transcribed" });
+    writeFileSync(p.raw, "raw only, no summary\n"); // transcribed, NOT summarized
+    const res = await titlePOST(titleReq(id, { title: "x" }), ctx(id));
+    expect(res.status).toBe(409);
+  });
+
+  it("POST title rejects an empty/whitespace title (400) and a bad id (400)", async () => {
+    const id = "m-title-bad";
+    await seedSummarized(id);
+    expect((await titlePOST(titleReq(id, { title: "   " }), ctx(id))).status).toBe(400);
+    expect((await titlePOST(titleReq("x", { title: "x" }), ctx("../escape"))).status).toBe(400);
+  });
+
+  it("export md reflects titleOverride while json stays the raw summary contract", async () => {
+    const id = "m-export";
+    await seedSummarized(id);
+    await titlePOST(titleReq(id, { title: "내보내기 제목" }), ctx(id));
+
+    const md = await (await exportGET(new Request(`http://t/api/meetings/${id}/export?fmt=md`), ctx(id))).text();
+    expect(md).toContain("# 내보내기 제목");
+
+    const jsonText = await (await exportGET(new Request(`http://t/api/meetings/${id}/export?fmt=json`), ctx(id))).text();
+    expect(JSON.parse(jsonText).title).toBe("데일리 스크럼 2026-07-05"); // raw summary.title, not overridden
+  });
+
+  it("export md uses summary.title (not the stale auto title) when there is no titleOverride", async () => {
+    const id = "m-export-nooverride";
+    await seedSummarized(id); // status.title stays the auto placeholder; no titleOverride
+    const md = await (await exportGET(new Request(`http://t/api/meetings/${id}/export?fmt=md`), ctx(id))).text();
+    expect(md).toContain("# 데일리 스크럼 2026-07-05"); // the AI title shown in the UI
+    expect(md).not.toMatch(/^# 회의 /m); // never the "회의 YYYY-MM-DD HH:MM" placeholder
+  });
+
+  it("DELETE removes the folder (200), is idempotent (404), and 400s a bad id", async () => {
+    const id = "m-delete";
+    await seedSummarized(id);
+    const p = meetingPaths(id);
+    expect(existsSync(p.dir)).toBe(true);
+
+    expect((await deleteMeeting(deleteReq(id), ctx(id))).status).toBe(200);
+    expect(existsSync(p.dir)).toBe(false);
+    expect((await deleteMeeting(deleteReq(id), ctx(id))).status).toBe(404);
+    expect((await deleteMeeting(deleteReq("x"), ctx("../escape"))).status).toBe(400);
+  });
+
+  it("DELETE is refused with 409 while a summarize is in-flight", async () => {
+    const id = "m-delete-inflight";
+    await seedSummarized(id);
+    const g = globalThis as typeof globalThis & { __aiNoteSummarizeInflight?: Set<string> };
+    (g.__aiNoteSummarizeInflight ??= new Set<string>()).add(id);
+    try {
+      const res = await deleteMeeting(deleteReq(id), ctx(id));
+      expect(res.status).toBe(409);
+      expect(existsSync(meetingPaths(id).dir)).toBe(true); // not removed
+    } finally {
+      g.__aiNoteSummarizeInflight?.delete(id); // don't leak the lock into later tests
+    }
   });
 });
