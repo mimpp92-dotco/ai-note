@@ -73,6 +73,9 @@ flowchart LR
 - `highlights`를 항상 포함(fallback 시 `structured`에 `discussion[:3]` 등으로 채움).
 - `participants`는 **비운다(`[]`)** — 참석자는 `status.review`(사용자 입력)만 authoritative. 모델이 전사에서 주운 이름을 자동 기록 금지(거짓 attendees edge·프라이버시).
 
+## 재요약 (단건 수동)
+`runSummarize(id, { force })` — `force`일 때만 `summary.json` 존재(=`already_summarized`) 조기반환을 우회해 `transcript.md`·`summary.json`(재생성 가능·요약 워커 소유)을 덮어쓴다. 유일한 트리거는 **상세의 "다시 요약" 버튼**(`POST /api/meetings/[id]/summarize` body `{ resummarize: true }`); body 없는 POST는 기존대로 요약본이 있으면 409. 배경 워커는 후보 조건이 "summary.json 없음"이고 `force`를 전달하지 않으므로 요약된 회의를 재요약하지 않는다 — **자동·일괄 재요약은 구조적으로 불가능**. 인플라이트 락은 그대로 적용되고, 사용자 `titleOverride`는 보존된다(ADR 0008).
+
 ## whisper HTTP 계약 (127.0.0.1)
 - **주소 고정(계약)**: `LOCAL_STT_HOST=127.0.0.1`, `LOCAL_STT_PORT=8123`. whisper는 여기에 바인딩하고, app-api 프록시/클라이언트는 이 env를 (핸들러 내 지연) 읽어 접속한다. step1이 env 기본값으로 제공, step2가 바인딩, step3가 프록시.
 - `GET /health` → `{ ok, model, ready }` (app-api가 same-origin 프록시 `/api/whisper/health`로 노출).

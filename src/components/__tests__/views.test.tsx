@@ -405,3 +405,44 @@ describe("MeetingDetailView — 요약 상태 카드", () => {
     expect(screen.getByRole("button", { name: "폴더 열기" })).toBeInTheDocument();
   });
 });
+
+describe("MeetingDetailView — 다시 요약", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("요약 완료 회의에서 '다시 요약' 확인 시 resummarize를 POST한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // reveal confirm
+    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // confirm
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/meetings/m1/summarize",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ resummarize: true }) }),
+      ),
+    );
+  });
+
+  it("아직 요약되지 않은 회의에는 '다시 요약' 버튼이 없다", () => {
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "transcribed" })}
+        transcript={{ text: "본문", corrected: false }}
+        segments={[]}
+        summary={null}
+        hasAudio={false}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "다시 요약" })).not.toBeInTheDocument();
+  });
+});

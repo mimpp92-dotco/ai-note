@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correction step. A legacy string-array `glossary.json` is still read as `terms`.
 - **Left sidebar app shell**: persistent navigation (회의록 관리 / 단어 관리 /
   설정) with the whisper/AI health pills, plus a skip-to-content link.
+- **Manual single-meeting re-summarize**: a "다시 요약" button on a summarized
+  meeting regenerates just that one (applies glossary changes to existing
+  meetings). No auto/bulk re-summarize — the background worker never re-runs a
+  summarized meeting.
 
 ### Changed
 

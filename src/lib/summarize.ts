@@ -37,7 +37,10 @@ export function isSummarizeInflight(id: string): boolean {
   return inflight.has(id);
 }
 
-export async function runSummarize(id: string): Promise<SummarizeResult> {
+export async function runSummarize(
+  id: string,
+  opts: { force?: boolean } = {},
+): Promise<SummarizeResult> {
   if (inflight.has(id)) return { ok: false, reason: "in_progress" };
   inflight.add(id);
   try {
@@ -45,7 +48,10 @@ export async function runSummarize(id: string): Promise<SummarizeResult> {
     if (!status) return { ok: false, reason: "not_found" };
 
     const p = meetingPaths(id);
-    if (existsSync(p.summary)) return { ok: false, reason: "already_summarized" };
+    // force = manual "다시 요약": regenerate transcript.md + summary.json (both
+    // regeneratable, summarize-worker-owned) over an existing summary. The worker
+    // never passes force, so all-meetings re-summarize is structurally impossible.
+    if (!opts.force && existsSync(p.summary)) return { ok: false, reason: "already_summarized" };
 
     const adapter = await getConfiguredAdapter();
     if (!adapter) return { ok: false, reason: "no_model" };
