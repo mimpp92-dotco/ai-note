@@ -6,15 +6,18 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { GET as glossaryGET, POST as glossaryPOST } from "@/app/api/glossary/route";
 import { GET as exportGET } from "@/app/api/meetings/[id]/export/route";
 import { POST as finalizePOST } from "@/app/api/meetings/[id]/finalize/route";
 import { DELETE as deleteMeeting, GET as getMeeting } from "@/app/api/meetings/[id]/route";
 import { POST as reviewPOST } from "@/app/api/meetings/[id]/review/route";
+import { POST as summarizePOST } from "@/app/api/meetings/[id]/summarize/route";
 import { POST as titlePOST } from "@/app/api/meetings/[id]/title/route";
 import { GET as listMeetings } from "@/app/api/meetings/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
 import { meetingPaths } from "@/lib/paths";
+import { writeSettings } from "@/lib/settings";
 import { initialStatus, writeStatus } from "@/lib/status";
 
 // Integration test for the app-api route handlers. Boots the whisper service with
@@ -200,6 +203,7 @@ async function seedSummarized(id: string) {
   const p = meetingPaths(id);
   mkdirSync(p.dir, { recursive: true });
   await writeStatus(id, { ...initialStatus(id, INIT), status: "transcribed" });
+  writeFileSync(p.raw, "안녕하세요, 오늘 회의를 시작하겠습니다.\n"); // needed by a force re-summarize
   writeFileSync(p.transcript, "교정된 전사\n");
   writeFileSync(p.summary, readFileSync(join(originalCwd, "fixtures", "summary.happy.json"), "utf-8"));
 }
@@ -281,6 +285,63 @@ describe("title edit / delete / export overlay", () => {
       expect(existsSync(meetingPaths(id).dir)).toBe(true); // not removed
     } finally {
       g.__aiNoteSummarizeInflight?.delete(id); // don't leak the lock into later tests
+    }
+  });
+});
+
+describe("glossary route", () => {
+  it("POST normalizes and GET round-trips the {terms, corrections} object", async () => {
+    const post = await glossaryPOST(
+      new Request("http://t/api/glossary", {
+        method: "POST",
+        body: JSON.stringify({
+          terms: ["  OKR ", "OKR", ""],
+          corrections: [
+            { from: " 김민중 ", to: "김민준" },
+            { from: "x", to: "x" }, // no-op → dropped
+          ],
+        }),
+      }),
+    );
+    expect(post.status).toBe(200);
+    expect(await post.json()).toEqual({ terms: ["OKR"], corrections: [{ from: "김민중", to: "김민준" }] });
+
+    expect(await (await glossaryGET()).json()).toEqual({
+      terms: ["OKR"],
+      corrections: [{ from: "김민중", to: "김민준" }],
+    });
+  });
+
+  it("rejects a non-object body with 400", async () => {
+    const res = await glossaryPOST(
+      new Request("http://t/api/glossary", { method: "POST", body: JSON.stringify("nope") }),
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("manual re-summarize (force)", () => {
+  const summarizeReq = (id: string, body?: unknown) =>
+    new Request(`http://t/api/meetings/${id}/summarize`, {
+      method: "POST",
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+
+  it("{resummarize:true} regenerates a summarized meeting (200); a plain POST still 409s", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-resummarize";
+    await seedSummarized(id); // summary.json present (fixture)
+    try {
+      // plain POST on an already-summarized meeting is refused
+      expect((await summarizePOST(summarizeReq(id), ctx(id))).status).toBe(409);
+
+      // forced re-summarize regenerates via the offline FakeAdapter
+      const forced = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
+      expect(forced.status).toBe(200);
+      expect(existsSync(meetingPaths(id).summary)).toBe(true);
+    } finally {
+      delete process.env.FAKE_LLM;
     }
   });
 });

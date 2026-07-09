@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { CopyButton } from "@/components/CopyButton";
+import { useHealth } from "@/components/useHealth";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
 import { formatMeetingDate, STATUS_LABELS } from "@/lib/meetingLabels";
@@ -48,26 +49,12 @@ function Section({ title, items }: { title: string; items: string[] }) {
 export function MeetingDetailView({ id, status, transcript, segments, summary, hasAudio }: MeetingDetailData) {
   const router = useRouter();
   const [tab, setTab] = useState<"script" | "summary">("script");
-  const [configured, setConfigured] = useState<boolean | null>(null);
   const [retrying, setRetrying] = useState(false);
 
-  // Learn whether a summarizer model is set so the `transcribed` hint can point to
-  // settings when it is missing. The app summarizes in-process; it never calls an LLM here.
-  useEffect(() => {
-    let active = true;
-    void (async () => {
-      try {
-        const res = await fetch("/api/settings/llm/health", { cache: "no-store" });
-        const data = (await res.json()) as { configured: boolean };
-        if (active) setConfigured(data.configured);
-      } catch {
-        // Leave unknown — the hint stays neutral.
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
+  // Whether a summarizer model is set (shared health hook) so the `transcribed`
+  // hint can point to settings when it's missing. The app summarizes in-process.
+  const { llm } = useHealth();
+  const configured = llm === null ? null : llm.configured;
 
   // While summarizing, refresh server data so the finished summary appears without a
   // manual reload (status is file-derived by the server page).
@@ -88,7 +75,7 @@ export function MeetingDetailView({ id, status, transcript, segments, summary, h
   };
 
   return (
-    <main className="mx-auto max-w-5xl space-y-8 px-6 py-12">
+    <main id="main" className="max-w-5xl space-y-8 px-6 py-12">
       <div>
         <Link href="/" className="text-[13px] text-inkSoft hover:text-accent">
           ← 목록
@@ -105,12 +92,15 @@ export function MeetingDetailView({ id, status, transcript, segments, summary, h
       <StatusCard status={status} configured={configured} onRetry={() => void retry()} retrying={retrying} />
 
       {status.status === "summarized" && summary && (
-        <ExportToolbar
-          id={id}
-          summary={summary}
-          transcript={transcript.text}
-          participants={status.review.participants}
-        />
+        <div className="space-y-3">
+          <ExportToolbar
+            id={id}
+            summary={summary}
+            transcript={transcript.text}
+            participants={status.review.participants}
+          />
+          <ResummarizeControl id={id} />
+        </div>
       )}
 
       <div>
@@ -166,6 +156,84 @@ function Spinner() {
       className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-line border-t-accent motion-reduce:animate-none"
       aria-hidden="true"
     />
+  );
+}
+
+// Manual single-meeting re-summarize ("다시 요약"). Only shown once summarized; it
+// overwrites transcript.md + summary.json (POST { resummarize: true }) so a glossary
+// change can be applied to an existing meeting. There is no bulk/auto re-summarize.
+function ResummarizeControl({ id }: { id: string }) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/meetings/${id}/summarize`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ resummarize: true }),
+      });
+      if (res.ok) {
+        setConfirming(false);
+        router.refresh();
+        return;
+      }
+      if (res.status === 409) setError("요약 중에는 다시 요약할 수 없어요. 잠시 후 다시 시도하세요.");
+      else setError("다시 요약에 실패했어요. 잠시 후 다시 시도하세요.");
+    } catch {
+      setError("다시 요약에 실패했어요. 잠시 후 다시 시도하세요.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setError(null);
+          setConfirming(true);
+        }}
+        className="rounded-full border border-line bg-panel px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft"
+      >
+        다시 요약
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[12px] border border-line bg-soft px-4 py-3">
+      <p className="text-[13px] text-ink">현재 요약을 새로 생성합니다(단어장 변경 반영).</p>
+      <button
+        type="button"
+        onClick={() => void run()}
+        disabled={busy}
+        className="rounded-full bg-ink px-4 py-1.5 text-[13px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50"
+      >
+        {busy ? "요약 중…" : "다시 요약"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setError(null);
+          setConfirming(false);
+        }}
+        disabled={busy}
+        className="rounded-full border border-line bg-panel px-4 py-1.5 text-[13px] font-semibold text-accent transition-colors hover:bg-soft disabled:opacity-50"
+      >
+        취소
+      </button>
+      {error && (
+        <span role="status" aria-live="polite" className="text-[13px] text-error">
+          {error}
+        </span>
+      )}
+    </div>
   );
 }
 

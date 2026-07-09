@@ -79,7 +79,7 @@ Copy `.env.example` to `.env.local` and adjust as needed. Common knobs:
 | `LOCAL_STT_HOST` / `LOCAL_STT_PORT` | `127.0.0.1` / `8123` | Whisper service address |
 | `FFMPEG_PATH` | (from `PATH`) | Explicit ffmpeg binary |
 
-Add domain terms the transcriber should get right in `glossary.json` (see `glossary.example.json`).
+Manage domain terms and "misheard → correct" pairs in the app's **단어 관리 (Glossary)** tab. They are applied by the LLM **correction** step (not the Whisper transcriber) to fix names and numbers. Stored in `glossary.json` as `{ terms, corrections }` (see `glossary.example.json`; a legacy string array is still read as `terms`).
 
 ## Project layout
 

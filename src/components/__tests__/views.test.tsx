@@ -2,20 +2,29 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EmptyState } from "@/components/EmptyState";
+import { GlossaryClient } from "@/components/GlossaryClient";
 import { MeetingDetailView } from "@/components/MeetingDetailView";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
+import { Sidebar } from "@/components/Sidebar";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
 
 // next/link needs the app-router context at runtime; a plain anchor is enough here.
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: import("react").ReactNode }) => <a href={href}>{children}</a>,
+  default: ({ href, children, ...rest }: { href: string; children: import("react").ReactNode }) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  ),
 }));
 
-// MeetingDetailView uses useRouter (refresh polling / retry); stub it for the DOM.
+// MeetingDetailView uses useRouter; Sidebar uses usePathname. navMock.pathname is
+// mutable so Sidebar active-state tests can control the current route.
+const navMock = vi.hoisted(() => ({ pathname: "/" }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  usePathname: () => navMock.pathname,
 }));
 
 function makeStatus(overrides: Partial<StatusJson> = {}): StatusJson {
@@ -189,6 +198,99 @@ describe("MeetingList — 행 액션(케밥)", () => {
   });
 });
 
+describe("Sidebar — 활성 항목", () => {
+  afterEach(() => {
+    navMock.pathname = "/";
+    vi.unstubAllGlobals();
+  });
+
+  const renderSidebar = () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("no health in test")));
+    render(<Sidebar />);
+  };
+
+  it("홈(/)에서 회의록 관리가 활성", () => {
+    navMock.pathname = "/";
+    renderSidebar();
+    expect(screen.getByRole("link", { name: "회의록 관리" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "단어 관리" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("상세(/meetings/*)에서도 회의록 관리가 활성", () => {
+    navMock.pathname = "/meetings/abc-123";
+    renderSidebar();
+    expect(screen.getByRole("link", { name: "회의록 관리" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("/glossary에서 단어 관리가 활성", () => {
+    navMock.pathname = "/glossary";
+    renderSidebar();
+    expect(screen.getByRole("link", { name: "단어 관리" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "회의록 관리" })).not.toHaveAttribute("aria-current");
+  });
+});
+
+describe("GlossaryClient — 추가/삭제/저장", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stubFetch(initial = { terms: [] as string[], corrections: [] as { from: string; to: string }[] }) {
+    const posted: unknown[] = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        posted.push(body);
+        return { ok: true, status: 200, json: async () => body };
+      }
+      return { ok: true, status: 200, json: async () => initial };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { fetchMock, posted };
+  }
+
+  it("일반 용어를 추가하면 칩과 카운트가 늘어난다(공백 분리 안 함)", async () => {
+    stubFetch();
+    render(<GlossaryClient />);
+    const input = screen.getByRole("textbox", { name: "용어 추가" });
+    fireEvent.change(input, { target: { value: "프로덕트 로드맵" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByText("프로덕트 로드맵")).toBeInTheDocument(); // not split on the space
+    expect(screen.getByRole("tab", { name: /일반 용어 \(1\)/ })).toBeInTheDocument();
+  });
+
+  it("쉼표로 여러 용어를 한 번에 추가한다", () => {
+    stubFetch();
+    render(<GlossaryClient />);
+    const input = screen.getByRole("textbox", { name: "용어 추가" });
+    fireEvent.change(input, { target: { value: "OKR, 로드맵, OKR" } }); // dup dropped
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByRole("tab", { name: /일반 용어 \(2\)/ })).toBeInTheDocument();
+  });
+
+  it("교정쌍을 추가하고 저장하면 POST 본문에 담긴다", async () => {
+    const { posted } = stubFetch();
+    render(<GlossaryClient />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "저장" })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /교정쌍/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" }), { target: { value: "김민중" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "올바른 표기(후)" }), { target: { value: "김민준" } });
+    fireEvent.click(screen.getByRole("button", { name: "추가" }));
+    expect(screen.getByRole("tab", { name: /교정쌍 \(1\)/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(posted.length).toBe(1));
+    expect(posted[0]).toEqual({ terms: [], corrections: [{ from: "김민중", to: "김민준" }] });
+  });
+
+  it("교정쌍은 전·후가 모두 있어야 추가 가능하다", () => {
+    stubFetch();
+    render(<GlossaryClient />);
+    fireEvent.click(screen.getByRole("tab", { name: /교정쌍/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" }), { target: { value: "김민중" } });
+    expect(screen.getByRole("button", { name: "추가" })).toBeDisabled(); // no "to" yet
+  });
+});
+
 describe("MeetingDetailView — 전체 스크립트 탭", () => {
   it("shows the corrected transcript without the pre-correction notice", () => {
     render(
@@ -301,5 +403,46 @@ describe("MeetingDetailView — 요약 상태 카드", () => {
     expect(screen.getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "요약 다운로드(.md)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "폴더 열기" })).toBeInTheDocument();
+  });
+});
+
+describe("MeetingDetailView — 다시 요약", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("요약 완료 회의에서 '다시 요약' 확인 시 resummarize를 POST한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // reveal confirm
+    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // confirm
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/meetings/m1/summarize",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ resummarize: true }) }),
+      ),
+    );
+  });
+
+  it("아직 요약되지 않은 회의에는 '다시 요약' 버튼이 없다", () => {
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "transcribed" })}
+        transcript={{ text: "본문", corrected: false }}
+        segments={[]}
+        summary={null}
+        hasAudio={false}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "다시 요약" })).not.toBeInTheDocument();
   });
 });

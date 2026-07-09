@@ -73,6 +73,9 @@ flowchart LR
 - `highlights`를 항상 포함(fallback 시 `structured`에 `discussion[:3]` 등으로 채움).
 - `participants`는 **비운다(`[]`)** — 참석자는 `status.review`(사용자 입력)만 authoritative. 모델이 전사에서 주운 이름을 자동 기록 금지(거짓 attendees edge·프라이버시).
 
+## 재요약 (단건 수동)
+`runSummarize(id, { force })` — `force`일 때만 `summary.json` 존재(=`already_summarized`) 조기반환을 우회해 `transcript.md`·`summary.json`(재생성 가능·요약 워커 소유)을 덮어쓴다. 유일한 트리거는 **상세의 "다시 요약" 버튼**(`POST /api/meetings/[id]/summarize` body `{ resummarize: true }`); body 없는 POST는 기존대로 요약본이 있으면 409. 배경 워커는 후보 조건이 "summary.json 없음"이고 `force`를 전달하지 않으므로 요약된 회의를 재요약하지 않는다 — **자동·일괄 재요약은 구조적으로 불가능**. 인플라이트 락은 그대로 적용되고, 사용자 `titleOverride`는 보존된다(ADR 0008).
+
 ## whisper HTTP 계약 (127.0.0.1)
 - **주소 고정(계약)**: `LOCAL_STT_HOST=127.0.0.1`, `LOCAL_STT_PORT=8123`. whisper는 여기에 바인딩하고, app-api 프록시/클라이언트는 이 env를 (핸들러 내 지연) 읽어 접속한다. step1이 env 기본값으로 제공, step2가 바인딩, step3가 프록시.
 - `GET /health` → `{ ok, model, ready }` (app-api가 same-origin 프록시 `/api/whisper/health`로 노출).
@@ -83,20 +86,20 @@ flowchart LR
 
 ## 프롬프트 (교정·요약)
 
-**용어집(glossary) 시드** — `glossary.json`은 빈 배열 `[]`로 시작하고, 사용자가 자기 도메인 용어를 채운다. 형식 예시는 `glossary.example.json` 참조:
-```
-["Kubernetes", "OKR", "roadmap"]
-```
+**용어집(glossary)** — `glossary.json`은 `{ terms: string[], corrections: {from,to}[] }` 객체다(구 형식인 문자열 배열은 읽기 시 `terms`로 자동 호환). `terms`=우선 적용 도메인 용어, `corrections`='잘못 인식→올바른 표기' 매핑. 앱 **"단어 관리"** 탭(app-api 단일 writer)에서 편집하며 **LLM 교정 단계**가 소비한다(whisper STT 아님). 형식 예시는 `glossary.example.json` 참조.
 
-**교정(refine) 프롬프트 헤더** (`{glossary}`=쉼표 결합):
+**교정(refine) 프롬프트** — 정본은 코드 `src/lib/summarizePrompts.ts`(`buildCorrectionPrompt`); 아래는 그 미러다(드리프트 가드 테스트가 규칙 문구를 verbatim 검증). `{terms}`=쉼표 결합 용어, `{corrections}`=`잘못→올바름` 쌍(비면 5) 규칙 생략, 이후 번호 당김):
 ```
 다음은 한국어 회의를 음성인식(STT)으로 전사한 원문입니다.
 당신의 역할은 STT 오인식 교정기입니다. 규칙을 반드시 지키세요.
 1) 잘못 인식된 단어·띄어쓰기·맞춤법·문장부호·문단 구분을 자연스럽게 교정합니다.
 2) 발화 내용을 추가/삭제/요약/의역하지 않습니다. 말한 것을 최대한 보존합니다.
+   (예외) 숫자·날짜·시간·금액은 아라비아 숫자로 정규화합니다(예: '삼백만원'→'300만원', '이천이십사년'→'2024년', '세시 반'→'3시 30분'). 값 자체는 바꾸지 말고 표기만 정규화하며, 이는 규칙 2)의 유일한 예외입니다.
 3) 군더더기(음..., 어..., 의미 없는 반복)는 가독성을 위해 최소한으로만 정리할 수 있습니다.
-4) 다음 도메인 용어를 우선 적용해 교정하세요: {glossary}
-5) 교정된 전사 텍스트만 출력합니다. 설명/머리말/코드블록 금지.
+4) 다음 도메인 용어를 우선 적용해 교정하세요: {terms}
+5) 다음은 자주 잘못 인식되는 표기입니다. 왼쪽(잘못 인식)을 오른쪽(올바른 표기)으로 교정하세요: {corrections}
+6) 교정된 전사 텍스트만 출력합니다. 사고 과정·설명·머리말·분석·메모·영어·따옴표·코드블록 절대 금지. 첫 글자부터 바로 교정된 전사여야 합니다.
+7) 원문이 무의미하거나 비어 있어도 분석하지 말고, 원문을 그대로(또는 최소 정리해) 출력만 하세요.
 
 [원문]
 ```

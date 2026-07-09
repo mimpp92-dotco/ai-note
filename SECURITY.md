@@ -14,6 +14,12 @@ shape is the fastest way to understand its security posture.
 - **No telemetry.** There are no analytics and no outbound calls. Recordings,
   transcripts, and summaries live under `data/` (gitignored) and never leave
   your disk.
+- **Glossary is local PII.** The domain glossary (`glossary.json`) may contain
+  personal names; it is gitignored and never committed. Exported hand-off docs
+  (`.md` / `.json`) are written verbatim — AI NOTE does **not** currently scrub
+  tokens/emails/PII from them. This is a deliberate local-only trade-off (see
+  [ADR 0007](docs/decisions/0007-delete-meeting-record.md)); on a single-user
+  machine the export is already as trusted as the rest of `data/`.
 
 Because everything runs locally under the user's own account, the primary risk
 surface is **local**: an attacker who already has code execution or file access

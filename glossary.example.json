@@ -1,1 +1,7 @@
-["Kubernetes", "OKR", "roadmap"]
+{
+  "terms": ["Kubernetes", "OKR", "roadmap"],
+  "corrections": [
+    { "from": "쿠버네티스", "to": "Kubernetes" },
+    { "from": "오케이알", "to": "OKR" }
+  ]
+}

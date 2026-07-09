@@ -95,4 +95,56 @@ describe("runSummarize", () => {
 
     expect(await runSummarize(id)).toEqual({ ok: false, reason: "no_model" });
   });
+
+  it("re-summarizes and overwrites the existing summary when force is passed", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-force";
+    await seedTranscribed(id);
+    expect(await runSummarize(id)).toEqual({ ok: true });
+
+    const p = meetingPaths(id);
+    // Stand in for a stale prior summary, then force a regeneration.
+    await writeFile(p.summary, JSON.stringify({ title: "STALE_MARKER" }));
+    expect(await runSummarize(id, { force: true })).toEqual({ ok: true });
+
+    const summary = JSON.parse(await readFile(p.summary, "utf-8"));
+    expect(summary.title).not.toBe("STALE_MARKER"); // regenerated, not the stale file
+    expect((await readStatus(id))?.status).toBe("summarized");
+  });
+
+  it("without force, the worker path never re-summarizes an already-summarized meeting", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-noforce";
+    await seedTranscribed(id);
+    expect(await runSummarize(id)).toEqual({ ok: true });
+    // The background worker calls runSummarize(id) with no force → still refused.
+    expect(await runSummarize(id)).toEqual({ ok: false, reason: "already_summarized" });
+  });
+
+  it("force preserves a user titleOverride", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-force-title";
+    await seedTranscribed(id);
+    expect(await runSummarize(id)).toEqual({ ok: true });
+
+    const st = await readStatus(id);
+    await writeStatus(id, { ...st!, titleOverride: "내가 고친 제목" });
+    expect(await runSummarize(id, { force: true })).toEqual({ ok: true });
+    expect((await readStatus(id))?.titleOverride).toBe("내가 고친 제목");
+  });
+
+  it("refuses (in_progress) when a summarize is already in-flight, even with force", async () => {
+    const id = "meeting-force-inflight";
+    await seedTranscribed(id);
+    const g = globalThis as typeof globalThis & { __aiNoteSummarizeInflight?: Set<string> };
+    (g.__aiNoteSummarizeInflight ??= new Set<string>()).add(id);
+    try {
+      expect(await runSummarize(id, { force: true })).toEqual({ ok: false, reason: "in_progress" });
+    } finally {
+      g.__aiNoteSummarizeInflight?.delete(id);
+    }
+  });
 });
