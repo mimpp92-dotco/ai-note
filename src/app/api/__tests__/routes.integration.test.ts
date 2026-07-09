@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { GET as glossaryGET, POST as glossaryPOST } from "@/app/api/glossary/route";
 import { GET as exportGET } from "@/app/api/meetings/[id]/export/route";
 import { POST as finalizePOST } from "@/app/api/meetings/[id]/finalize/route";
 import { DELETE as deleteMeeting, GET as getMeeting } from "@/app/api/meetings/[id]/route";
@@ -282,5 +283,36 @@ describe("title edit / delete / export overlay", () => {
     } finally {
       g.__aiNoteSummarizeInflight?.delete(id); // don't leak the lock into later tests
     }
+  });
+});
+
+describe("glossary route", () => {
+  it("POST normalizes and GET round-trips the {terms, corrections} object", async () => {
+    const post = await glossaryPOST(
+      new Request("http://t/api/glossary", {
+        method: "POST",
+        body: JSON.stringify({
+          terms: ["  OKR ", "OKR", ""],
+          corrections: [
+            { from: " 김민중 ", to: "김민준" },
+            { from: "x", to: "x" }, // no-op → dropped
+          ],
+        }),
+      }),
+    );
+    expect(post.status).toBe(200);
+    expect(await post.json()).toEqual({ terms: ["OKR"], corrections: [{ from: "김민중", to: "김민준" }] });
+
+    expect(await (await glossaryGET()).json()).toEqual({
+      terms: ["OKR"],
+      corrections: [{ from: "김민중", to: "김민준" }],
+    });
+  });
+
+  it("rejects a non-object body with 400", async () => {
+    const res = await glossaryPOST(
+      new Request("http://t/api/glossary", { method: "POST", body: JSON.stringify("nope") }),
+    );
+    expect(res.status).toBe(400);
   });
 });

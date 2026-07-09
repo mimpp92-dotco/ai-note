@@ -1,15 +1,11 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
-import { localSttGlossaryPath } from "@/lib/config";
+import { readGlossary } from "@/lib/glossary";
 import { meetingPaths } from "@/lib/paths";
 import { readStatus, writeStatus } from "@/lib/status";
 import { resolveTranscript, summarizeCore } from "@/lib/summarizeCore";
-import {
-  buildCorrectionPrompt,
-  buildSummaryPrompt,
-  formatGlossary,
-} from "@/lib/summarizePrompts";
+import { buildCorrectionPrompt, buildSummaryPrompt } from "@/lib/summarizePrompts";
 import { getConfiguredAdapter } from "@/services/llm";
 
 // Orchestrates one meeting summarize: correction → summary → summarizeCore (which
@@ -58,7 +54,7 @@ export async function runSummarize(id: string): Promise<SummarizeResult> {
       await writeStatus(id, { ...status, status: "summarizing", error: null });
 
       const raw = await readFile(p.raw, "utf-8");
-      const glossary = formatGlossary(await loadGlossary());
+      const glossary = await readGlossary();
       const title = status.title;
 
       const correction = await adapter.run(buildCorrectionPrompt(raw, glossary));
@@ -114,15 +110,5 @@ export async function runSummarize(id: string): Promise<SummarizeResult> {
     }
   } finally {
     inflight.delete(id);
-  }
-}
-
-// Glossary is best-effort context for the correction prompt: any read/parse failure
-// degrades to no terms rather than aborting the summarize.
-async function loadGlossary(): Promise<unknown> {
-  try {
-    return JSON.parse(await readFile(localSttGlossaryPath(), "utf-8"));
-  } catch {
-    return [];
   }
 }

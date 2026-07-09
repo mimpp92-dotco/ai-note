@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { type FormEvent, useEffect, useState } from "react";
 
 import type { LlmProvider } from "@/services/llm/types";
@@ -96,12 +95,9 @@ export function SettingsForm() {
   };
 
   return (
-    <main className="mx-auto max-w-2xl space-y-8 px-6 py-12">
+    <main id="main" className="max-w-2xl space-y-8 px-6 py-12">
       <div>
-        <Link href="/" className="text-[13px] text-inkSoft hover:text-accent">
-          ← 목록
-        </Link>
-        <h1 className="mt-3 text-2xl font-bold tracking-tight text-ink">요약 모델 설정</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-ink">요약 모델 설정</h1>
         <p className="mt-2 text-[15px] leading-relaxed text-inkSoft">
           회의록 요약에 사용할 모델을 선택합니다. 녹음·전사는 모델 없이도 동작하며, 요약만 모델이 필요합니다.
         </p>

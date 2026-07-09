@@ -55,7 +55,7 @@ function readSummary(path: string): Summary | null {
 
 function NotFound() {
   return (
-    <main className="mx-auto max-w-5xl px-6 py-16">
+    <main id="main" className="max-w-5xl px-6 py-16">
       <h1 className="text-xl font-bold text-ink">회의를 찾을 수 없습니다</h1>
       <Link href="/" className="mt-4 inline-block text-[14px] text-accent hover:underline">
         ← 목록으로

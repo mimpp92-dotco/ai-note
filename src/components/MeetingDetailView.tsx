@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { CopyButton } from "@/components/CopyButton";
+import { useHealth } from "@/components/useHealth";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
 import { formatMeetingDate, STATUS_LABELS } from "@/lib/meetingLabels";
@@ -48,26 +49,12 @@ function Section({ title, items }: { title: string; items: string[] }) {
 export function MeetingDetailView({ id, status, transcript, segments, summary, hasAudio }: MeetingDetailData) {
   const router = useRouter();
   const [tab, setTab] = useState<"script" | "summary">("script");
-  const [configured, setConfigured] = useState<boolean | null>(null);
   const [retrying, setRetrying] = useState(false);
 
-  // Learn whether a summarizer model is set so the `transcribed` hint can point to
-  // settings when it is missing. The app summarizes in-process; it never calls an LLM here.
-  useEffect(() => {
-    let active = true;
-    void (async () => {
-      try {
-        const res = await fetch("/api/settings/llm/health", { cache: "no-store" });
-        const data = (await res.json()) as { configured: boolean };
-        if (active) setConfigured(data.configured);
-      } catch {
-        // Leave unknown — the hint stays neutral.
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
+  // Whether a summarizer model is set (shared health hook) so the `transcribed`
+  // hint can point to settings when it's missing. The app summarizes in-process.
+  const { llm } = useHealth();
+  const configured = llm === null ? null : llm.configured;
 
   // While summarizing, refresh server data so the finished summary appears without a
   // manual reload (status is file-derived by the server page).
@@ -88,7 +75,7 @@ export function MeetingDetailView({ id, status, transcript, segments, summary, h
   };
 
   return (
-    <main className="mx-auto max-w-5xl space-y-8 px-6 py-12">
+    <main id="main" className="max-w-5xl space-y-8 px-6 py-12">
       <div>
         <Link href="/" className="text-[13px] text-inkSoft hover:text-accent">
           ← 목록

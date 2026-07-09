@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `status.json`, so it survives re-summarize and every re-derive.
 - **Meeting deletion**: permanently delete a meeting folder from the list (kebab
   menu → 삭제) with an inline confirm. Refused while a summarize is in progress.
+- **Glossary management**: a **단어 관리** tab to edit domain terms and
+  "misheard → correct" pairs (`{ terms, corrections }`), applied by the LLM
+  correction step. A legacy string-array `glossary.json` is still read as `terms`.
+- **Left sidebar app shell**: persistent navigation (회의록 관리 / 단어 관리 /
+  설정) with the whisper/AI health pills, plus a skip-to-content link.
+
+### Changed
+
+- **Correction step** now normalizes numbers/dates/times/amounts to Arabic
+  numerals (values unchanged) and applies glossary `corrections`.
+- **Glossary format**: `glossary.json` is now a `{ terms, corrections }` object
+  (was a flat string array); the array form is auto-migrated on read.
 
 ## [0.1.0] - 2026-07-08
 

@@ -18,4 +18,6 @@
 | hallucination | 없는 결정/숫자 미생성 | 기대 외 항목 0 |
 | 구조 충실도 | `src/domain/summarySchema.ts` 준수 | zod 파싱 통과 |
 
+> **교정 동작 변경:** 교정 단계는 단어장(`glossary.json`)의 `terms`/`corrections`를 적용하고, 숫자·날짜·시간·금액을 **아라비아 숫자로 정규화**한다(값 자체는 불변). **정확도** 축은 이 정규화·용어 교정을 의미 보존의 일부로 본다. 현재 골드 케이스 G1/G2는 단어장 적용을 직접 검증하지 않으므로, 단어장 골드 케이스를 추가하면 이 파일과 `evals/agent-results.json`을 같은 PR에서 갱신한다.
+>
 > **주의:** 루브릭 변경 시 이 파일과 `evals/agent-results.json`을 같은 PR에서 갱신(PR 템플릿 체크리스트).
