@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { Correction, Glossary } from "@/domain/glossary";
 
@@ -31,6 +31,8 @@ export function GlossaryClient() {
   const [termInput, setTermInput] = useState("");
   const [fromInput, setFromInput] = useState("");
   const [toInput, setToInput] = useState("");
+  const termComposingRef = useRef(false);
+  const correctionComposingRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -57,8 +59,8 @@ export function GlossaryClient() {
     setSaved(false);
   };
 
-  const addTerms = () => {
-    const parsed = toTerms(termInput);
+  const addTerms = (raw = termInput) => {
+    const parsed = toTerms(raw);
     if (parsed.length === 0) return;
     setTerms((prev) => Array.from(new Set([...prev, ...parsed])));
     setTermInput("");
@@ -87,6 +89,9 @@ export function GlossaryClient() {
     setError(null);
     mutate();
   };
+
+  const isComposingEnter = (e: KeyboardEvent<HTMLInputElement>, ref: React.MutableRefObject<boolean>) =>
+    ref.current || e.nativeEvent.isComposing || e.keyCode === 229;
 
   const removeCorrection = (from: string) => {
     setCorrections((prev) => prev.filter((c) => c.from !== from));
@@ -164,10 +169,18 @@ export function GlossaryClient() {
                 aria-label="용어 추가"
                 value={termInput}
                 onChange={(e) => setTermInput(e.target.value)}
+                onCompositionStart={() => {
+                  termComposingRef.current = true;
+                }}
+                onCompositionEnd={(e) => {
+                  termComposingRef.current = false;
+                  setTermInput(e.currentTarget.value);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
+                    if (isComposingEnter(e, termComposingRef)) return;
                     e.preventDefault();
-                    addTerms();
+                    addTerms(e.currentTarget.value);
                   }
                 }}
                 placeholder="예: 프로덕트 로드맵, OKR"
@@ -175,7 +188,7 @@ export function GlossaryClient() {
               />
               <button
                 type="button"
-                onClick={addTerms}
+                onClick={() => addTerms()}
                 className="shrink-0 rounded-lg border border-line bg-panel px-3 py-2 text-[13px] font-medium text-accent transition-colors hover:bg-soft"
               >
                 추가
@@ -229,8 +242,16 @@ export function GlossaryClient() {
                 aria-label="올바른 표기(후)"
                 value={toInput}
                 onChange={(e) => setToInput(e.target.value)}
+                onCompositionStart={() => {
+                  correctionComposingRef.current = true;
+                }}
+                onCompositionEnd={(e) => {
+                  correctionComposingRef.current = false;
+                  setToInput(e.currentTarget.value);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && canAddCorrection) {
+                    if (isComposingEnter(e, correctionComposingRef)) return;
                     e.preventDefault();
                     addCorrection();
                   }

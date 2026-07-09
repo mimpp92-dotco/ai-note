@@ -11,15 +11,31 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const s = await readSettings();
   if (!s) return NextResponse.json({ configured: false });
+  const model = s.model?.trim();
+
+  if (s.provider === "ollama" && !model) {
+    return NextResponse.json({
+      configured: true,
+      provider: s.provider,
+      ok: false,
+      detail: "Ollama model not set",
+    });
+  }
 
   try {
     const adapter = getAdapter(s);
     const health = await adapter.health();
-    return NextResponse.json({ configured: true, provider: s.provider, ...health });
+    return NextResponse.json({
+      configured: true,
+      provider: s.provider,
+      ...(model ? { model } : {}),
+      ...health,
+    });
   } catch (err) {
     return NextResponse.json({
       configured: true,
       provider: s.provider,
+      ...(model ? { model } : {}),
       ok: false,
       detail: String((err instanceof Error ? err.message : err) ?? err),
     });

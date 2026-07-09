@@ -14,6 +14,8 @@ import { POST as reviewPOST } from "@/app/api/meetings/[id]/review/route";
 import { POST as summarizePOST } from "@/app/api/meetings/[id]/summarize/route";
 import { POST as titlePOST } from "@/app/api/meetings/[id]/title/route";
 import { GET as listMeetings } from "@/app/api/meetings/route";
+import { GET as llmHealthGET } from "@/app/api/settings/llm/health/route";
+import { POST as llmSettingsPOST } from "@/app/api/settings/llm/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
 import { meetingPaths } from "@/lib/paths";
@@ -100,6 +102,48 @@ describe("app-api routes", () => {
     const body = await res.json();
     expect(body.connected).toBe(true);
     expect(body.ready).toBe(true);
+  });
+
+  it("POST /api/settings/llm rejects Ollama without a model", async () => {
+    const res = await llmSettingsPOST(
+      new Request("http://t/api/settings/llm", {
+        method: "POST",
+        body: JSON.stringify({ provider: "ollama" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /api/settings/llm/health returns provider and model without baseUrl", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli", model: "sonnet", baseUrl: "http://should-not-leak" });
+    try {
+      const res = await llmHealthGET();
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({
+        configured: true,
+        provider: "claude-cli",
+        model: "sonnet",
+        ok: true,
+        detail: "FAKE_LLM",
+      });
+      expect(JSON.stringify(body)).not.toContain("should-not-leak");
+    } finally {
+      delete process.env.FAKE_LLM;
+    }
+  });
+
+  it("GET /api/settings/llm/health treats legacy Ollama settings without model as unavailable", async () => {
+    await writeSettings({ provider: "ollama" });
+    const res = await llmHealthGET();
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      configured: true,
+      provider: "ollama",
+      ok: false,
+      detail: "Ollama model not set",
+    });
   });
 
   it("finalize saves audio.webm + play.webm, sets status, auto-enqueues transcription", async () => {

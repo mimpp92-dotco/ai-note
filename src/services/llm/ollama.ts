@@ -44,6 +44,9 @@ export class OllamaAdapter implements LlmAdapter {
   }
 
   async health(): Promise<LlmHealth> {
+    const model = this.settings.model;
+    if (!model) return { ok: false, detail: "Ollama model not set" };
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3_000);
     try {
@@ -51,12 +54,9 @@ export class OllamaAdapter implements LlmAdapter {
       if (!res.ok) return { ok: false, detail: `Ollama responded ${res.status}` };
 
       const data = (await res.json()) as { models?: { name?: string }[] };
-      const model = this.settings.model;
-      if (model) {
-        const names = (data.models ?? []).map((m) => m.name).filter(Boolean);
-        if (!names.includes(model)) {
-          return { ok: false, detail: `model '${model}' not pulled — run: ollama pull ${model}` };
-        }
+      const names = (data.models ?? []).map((m) => m.name).filter(Boolean);
+      if (!names.includes(model)) {
+        return { ok: false, detail: `model '${model}' not pulled — run: ollama pull ${model}` };
       }
       return { ok: true, detail: "Ollama ready" };
     } catch {

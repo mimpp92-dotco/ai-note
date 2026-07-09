@@ -6,7 +6,10 @@ import { GlossaryClient } from "@/components/GlossaryClient";
 import { MeetingDetailView } from "@/components/MeetingDetailView";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
+import { Recorder } from "@/components/Recorder";
+import { SettingsForm } from "@/components/SettingsForm";
 import { Sidebar } from "@/components/Sidebar";
+import type { LlmHealthState, WhisperHealthState } from "@/components/healthStatus";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
 
@@ -70,22 +73,40 @@ describe("EmptyState", () => {
 
 describe("PendingBanner", () => {
   it("prompts to configure a model when none is set and meetings await summary", () => {
-    render(<PendingBanner count={2} configured={false} />);
+    render(<PendingBanner count={2} readiness="unconfigured" />);
     expect(screen.getByText("2개 회의가 요약 대기 중")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "설정" })).toBeInTheDocument();
     expect(screen.getByText(/녹음·전사는 모델 없이 동작합니다/)).toBeInTheDocument();
     expect(screen.queryByText(/\/meeting-summarize/)).not.toBeInTheDocument();
   });
 
-  it("shows auto-processing when a model is configured", () => {
-    render(<PendingBanner count={2} configured={true} />);
+  it("shows auto-processing only when a model is ready", () => {
+    render(<PendingBanner count={2} readiness="ready" />);
     expect(screen.getByText("2개 회의")).toBeInTheDocument();
     expect(screen.getByText(/요약 자동 처리 중/)).toBeInTheDocument();
   });
 
+  it("does not say auto-processing when the configured model is unavailable", () => {
+    render(<PendingBanner count={2} readiness="unavailable" />);
+    expect(screen.getByText("2개 회의가 요약 대기 중")).toBeInTheDocument();
+    expect(screen.getByText(/요약 모델을 확인하세요/)).toBeInTheDocument();
+    expect(screen.queryByText(/요약 자동 처리 중/)).not.toBeInTheDocument();
+  });
+
   it("renders nothing when nothing is pending", () => {
-    const { container } = render(<PendingBanner count={0} configured={false} />);
+    const { container } = render(<PendingBanner count={0} readiness="unconfigured" />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("Recorder — responsive layout", () => {
+  it("모바일에서 녹음 버튼이 본문 옆으로 밀어내지 않도록 줄바꿈 class를 가진다", () => {
+    render(<Recorder />);
+    const heading = screen.getByRole("heading", { name: "회의 녹음" });
+    expect(heading.parentElement?.parentElement).toHaveClass("flex-col");
+    expect(heading.parentElement?.parentElement).toHaveClass("sm:flex-row");
+    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("w-full");
+    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("sm:w-auto");
   });
 });
 
@@ -196,6 +217,39 @@ describe("MeetingList — 행 액션(케밥)", () => {
     fireEvent.change(input, { target: { value: "   " } });
     expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
   });
+
+  it("메뉴가 열리면 row가 높은 stacking class를 받고 단순 버튼 그룹으로 노출된다", () => {
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: /관리/ });
+    fireEvent.click(trigger);
+    expect(trigger).not.toHaveAttribute("aria-haspopup");
+    expect(trigger.closest("li")).toHaveClass("z-30");
+    expect(screen.getByRole("button", { name: "이름 수정" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "삭제" })).toBeInTheDocument();
+  });
+
+  it("모바일에서 제목과 상태 badge가 세로로 배치될 수 있다", () => {
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    expect(screen.getByRole("link", { name: /테스트 회의/ })).toHaveClass("flex-col");
+    expect(screen.getByRole("link", { name: /테스트 회의/ })).toHaveClass("sm:flex-row");
+  });
+
+  it("outside click으로 메뉴가 닫힌다", () => {
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(document.body);
+    expect(screen.queryByRole("button", { name: "삭제" })).not.toBeInTheDocument();
+  });
+
+  it("Escape로 메뉴가 닫히고 트리거에 포커스가 돌아온다", () => {
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: /관리/ });
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("button", { name: "삭제" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
 });
 
 describe("Sidebar — 활성 항목", () => {
@@ -204,15 +258,49 @@ describe("Sidebar — 활성 항목", () => {
     vi.unstubAllGlobals();
   });
 
-  const renderSidebar = () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("no health in test")));
+  const renderSidebar = (
+    health: { whisper: WhisperHealthState; llm: LlmHealthState } = {
+    whisper: { connected: true, ready: true, model: "base" },
+    llm: { configured: true, provider: "claude-cli", model: "sonnet", ok: true, detail: "ready" },
+    },
+  ) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/whisper/health") return { ok: true, json: async () => health.whisper };
+        if (url === "/api/settings/llm/health") return { ok: true, json: async () => health.llm };
+        return { ok: false, json: async () => ({}) };
+      }),
+    );
     render(<Sidebar />);
   };
+
+  it("identity, section labels, system rows, settings를 렌더링한다", async () => {
+    renderSidebar();
+    expect(screen.getByRole("navigation", { name: "주요 메뉴" })).toHaveTextContent("AI NOTE");
+    expect(screen.getByText("로컬 회의록")).toBeInTheDocument();
+    expect(screen.getByText("주요 메뉴")).toBeInTheDocument();
+    expect(screen.getByText("시스템")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /설정/ })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Whisper base · 준비됨")).toBeInTheDocument());
+    expect(screen.getByText("Claude CLI sonnet · 연결됨")).toBeInTheDocument();
+  });
+
+  it("모바일 compact 전환을 위한 responsive shell class를 가진다", () => {
+    renderSidebar();
+    const nav = screen.getByRole("navigation", { name: "주요 메뉴" });
+    expect(nav).toHaveClass("w-full");
+    expect(nav).toHaveClass("border-b");
+    expect(nav).toHaveClass("md:w-60");
+    expect(nav).toHaveClass("md:border-r");
+  });
 
   it("홈(/)에서 회의록 관리가 활성", () => {
     navMock.pathname = "/";
     renderSidebar();
-    expect(screen.getByRole("link", { name: "회의록 관리" })).toHaveAttribute("aria-current", "page");
+    const active = screen.getByRole("link", { name: /회의록 관리/ });
+    expect(active).toHaveAttribute("aria-current", "page");
+    expect(active.querySelector("[data-active-marker]")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "단어 관리" })).not.toHaveAttribute("aria-current");
   });
 
@@ -227,6 +315,23 @@ describe("Sidebar — 활성 항목", () => {
     renderSidebar();
     expect(screen.getByRole("link", { name: "단어 관리" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "회의록 관리" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("/settings에서 설정이 활성", () => {
+    navMock.pathname = "/settings";
+    renderSidebar();
+    const settings = screen.getByRole("link", { name: /설정/ });
+    expect(settings).toHaveAttribute("aria-current", "page");
+    expect(settings.querySelector("[data-active-marker]")).toBeInTheDocument();
+  });
+
+  it("실패/미설정 시스템 상태는 설정으로 이동 가능한 affordance를 유지한다", async () => {
+    renderSidebar({
+      whisper: { connected: true, ready: false, model: "large-v3" },
+      llm: { configured: false },
+    });
+    await waitFor(() => expect(screen.getByText("Whisper large-v3 · 준비 중")).toBeInTheDocument());
+    expect(screen.getByRole("link", { name: /요약.*요약 모델 미설정/ })).toHaveAttribute("href", "/settings");
   });
 });
 
@@ -255,6 +360,20 @@ describe("GlossaryClient — 추가/삭제/저장", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(screen.getByText("프로덕트 로드맵")).toBeInTheDocument(); // not split on the space
     expect(screen.getByRole("tab", { name: /일반 용어 \(1\)/ })).toBeInTheDocument();
+  });
+
+  it("한국어 IME 조합 중 Enter는 일반 용어를 조기 추가하지 않는다", () => {
+    stubFetch();
+    render(<GlossaryClient />);
+    const input = screen.getByRole("textbox", { name: "용어 추가" });
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: "이창규" } });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(screen.queryByText("이창규")).not.toBeInTheDocument();
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByText("이창규")).toBeInTheDocument();
+    expect(screen.queryByText("규")).not.toBeInTheDocument();
   });
 
   it("쉼표로 여러 용어를 한 번에 추가한다", () => {
@@ -288,6 +407,21 @@ describe("GlossaryClient — 추가/삭제/저장", () => {
     fireEvent.click(screen.getByRole("tab", { name: /교정쌍/ }));
     fireEvent.change(screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" }), { target: { value: "김민중" } });
     expect(screen.getByRole("button", { name: "추가" })).toBeDisabled(); // no "to" yet
+  });
+
+  it("한국어 IME 조합 중 Enter는 교정쌍을 조기 추가하지 않는다", () => {
+    stubFetch();
+    render(<GlossaryClient />);
+    fireEvent.click(screen.getByRole("tab", { name: /교정쌍/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" }), { target: { value: "이창규" } });
+    const to = screen.getByRole("textbox", { name: "올바른 표기(후)" });
+    fireEvent.compositionStart(to);
+    fireEvent.change(to, { target: { value: "이창규 PM" } });
+    fireEvent.keyDown(to, { key: "Enter", keyCode: 229 });
+    expect(screen.queryByText(/이창규 PM/)).not.toBeInTheDocument();
+    fireEvent.compositionEnd(to);
+    fireEvent.keyDown(to, { key: "Enter" });
+    expect(screen.getByText(/이창규 PM/)).toBeInTheDocument();
   });
 });
 
@@ -360,6 +494,8 @@ describe("MeetingDetailView — 회의록 요약 탭", () => {
 });
 
 describe("MeetingDetailView — 요약 상태 카드", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("shows a spinner label while summarizing", () => {
     render(
       <MeetingDetailView
@@ -403,6 +539,53 @@ describe("MeetingDetailView — 요약 상태 카드", () => {
     expect(screen.getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "요약 다운로드(.md)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "폴더 열기" })).toBeInTheDocument();
+  });
+
+  it("configured but unavailable model does not show automatic summarizing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/settings/llm/health") {
+          return {
+            ok: true,
+            json: async () => ({ configured: true, provider: "ollama", ok: false, detail: "Ollama model not set" }),
+          };
+        }
+        return { ok: true, json: async () => ({ connected: true, ready: true, model: "base" }) };
+      }),
+    );
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "transcribed" })}
+        transcript={{ text: "본문", corrected: false }}
+        segments={[]}
+        summary={null}
+        hasAudio={false}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/요약 모델을 확인하세요/)).toBeInTheDocument());
+    expect(screen.queryByText(/요약 대기 · 자동 생성 중/)).not.toBeInTheDocument();
+  });
+});
+
+describe("SettingsForm — Ollama model validation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("Ollama는 모델명이 없으면 저장할 수 없다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ provider: null }),
+      })),
+    );
+    render(<SettingsForm />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "저장" })).toBeEnabled());
+    fireEvent.click(screen.getByLabelText(/Ollama/));
+    expect(screen.getByText("Ollama 모델명을 입력하세요.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
   });
 });
 

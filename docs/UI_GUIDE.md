@@ -54,7 +54,9 @@
 | 본문 | ~14–15px, line-height 1.6, `#6B6158` |
 
 ## 레이아웃
-- **앱 셸**: 좌측 고정 사이드바(폭 ~240px, `border-r border-line`, `bg-chrome`) + 콘텐츠 영역(`flex-1 min-w-0`). 사이드바 = 브랜드("AI NOTE") + 주 항목(회의록 관리 / 단어 관리) + 하단 헬스 pill·구분선·설정. 프로필/워크스페이스/사용량 위젯 없음(단일 사용자).
+- **앱 셸**: 좌측 사이드바(데스크톱 폭 ~240px, `border-r border-line`, `bg-chrome`) + 콘텐츠 영역(`flex-1 min-w-0`). 모바일은 `w-full border-b` 상단 compact nav, 데스크톱은 `md:w-60 md:border-r` 좌측 rail. shell은 `flex min-h-screen flex-col md:flex-row`.
+- **사이드바 구조**: identity block(`AI NOTE` + `로컬 회의록`) → 섹션 라벨 `주요 메뉴` → 아이콘+라벨 row(회의록 관리 / 단어 관리) → `시스템` status rows(전사 / 요약) → 구분선 + 설정. 프로필/워크스페이스/검색/폴더/팀/템플릿/사용량 위젯 없음(단일 사용자).
+- **사이드바 active state**: 활성 row는 `aria-current="page"`, 좌측 3px accent marker, 낮은 대비 `bg-soft`, `text-ink`, 한 단계 선명한 weight를 함께 사용한다. inactive row는 `text-inkSoft`, hover는 `bg-panel`/`text-ink` 정도로 조용하게 둔다.
 - 각 페이지는 자체 `<main id="main">`을 **좌측 정렬**로 소유(`mx-auto` 없이 `max-w-5xl`/`max-w-2xl` + `px-6 py-12`).
 - 전체 너비: `max-w-5xl` 좌측 정렬 기본.
 - 카드: `#FFFFFF` + `1px solid #E8E1D7` + radius 14–18px + 은은한 shadow(`0 1px 2px rgba(42,36,32,.04), 0 8px 28px -12px rgba(42,36,32,.18)`).
@@ -72,7 +74,7 @@
 ### 홈(목록)
 - 회의 카드 목록(제목·날짜·상태 라벨). **처리 대기 배너**: `transcribed`(교정 대기) 회의가 있으면 상단에 "N개 회의 교정 대기 — 터미널에서 `/meeting-summarize` 실행" + 복사 버튼.
 - 빈 상태: "아직 회의록이 없습니다 — 첫 회의를 녹음해보세요" + 큰 녹음 버튼 + 3단계 안내(녹음 → 전사 → 요약 확인).
-- **whisper 상태 pill**(헤더): 연결됨(초록)/연결 안 됨(빨강)/확인 중. 아이콘+텍스트.
+- **상태 표시**: 색만으로 전달하지 않는다. whisper는 `Whisper {model} · 준비됨/준비 중/연결 안 됨`, 요약 모델은 `{Provider} {model?} · 연결됨/감지됨/미설정/실패`처럼 dot + 텍스트를 함께 표시한다. 긴 모델명/오류는 truncate하고 full detail은 `title` 또는 설정 화면에서 확인한다. `baseUrl`은 사이드바에 노출하지 않는다.
 - **행 액션(케밥 ⋯ 메뉴)**: 각 회의 행 우측의 "⋯" 버튼(카드 링크 바깥 형제) → **이름 수정**(요약 완료 회의만 노출)·**삭제**(항상). 이름 수정은 행을 인라인 편집으로 전환(Enter=저장, Esc=취소, `[저장][취소]` 버튼). 삭제는 인라인 확인("‘{제목}’ 회의록을 영구 삭제할까요? 되돌릴 수 없어요.") + 포커스는 취소에(엔터 오삭제 방지), 삭제 버튼은 파괴적 색(에러). 저장/삭제 완료·실패는 `aria-live="polite"`로 공지.
 
 ### 상세 (2탭)
@@ -90,4 +92,4 @@
 
 ## 접근성
 - 상태 변화는 `aria-live="polite"`로 안내("기록 중"·"전사 완료"). `prefers-reduced-motion` 존중. 소형 텍스트에 `#9A8F84` 금지(대비).
-- **앱 셸**: 좌측 `<nav aria-label="주요 메뉴">` 랜드마크, 활성 항목에 `aria-current="page"`. 상시 nav 때문에 매 페이지 맨 앞에 **skip-to-content 링크**(`href="#main"`, 포커스 시에만 표시), DOM 순서 nav→main.
+- **앱 셸**: `<nav aria-label="주요 메뉴">` 랜드마크, 활성 항목에 `aria-current="page"`. 상시 nav 때문에 매 페이지 맨 앞에 **skip-to-content 링크**(`href="#main"`, 포커스 시에만 표시), DOM 순서 skip link → nav → main wrapper.

@@ -2,15 +2,12 @@
 
 import { type FormEvent, useEffect, useState } from "react";
 
+import { formatLlmStatus, type LlmHealthState } from "@/components/healthStatus";
 import type { LlmProvider } from "@/services/llm/types";
 
 // Settings form for the LLM summarizer backend. app-api owns data/settings.json;
 // this UI never handles an API key — it only picks a provider you're already signed
 // into (Claude/Codex CLI) or a local model (Ollama).
-
-type HealthResult =
-  | { configured: false }
-  | { configured: true; provider: string; ok: boolean; detail: string };
 
 const PROVIDERS: { value: LlmProvider; label: string; hint: string }[] = [
   { value: "claude-cli", label: "Claude CLI", hint: "구독 CLI 사용 · 권장" },
@@ -29,7 +26,8 @@ export function SettingsForm() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [health, setHealth] = useState<HealthResult | null>(null);
+  const [health, setHealth] = useState<LlmHealthState | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Load current settings once on mount.
   useEffect(() => {
@@ -58,11 +56,17 @@ export function SettingsForm() {
   }, []);
 
   const isOllama = provider === "ollama";
+  const modelRequired = isOllama && model.trim().length === 0;
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (modelRequired) {
+      setError("Ollama 모델명을 입력하세요.");
+      return;
+    }
     setSaving(true);
     setSaved(false);
+    setError(null);
     try {
       const body: { provider: LlmProvider; model?: string; baseUrl?: string } = { provider };
       if (model.trim()) body.model = model.trim();
@@ -75,7 +79,11 @@ export function SettingsForm() {
       if (res.ok) {
         setSaved(true);
         setHealth(null);
+      } else {
+        setError("설정을 저장하지 못했어요. 입력값을 확인하세요.");
       }
+    } catch {
+      setError("설정을 저장하지 못했어요. 잠시 후 다시 시도하세요.");
     } finally {
       setSaving(false);
     }
@@ -86,7 +94,7 @@ export function SettingsForm() {
     setHealth(null);
     try {
       const res = await fetch("/api/settings/llm/health", { cache: "no-store" });
-      setHealth((await res.json()) as HealthResult);
+      setHealth((await res.json()) as LlmHealthState);
     } catch {
       setHealth({ configured: true, provider, ok: false, detail: "연결 테스트 요청에 실패했습니다." });
     } finally {
@@ -126,6 +134,7 @@ export function SettingsForm() {
                     setProvider(p.value);
                     setSaved(false);
                     setHealth(null);
+                    setError(null);
                   }}
                   className="mt-0.5 accent-accent"
                 />
@@ -148,9 +157,11 @@ export function SettingsForm() {
             onChange={(e) => {
               setModel(e.target.value);
               setSaved(false);
+              setError(null);
             }}
             placeholder={isOllama ? "예: llama3.1" : "비워두면 기본 모델을 사용합니다"}
           />
+          {modelRequired && <span className="mt-1 block text-[12px] text-error">Ollama 모델명을 입력하세요.</span>}
         </label>
 
         {isOllama && (
@@ -162,6 +173,7 @@ export function SettingsForm() {
               onChange={(e) => {
                 setBaseUrl(e.target.value);
                 setSaved(false);
+                setError(null);
               }}
               placeholder="http://127.0.0.1:11434"
             />
@@ -171,7 +183,7 @@ export function SettingsForm() {
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
-            disabled={saving || !loaded}
+            disabled={saving || !loaded || modelRequired}
             className="rounded-full bg-ink px-5 py-2 text-[14px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50"
           >
             {saving ? "저장 중…" : "저장"}
@@ -185,31 +197,34 @@ export function SettingsForm() {
             {testing ? "테스트 중…" : "연결 테스트"}
           </button>
           {saved && <span className="text-[13px] text-success">저장됨</span>}
+          {error && (
+            <span role="status" aria-live="polite" className="text-[13px] text-error">
+              {error}
+            </span>
+          )}
         </div>
 
-        {health && (
-          <p
-            role="status"
-            className={`rounded-md px-3 py-2 text-[13px] ${
-              !health.configured
-                ? "bg-warnBg text-warn"
-                : health.ok
-                  ? "bg-successBg text-success"
-                  : "bg-error/10 text-error"
-            }`}
-          >
-            {!health.configured
-              ? "먼저 설정을 저장한 뒤 연결을 테스트하세요."
-              : health.ok
-                ? `연결됨 — ${health.detail}`
-                : `연결 실패 — ${health.detail}`}
-          </p>
-        )}
+        {health && <HealthMessage health={health} />}
 
         <p className="border-t border-line pt-4 text-[13px] leading-relaxed text-inkSoft">
           API 키는 저장되지 않습니다 — 구독 CLI 또는 로컬 Ollama를 사용합니다. Codex CLI 지원은 best-effort입니다.
         </p>
       </form>
     </main>
+  );
+}
+
+function HealthMessage({ health }: { health: LlmHealthState }) {
+  const status = formatLlmStatus(health);
+  const bg =
+    status.tone === "success"
+      ? "bg-successBg text-success"
+      : status.tone === "warn"
+        ? "bg-warnBg text-warn"
+        : "bg-error/10 text-error";
+  return (
+    <p role="status" className={`rounded-md px-3 py-2 text-[13px] ${bg}`} title={status.title}>
+      {health.configured ? `${status.label} — ${health.detail}` : "먼저 설정을 저장한 뒤 연결을 테스트하세요."}
+    </p>
   );
 }

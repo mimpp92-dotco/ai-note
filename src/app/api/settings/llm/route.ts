@@ -25,6 +25,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid settings body" }, { status: 400 });
   }
 
-  await writeSettings(parsed.data);
-  return NextResponse.json(parsed.data);
+  const model = parsed.data.model?.trim();
+  if (parsed.data.provider === "ollama" && !model) {
+    return NextResponse.json({ error: "ollama model required" }, { status: 400 });
+  }
+
+  const settings = {
+    provider: parsed.data.provider,
+    ...(model ? { model } : {}),
+    ...(parsed.data.provider === "ollama" && parsed.data.baseUrl?.trim()
+      ? { baseUrl: parsed.data.baseUrl.trim() }
+      : {}),
+  };
+  await writeSettings(settings);
+  return NextResponse.json(settings);
 }
