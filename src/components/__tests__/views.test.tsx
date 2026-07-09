@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EmptyState } from "@/components/EmptyState";
 import { MeetingDetailView } from "@/components/MeetingDetailView";
+import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
@@ -76,6 +77,115 @@ describe("PendingBanner", () => {
   it("renders nothing when nothing is pending", () => {
     const { container } = render(<PendingBanner count={0} configured={false} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+function meeting(over: Partial<MeetingListItem> = {}): MeetingListItem {
+  return {
+    id: "m1",
+    title: "테스트 회의",
+    status: "summarized",
+    startedAt: "2026-07-05T13:30:00.000Z",
+    error: null,
+    ...over,
+  };
+}
+
+describe("MeetingList — 행 액션(케밥)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("summarized 행은 이름 수정과 삭제를 모두 제공한다", () => {
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    expect(screen.getByRole("button", { name: "이름 수정" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "삭제" })).toBeInTheDocument();
+  });
+
+  it("아직 요약되지 않은 행은 삭제만 제공한다(이름 수정 없음)", () => {
+    render(<MeetingList meetings={[meeting({ status: "transcribed" })]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    expect(screen.queryByRole("button", { name: "이름 수정" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "삭제" })).toBeInTheDocument();
+  });
+
+  it("삭제를 누르면 영구성 확인이 뜨고 포커스가 취소에 있다", () => {
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+    expect(screen.getByText(/영구 삭제할까요/)).toBeInTheDocument();
+    const cancel = screen.getByRole("button", { name: "취소" });
+    expect(cancel).toHaveFocus();
+  });
+
+  it("삭제 확인 시 DELETE를 호출하고 onDeleted를 부른다", async () => {
+    const onDeleted = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={onDeleted} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+    fireEvent.click(screen.getByRole("button", { name: "영구 삭제" }));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledWith("m1"));
+    expect(fetchMock).toHaveBeenCalledWith("/api/meetings/m1", expect.objectContaining({ method: "DELETE" }));
+  });
+
+  it("삭제가 404면 이미 삭제된 것으로 보고 onDeleted를 부른다", async () => {
+    const onDeleted = vi.fn();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={onDeleted} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+    fireEvent.click(screen.getByRole("button", { name: "영구 삭제" }));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledWith("m1"));
+  });
+
+  it("삭제가 409면 행을 유지하고 인라인 에러를 보여준다", async () => {
+    const onDeleted = vi.fn();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 409 }));
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={onDeleted} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+    fireEvent.click(screen.getByRole("button", { name: "영구 삭제" }));
+    await waitFor(() => expect(screen.getByText(/요약 중에는 삭제할 수 없어요/)).toBeInTheDocument());
+    expect(onDeleted).not.toHaveBeenCalled();
+  });
+
+  it("이름 수정 저장 시 title POST 후 onRenamed를 부른다", async () => {
+    const onRenamed = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true, title: "새 제목" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MeetingList meetings={[meeting()]} onRenamed={onRenamed} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "이름 수정" }));
+    const input = screen.getByRole("textbox", { name: /제목/ });
+    fireEvent.change(input, { target: { value: "새 제목" } });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(onRenamed).toHaveBeenCalledWith("m1", "새 제목"));
+    expect(fetchMock).toHaveBeenCalledWith("/api/meetings/m1/title", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("이름 수정이 409면 인라인 에러를 남기고 onRenamed를 부르지 않는다(편집 유지)", async () => {
+    const onRenamed = vi.fn();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 409 }));
+    render(<MeetingList meetings={[meeting()]} onRenamed={onRenamed} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "이름 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /제목/ }), { target: { value: "새 제목" } });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(screen.getByText(/이름을 바꿀 수 없어요/)).toBeInTheDocument());
+    expect(onRenamed).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: /제목/ })).toBeInTheDocument(); // still in edit mode
+  });
+
+  it("빈 제목이면 저장 버튼이 비활성이다", () => {
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "이름 수정" }));
+    const input = screen.getByRole("textbox", { name: /제목/ });
+    fireEvent.change(input, { target: { value: "   " } });
+    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
   });
 });
 

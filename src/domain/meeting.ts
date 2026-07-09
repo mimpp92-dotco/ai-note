@@ -55,6 +55,10 @@ export interface ReviewInput {
 export interface StatusJson {
   id: string;
   title: string;
+  // User-edited display title. When set, deriveStatus uses it as the title and
+  // skips promoting summary.title, so a manual rename survives re-summarize and
+  // every re-derive. Owned by app-api (single writer); absent on legacy files.
+  titleOverride?: string;
   status: MeetingStatus;
   error: StatusError | null;
   startedAt: string;

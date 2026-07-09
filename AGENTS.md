@@ -44,7 +44,7 @@ Claude Code 세션이면 위 절차를 `/setup` 커맨드로 대신 실행할 �
 - **TDD**: 새 기능은 테스트 먼저 작성 → 통과하는 구현.
 - **원본 불가침**: `audio.webm`·`raw.md`·`segments.json`은 생성 후 수정 금지. `transcript.md`·`summary.json`은 재생성 가능.
 - **원자적 쓰기**: 모든 아티팩트는 temp 파일 → `fsync` → `rename`으로 쓴다(부분쓰기 손상 방지).
-- **파일 소유권(단일 writer)**: `status.json`=app-api만, `raw.md`/`segments.json`=whisper만, `transcript.md`/`summary.json`=요약 워커만. 남의 파일을 쓰지 않는다. app은 파일 존재로 상태를 파생한다.
+- **파일 소유권(단일 writer)**: `status.json`=app-api만, `raw.md`/`segments.json`=whisper만, `transcript.md`/`summary.json`=요약 워커만. 남의 파일을 쓰지 않는다. app은 파일 존재로 상태를 파생한다. 회의 **삭제**는 `data/meetings/{id}/` 폴더 전체 폐기(rename-then-rm, ADR 0007); 사용자 지정 제목은 `status.json.titleOverride`로 app-api가 소유(ADR 0008).
 - **앱은 API 키를 저장하지 않는다**: 교정·요약은 백그라운드 워커가 사용자의 로컬 CLI(claude/codex)나 Ollama로 수행한다. 앱 코드에 Anthropic/OpenAI **API 키·유료 API 호출**을 넣지 말 것 — 로컬 CLI/모델만($0 원칙).
 - **build-green**: `next build`가 시크릿/DB/env 없이 매번 통과해야 한다. `data/`를 읽는 라우트·페이지는 `export const dynamic='force-dynamic'` + `cache:'no-store'`; top-level `process.env` 접근 금지(핸들러 내 지연); whisper 클라이언트 지연 초기화; `data/`가 없어도 견디게; MediaRecorder/Web Audio 코드는 `"use client"`; 라우트는 Node 런타임(edge 금지).
 - **127.0.0.1 바인딩**: whisper·로컬 서버는 로컬 인터페이스만. LAN 노출 금지.

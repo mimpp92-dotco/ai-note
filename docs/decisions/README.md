@@ -8,8 +8,8 @@
 ## 새 ADR 추가
 
 ```bash
-cp docs/decisions/0000-template.md docs/decisions/0007-내-결정.md
-$EDITOR docs/decisions/0007-내-결정.md   # 5칸 채우고 아래 목록에 추가
+cp docs/decisions/0000-template.md docs/decisions/0009-내-결정.md
+$EDITOR docs/decisions/0009-내-결정.md   # 5칸 채우고 아래 목록에 추가
 ```
 
 ## 목록
@@ -20,3 +20,5 @@ $EDITOR docs/decisions/0007-내-결정.md   # 5칸 채우고 아래 목록에 �
 | [0002](0002-claude-command-no-app-llm.md) | 교정·요약은 로컬 CLI/Ollama로 처리 (팀 모드에서 갱신) | 채택됨(갱신) |
 | [0003](0003-local-files-single-writer.md) | 로컬 파일 저장 + 단일 writer 소유권 | 채택됨 |
 | [0006](0006-lean-mvp-defer-v2.md) | 린 MVP-0 — 견고성 일부 v2 연기 | 채택됨 |
+| [0007](0007-delete-meeting-record.md) | 회의 삭제 = 폴더 전체 영구 삭제(rename-then-rm) | 채택됨 |
+| [0008](0008-title-override.md) | 표시 제목은 `titleOverride`로 app-api 소유(override 우선) | 채택됨 |

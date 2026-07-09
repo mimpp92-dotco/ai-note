@@ -87,8 +87,11 @@ function readJson<T>(path: string): T | null {
 
 // Fold artifact-file existence into a status view. Monotonic (never steps back):
 //   raw.md       → transcribed   (whisper wrote it)
-//   summary.json → summarized    (+ promote summary.title into status.title)
-// Returns whether anything changed so the caller can persist (app-api = writer).
+//   summary.json → summarized    (rank), and — unless titleOverride is set —
+//                  promote summary.title into status.title.
+// titleOverride (app-api owned) wins over summary.title so a manual rename
+// survives re-summarize; it gates ONLY the title branch, never the rank
+// promotion. Returns whether anything changed so the caller can persist.
 export function deriveStatus(id: string, persisted: StatusJson): { status: StatusJson; changed: boolean } {
   const p = meetingPaths(id);
   let s = persisted;
@@ -101,17 +104,30 @@ export function deriveStatus(id: string, persisted: StatusJson): { status: Statu
     changed = true;
   }
 
-  if (existsSync(p.summary)) {
+  const hasSummary = existsSync(p.summary);
+
+  // Title: a user override wins and applies regardless of summary.json (so the
+  // manual title persists even if summary.json is later removed). Without an
+  // override, fall back to promoting the summarizer's title.
+  if (persisted.titleOverride) {
+    if (s.title !== persisted.titleOverride) {
+      s = { ...s, title: persisted.titleOverride };
+      changed = true;
+    }
+  } else if (hasSummary) {
     const summary = readJson<{ title?: string }>(p.summary);
     if (summary?.title && summary.title !== s.title) {
       s = { ...s, title: summary.title };
       changed = true;
     }
-    if (rank < RANK.summarized) {
-      s = { ...s, status: "summarized", error: null };
-      rank = RANK.summarized;
-      changed = true;
-    }
+  }
+
+  // Rank: summary.json existence always promotes to summarized (independent of
+  // the title branch above).
+  if (hasSummary && rank < RANK.summarized) {
+    s = { ...s, status: "summarized", error: null };
+    rank = RANK.summarized;
+    changed = true;
   }
 
   return { status: s, changed };

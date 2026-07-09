@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Meeting title editing**: rename a summarized meeting from the list (kebab
+  menu → 이름 수정). The manual title is stored as `titleOverride` in
+  `status.json`, so it survives re-summarize and every re-derive.
+- **Meeting deletion**: permanently delete a meeting folder from the list (kebab
+  menu → 삭제) with an inline confirm. Refused while a summarize is in progress.
+
 ## [0.1.0] - 2026-07-08
 
 Initial public release. AI NOTE is a local-first meeting recorder: everything
