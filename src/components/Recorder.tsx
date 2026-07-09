@@ -23,9 +23,9 @@ export function Recorder() {
     : null;
 
   return (
-    <section className="rounded-[16px] border border-line bg-panel p-6 shadow-[0_1px_2px_rgba(42,36,32,.04),0_8px_28px_-12px_rgba(42,36,32,.18)]">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <section className="w-full min-w-0 rounded-[16px] border border-line bg-panel p-6 shadow-[0_1px_2px_rgba(42,36,32,.04),0_8px_28px_-12px_rgba(42,36,32,.18)]">
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
+        <div className="min-w-0">
           <h2 className="text-[18px] font-bold text-ink">회의 녹음</h2>
           <p className="mt-1 text-[14px] leading-relaxed text-inkSoft">
             마이크로 회의를 녹음합니다. 종료하면 자동으로 전사가 시작됩니다.
@@ -35,7 +35,7 @@ export function Recorder() {
           type="button"
           onClick={recording ? stop : () => void start()}
           disabled={phase === "uploading"}
-          className="shrink-0 rounded-full bg-ink px-5 py-2.5 text-[14px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50"
+          className="w-full shrink-0 rounded-full bg-ink px-5 py-2.5 text-[14px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50 sm:w-auto"
         >
           {recording ? "기록 중지" : phase === "uploading" ? "저장 중…" : "실시간 기록 시작"}
         </button>

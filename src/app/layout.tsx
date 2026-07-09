@@ -20,7 +20,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         >
           본문으로 건너뛰기
         </a>
-        <div className="flex min-h-screen">
+        <div className="flex min-h-screen w-full flex-col overflow-x-hidden md:flex-row">
           <Sidebar />
           <div className="min-w-0 flex-1">{children}</div>
         </div>

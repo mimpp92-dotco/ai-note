@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
 import { Recorder } from "@/components/Recorder";
+import { getLlmReadiness } from "@/components/healthStatus";
 import { useHealth } from "@/components/useHealth";
 
 const MEETINGS_POLL_MS = 3000;
@@ -49,7 +50,7 @@ export function HomeClient() {
   }, []);
 
   const pendingCount = (meetings ?? []).filter((m) => m.status === "transcribed").length;
-  const modelConfigured = llm === null ? null : llm.configured;
+  const modelReadiness = getLlmReadiness(llm);
 
   // Row-action callbacks: merge/remove the one item (server already persisted the
   // change, so the next 3s poll confirms). Update meetingsCache too so a remount
@@ -72,7 +73,7 @@ export function HomeClient() {
   };
 
   return (
-    <main id="main" className="max-w-5xl space-y-8 px-6 py-12">
+    <main id="main" className="w-full max-w-5xl space-y-8 px-6 py-12">
       <header>
         <h1 className="text-2xl font-bold tracking-tight text-ink">회의록</h1>
         <p className="mt-2 text-[15px] leading-relaxed text-inkSoft">
@@ -82,7 +83,7 @@ export function HomeClient() {
 
       <Recorder />
 
-      <PendingBanner count={pendingCount} configured={modelConfigured} />
+      <PendingBanner count={pendingCount} readiness={modelReadiness} />
 
       {meetings !== null &&
         (meetings.length === 0 ? (

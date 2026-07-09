@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import type { LlmHealthState } from "@/components/AiModelPill";
+import type { LlmHealthState, WhisperHealthState } from "@/components/healthStatus";
 
 // Single shared health poller for the whole app. The Sidebar (always mounted),
 // HomeClient's onboarding banner, and MeetingDetailView's hint all read from here,
@@ -14,7 +14,7 @@ const WHISPER_POLL_MS = 5000;
 const LLM_POLL_MS = 10000;
 
 export interface Health {
-  whisper: { connected: boolean } | null;
+  whisper: WhisperHealthState | null;
   llm: LlmHealthState | null;
 }
 
@@ -32,7 +32,7 @@ function emit(patch: Partial<Health>) {
 async function loadWhisper() {
   try {
     const res = await fetch("/api/whisper/health", { cache: "no-store" });
-    emit({ whisper: (await res.json()) as { connected: boolean } });
+    emit({ whisper: (await res.json()) as WhisperHealthState });
   } catch {
     emit({ whisper: { connected: false } });
   }

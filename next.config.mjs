@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  devIndicators: false,
   // Pin the file-tracing root to this project. A stray lockfile in a parent dir
   // otherwise makes Next infer the wrong workspace root and trace files outside
   // the repo (slow/incorrect builds in later steps). import.meta.dirname is the

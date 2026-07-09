@@ -24,7 +24,7 @@ export function MeetingList({
   onDeleted: (id: string) => void;
 }) {
   return (
-    <ul className="space-y-3">
+    <ul className="min-w-0 space-y-3">
       {meetings.map((m) => (
         <MeetingRow key={m.id} meeting={m} onRenamed={onRenamed} onDeleted={onDeleted} />
       ))}

@@ -84,6 +84,13 @@ flowchart LR
 - `FAKE_WHISPER=1` 스텁이 **동일 계약** 준수(모델 없이 canned segments 반환) → hermetic 테스트용.
 - ffmpeg는 mlx-whisper가 CLI 호출 → whisper·app-api(리먹스) 양쪽 **preflight** 체크(`/opt/homebrew/bin/ffmpeg`).
 
+## LLM settings & health 계약
+- `GET /api/settings/llm` → 저장된 `{ provider, model?, baseUrl? }` 또는 `{ provider:null }`. app-api가 `data/settings.json`의 단일 writer이며 API 키를 저장하지 않는다.
+- `POST /api/settings/llm` → `{ provider:"claude-cli"|"codex-cli"|"ollama", model?, baseUrl? }`. 저장 전 `model/baseUrl`은 trim한다. `provider:"ollama"`는 `model` 필수이며 비어 있으면 400. `baseUrl`은 Ollama 설정에만 저장한다.
+- `GET /api/settings/llm/health` → `{ configured:false }` 또는 `{ configured:true, provider, model?, ok, detail }`. `model`은 settings의 모델명만 노출하고 `baseUrl`은 반환하지 않는다. legacy Ollama 설정에 `model`이 없으면 daemon 상태와 무관하게 `{ ok:false, detail:"Ollama model not set" }`.
+- health는 UI와 설정 화면의 readiness/test-connection 용도다. 홈 배너와 상세 상태 카드는 `configured && ok`일 때만 “요약 자동 처리 중”으로 안내한다. 배경 워커 후보 선정은 기존처럼 settings 존재 기반이며, 실제 실행 실패는 `runSummarize()`의 retryable error로 기록한다.
+- Codex CLI health는 `codex --version` 수준의 binary 감지다. UI 문구는 “감지됨”으로 표시하고 인증/실제 요약 가능 여부는 첫 요약 실행에서 확인한다.
+
 ## 프롬프트 (교정·요약)
 
 **용어집(glossary)** — `glossary.json`은 `{ terms: string[], corrections: {from,to}[] }` 객체다(구 형식인 문자열 배열은 읽기 시 `terms`로 자동 호환). `terms`=우선 적용 도메인 용어, `corrections`='잘못 인식→올바른 표기' 매핑. 앱 **"단어 관리"** 탭(app-api 단일 writer)에서 편집하며 **LLM 교정 단계**가 소비한다(whisper STT 아님). 형식 예시는 `glossary.example.json` 참조.

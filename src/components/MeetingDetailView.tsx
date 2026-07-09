@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { CopyButton } from "@/components/CopyButton";
+import { type LlmReadiness, getLlmReadiness } from "@/components/healthStatus";
 import { useHealth } from "@/components/useHealth";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
@@ -51,10 +52,10 @@ export function MeetingDetailView({ id, status, transcript, segments, summary, h
   const [tab, setTab] = useState<"script" | "summary">("script");
   const [retrying, setRetrying] = useState(false);
 
-  // Whether a summarizer model is set (shared health hook) so the `transcribed`
-  // hint can point to settings when it's missing. The app summarizes in-process.
+  // Shared health hook lets transcribed meetings distinguish ready, missing, and
+  // unavailable summarizers before promising automatic processing.
   const { llm } = useHealth();
-  const configured = llm === null ? null : llm.configured;
+  const readiness = getLlmReadiness(llm);
 
   // While summarizing, refresh server data so the finished summary appears without a
   // manual reload (status is file-derived by the server page).
@@ -89,7 +90,7 @@ export function MeetingDetailView({ id, status, transcript, segments, summary, h
         <p className="mt-1 font-mono text-[12px] text-inkSoft">{formatMeetingDate(status.startedAt)}</p>
       </div>
 
-      <StatusCard status={status} configured={configured} onRetry={() => void retry()} retrying={retrying} />
+      <StatusCard status={status} readiness={readiness} onRetry={() => void retry()} retrying={retrying} />
 
       {status.status === "summarized" && summary && (
         <div className="space-y-3">
@@ -241,12 +242,12 @@ function ResummarizeControl({ id }: { id: string }) {
 // in-progress spinner, or the transcribed→summary hint. null once summarized.
 function StatusCard({
   status,
-  configured,
+  readiness,
   onRetry,
   retrying,
 }: {
   status: StatusJson;
-  configured: boolean | null;
+  readiness: LlmReadiness;
   onRetry: () => void;
   retrying: boolean;
 }) {
@@ -278,16 +279,31 @@ function StatusCard({
   }
 
   if (status.status === "transcribed") {
-    if (configured === false) {
+    if (readiness === "unconfigured" || readiness === "unavailable") {
+      const unavailable = readiness === "unavailable";
       return (
-        <div className="flex items-center justify-between gap-4 rounded-[12px] border border-warn/40 bg-warnBg px-5 py-4">
-          <p className="text-[14px] text-ink">요약하려면 모델을 설정하세요.</p>
+        <div
+          className={`flex items-center justify-between gap-4 rounded-[12px] border px-5 py-4 ${
+            unavailable ? "border-error/40 bg-error/5" : "border-warn/40 bg-warnBg"
+          }`}
+        >
+          <p className="text-[14px] text-ink">
+            {unavailable ? "요약 모델을 확인하세요. 설정한 모델이 지금 사용할 수 없습니다." : "요약하려면 모델을 설정하세요."}
+          </p>
           <Link
             href="/settings"
             className="shrink-0 rounded-md border border-line bg-panel px-3 py-1.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft"
           >
             설정
           </Link>
+        </div>
+      );
+    }
+    if (readiness === "loading") {
+      return (
+        <div className="flex items-center gap-3 rounded-[12px] border border-line bg-panel px-5 py-4">
+          <Spinner />
+          <p className="text-[14px] text-ink">요약 모델 확인 중…</p>
         </div>
       );
     }

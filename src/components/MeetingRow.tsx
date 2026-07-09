@@ -26,6 +26,7 @@ export function MeetingRow({
   const [deleting, setDeleting] = useState(false);
   const [delError, setDelError] = useState<string | null>(null);
   const containerRef = useRef<HTMLLIElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   const canRename = meeting.status === "summarized";
@@ -37,8 +38,17 @@ export function MeetingRow({
     const onDocClick = (e: MouseEvent) => {
       if (!containerRef.current?.contains(e.target as Node)) setMode("idle");
     };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMode("idle");
+      triggerRef.current?.focus();
+    };
     document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [mode]);
 
   // Confirm dialog opens with focus on 취소 to avoid an accidental Enter-delete.
@@ -81,10 +91,10 @@ export function MeetingRow({
   }
 
   return (
-    <li ref={containerRef} className="relative">
+    <li ref={containerRef} className={`relative min-w-0 ${mode === "menu" ? "z-30" : "z-0"}`}>
       <Link
         href={`/meetings/${meeting.id}`}
-        className="flex items-center justify-between gap-4 rounded-[14px] border border-line bg-panel py-4 pl-5 pr-14 shadow-[0_1px_2px_rgba(42,36,32,.04)] transition-colors hover:bg-chrome"
+        className="flex min-w-0 flex-col items-start justify-between gap-2 rounded-[14px] border border-line bg-panel py-4 pl-5 pr-14 shadow-[0_1px_2px_rgba(42,36,32,.04)] transition-colors hover:bg-chrome sm:flex-row sm:items-center sm:gap-4"
       >
         <span className="min-w-0">
           <span className="block truncate text-[15px] font-semibold text-ink">{meeting.title}</span>
@@ -97,9 +107,9 @@ export function MeetingRow({
 
       <div className="absolute right-3 top-1/2 -translate-y-1/2">
         <button
+          ref={triggerRef}
           type="button"
           aria-label={`${meeting.title} 관리 메뉴`}
-          aria-haspopup="menu"
           aria-expanded={mode === "menu"}
           onClick={() => setMode((m) => (m === "menu" ? "idle" : "menu"))}
           className="flex h-8 w-8 items-center justify-center rounded-full text-inkSoft transition-colors hover:bg-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
@@ -110,31 +120,28 @@ export function MeetingRow({
             <circle cx="12" cy="19" r="1.5" fill="currentColor" />
           </svg>
         </button>
+      </div>
 
-        {mode === "menu" && (
-          <div
-            role="menu"
-            className="absolute right-0 top-9 z-10 w-32 overflow-hidden rounded-xl border border-line bg-panel py-1 shadow-[0_8px_28px_-12px_rgba(42,36,32,.18)]"
-          >
-            {canRename && (
-              <button
-                type="button"
-                onClick={() => setMode("editing")}
-                className="block w-full px-4 py-2 text-left text-[13px] text-ink hover:bg-soft"
-              >
-                이름 수정
-              </button>
-            )}
+      {mode === "menu" && (
+        <div className="absolute right-3 top-12 z-40 w-32 overflow-hidden rounded-xl border border-line bg-panel py-1 shadow-[0_8px_28px_-12px_rgba(42,36,32,.18)]">
+          {canRename && (
             <button
               type="button"
-              onClick={() => setMode("confirming")}
-              className="block w-full px-4 py-2 text-left text-[13px] text-error hover:bg-error/10"
+              onClick={() => setMode("editing")}
+              className="block w-full px-4 py-2 text-left text-[13px] text-ink hover:bg-soft"
             >
-              삭제
+              이름 수정
             </button>
-          </div>
-        )}
-      </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setMode("confirming")}
+            className="block w-full px-4 py-2 text-left text-[13px] text-error hover:bg-error/10"
+          >
+            삭제
+          </button>
+        </div>
+      )}
 
       {mode === "confirming" && (
         <div className="mt-2 rounded-[14px] border border-error/40 bg-error/5 px-5 py-4">
