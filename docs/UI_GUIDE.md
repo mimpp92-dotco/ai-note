@@ -54,7 +54,7 @@
 | 본문 | ~14–15px, line-height 1.6, `#6B6158` |
 
 ## 레이아웃
-- **앱 셸**: desktop `lg` 이상은 약 272px library rail(`border-r border-line`, `bg-chrome`) + 콘텐츠(`flex-1 min-w-0`). Mobile/tablet은 64px top bar와 `h-dvh` modal drawer를 사용한다. Drawer open 동안 background inert/body scroll lock, focus trap, Escape/trigger return을 적용한다.
+- **앱 셸**: desktop `lg` 이상은 약 272px library rail(`border-r border-line`, `bg-chrome`) + 콘텐츠(`flex-1 min-w-0`). Mobile/tablet은 64px top bar와 `h-dvh` modal drawer를 사용한다. Modal dialog/drawer는 native `<dialog>.showModal()` browser top layer를 사용해 background inert와 focus containment를 얻고, app-level ref-count scroll lock으로 body 스크롤을 막는다. Native dialog가 아닌 popup만 별도 layer를 쓴다.
 - **Library rail 구조**: identity → workspace switcher/create/rename → `모든 회의`/`미분류` → 독립 scroll folder section → 위치 저장 대기/단어 관리/설정 → shared 전사·요약 health. 프로필/팀/권한/템플릿/사용량 위젯은 없다.
 - **Folder tree**: nested `ul/li`를 쓰고 disclosure, scope link, edit/create-child trigger를 분리한다. 구현하지 않은 full ARIA tree role은 선언하지 않는다. Active ancestor는 자동 expand하며 depth 3에서는 child create를 노출하지 않고 최대 깊이 이유를 제공한다. 색상은 dot만 쓰지 않고 브라운/샌드/앰버/올리브/세이지 label과 selected shape/text를 함께 쓴다.
 - **Navigation active state**: 활성 scope/link는 `aria-current="page"`, `bg-soft`, `text-ink`, 더 선명한 weight를 함께 사용한다. Canonicalization은 old list 대신 skeleton과 한 번의 `aria-live` reason을 보인다.
@@ -109,3 +109,20 @@
 - 상태 변화는 `aria-live="polite"`로 안내("기록 중"·"전사 완료"). `prefers-reduced-motion` 존중. 소형 텍스트에 `#9A8F84` 금지(대비).
 - **앱 셸**: `<nav aria-label="라이브러리">` 랜드마크 하나, 활성 항목에 `aria-current="page"`. 상시 nav 때문에 매 페이지 맨 앞에 **skip-to-content 링크**(`href="#main"`, 포커스 시에만 표시), DOM 순서 skip link → nav → main wrapper.
 - **녹음 이탈 guard**: `role="dialog" aria-modal="true"`, 제목 연결, cancel initial focus, Escape/cancel trigger focus 복귀. Compact/dialog action target은 최소 44px이며 destructive action은 아이콘/색 외에 `버리기` 문구를 반드시 포함한다.
+
+### Modal/drawer lifecycle
+
+- Nested drawer/dialog는 browser top-layer 순서를 따른다. Escape는 최상단 surface의 native `cancel`만 처리하며, backdrop은 panel 밖에서 시작하고 끝난 명시적 click만 dismiss한다.
+- Mutation 중인 surface는 Escape·backdrop·cancel로 닫히지 않으며 실제 cancel control도 disabled한다. 실패하면 dialog, 입력값, 선택과 현재 focus를 유지한다.
+- Cancel/Escape/backdrop은 connected trigger로 focus를 돌리고, trigger가 사라졌으면 아래 surface의 safe control/heading 또는 page heading을 사용한다. Create/delete/rebuild처럼 navigation이나 generation이 바뀐 성공은 stale trigger 대신 새 scope heading으로 명시적으로 handoff한다. Browser back/forward에는 destination focus를 강제하지 않는다.
+
+| Surface | Initial focus |
+|---|---|
+| Workspace/folder create·rename·edit | Name input |
+| Meeting move | Workspace select, 없으면 folder search |
+| Folder move | Folder search |
+| Folder/workspace preservation delete | Cancel |
+| Corrupt library rebuild | Cancel |
+| Recorder navigation guard | 계속 녹음/현재 화면에 머물기 |
+| Recorder permanent discard | 유지하기 |
+| Mobile drawer | Close button 또는 첫 navigation control |

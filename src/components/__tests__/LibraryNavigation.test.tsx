@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HomeClient } from "@/components/HomeClient";
@@ -179,6 +179,10 @@ function renderShell() {
   );
 }
 
+function dispatchNativeCancel(dialog: HTMLElement) {
+  fireEvent(dialog, new Event("cancel", { cancelable: true }));
+}
+
 describe("activated library navigation", () => {
   beforeEach(() => {
     navigation.pathname = "/";
@@ -189,7 +193,10 @@ describe("activated library navigation", () => {
     libraryState = readyState();
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 
   it("renders workspace/all/unfiled/folder navigation with Phase 15 move actions but no delete/rebuild", () => {
     renderShell();
@@ -432,7 +439,8 @@ describe("activated library navigation", () => {
 
   it("closes organization forms as soon as a generation reset starts", async () => {
     const view = renderShell();
-    fireEvent.click(screen.getByRole("button", { name: "새 워크스페이스" }));
+    const trigger = screen.getByRole("button", { name: "새 워크스페이스" });
+    fireEvent.click(trigger);
     expect(screen.getByRole("dialog", { name: "새 워크스페이스" })).toBeInTheDocument();
     libraryState = readyState({
       mode: "loading",
@@ -453,6 +461,39 @@ describe("activated library navigation", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "새 워크스페이스" })).not.toBeInTheDocument();
     });
+    expect(document.body.style.overflow).not.toBe("hidden");
+    expect(trigger).not.toHaveFocus();
+  });
+
+  it("keeps editor input focus and value across unrelated parent rerenders", async () => {
+    const view = renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "새 워크스페이스" }));
+    const input = screen.getByRole("textbox", { name: "워크스페이스 이름" });
+    await waitFor(() => expect(input).toHaveFocus());
+    fireEvent.change(input, { target: { value: "입력 유지" } });
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    window.sessionStorage.setItem("ai-note-focus-scope", "1");
+
+    libraryState = readyState({
+      summaryWork: {
+        summaryWork: { processing: 1, needsAttention: 0, attention: null },
+        observedAt: "2026-07-10T00:00:01.000Z",
+      },
+    });
+    view.rerender(
+      <RecorderSessionProvider>
+        <div id="app-content">
+          <LibraryNavigation />
+          <HomeClient />
+        </div>
+      </RecorderSessionProvider>,
+    );
+
+    expect(input).toHaveValue("입력 유지");
+    expect(input).toHaveFocus();
   });
 
   it("does not submit a create form while Korean IME composition is active", async () => {
@@ -464,11 +505,12 @@ describe("activated library navigation", () => {
     fireEvent.keyDown(input, { key: "Enter", keyCode: 229, isComposing: true });
     expect(libraryState.runLibraryMutation).not.toHaveBeenCalled();
     fireEvent.compositionEnd(input);
-    fireEvent.click(screen.getByRole("button", { name: "만들기" }));
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 13, isComposing: false });
     await waitFor(() => expect(libraryState.runLibraryMutation).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("dialog", { name: "새 워크스페이스" })).toBeInTheDocument();
   });
 
-  it("traps the mobile drawer, makes page content inert, and returns focus on Escape", async () => {
+  it("opens the native mobile drawer and returns focus on Escape", async () => {
     render(
       <RecorderSessionProvider>
         <LibraryNavigation />
@@ -477,14 +519,199 @@ describe("activated library navigation", () => {
     );
     const trigger = screen.getByRole("button", { name: "라이브러리 메뉴 열기" });
     fireEvent.click(trigger);
-    expect(screen.getByRole("dialog", { name: "라이브러리 메뉴" })).toBeInTheDocument();
-    expect(document.getElementById("app-content")).toHaveProperty("inert", true);
+    const drawer = screen.getByRole("dialog", { name: "라이브러리 메뉴" });
+    expect(drawer).toBeInTheDocument();
     expect(document.body.style.overflow).toBe("hidden");
     await waitFor(() => expect(screen.getByRole("button", { name: "라이브러리 메뉴 닫기" })).toHaveFocus());
-    fireEvent.keyDown(document, { key: "Escape" });
+    dispatchNativeCancel(drawer);
     expect(screen.queryByRole("dialog", { name: "라이브러리 메뉴" })).not.toBeInTheDocument();
     await waitFor(() => expect(trigger).toHaveFocus());
-    expect(document.getElementById("app-content")).toHaveProperty("inert", false);
+    expect(document.body.style.overflow).not.toBe("hidden");
+  });
+
+  it("closes only the top editor before the underlying mobile drawer", async () => {
+    renderShell();
+    const menuTrigger = screen.getByRole("button", { name: "라이브러리 메뉴 열기" });
+    fireEvent.click(menuTrigger);
+    const drawer = screen.getByRole("dialog", { name: "라이브러리 메뉴" });
+    fireEvent.click(within(drawer).getByRole("button", { name: "새 워크스페이스" }));
+    const editorDialog = screen.getByRole("dialog", { name: "새 워크스페이스" });
+
+    dispatchNativeCancel(editorDialog);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "새 워크스페이스" })).not.toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "라이브러리 메뉴" })).toBeInTheDocument();
+    expect(within(drawer).getByRole("button", { name: "새 워크스페이스" })).toHaveFocus();
+
+    dispatchNativeCancel(drawer);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "라이브러리 메뉴" })).not.toBeInTheDocument());
+    expect(menuTrigger).toHaveFocus();
+  });
+
+  it("hands drawer navigation focus to the destination scope heading", async () => {
+    const view = renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "라이브러리 메뉴 열기" }));
+    const drawer = screen.getByRole("dialog", { name: "라이브러리 메뉴" });
+    fireEvent.click(within(drawer).getByRole("link", { name: /미분류/ }));
+    expect(navigation.push).toHaveBeenCalledWith(`/?workspace=${DEFAULT_WORKSPACE}&view=unfiled`);
+    expect(screen.queryByRole("dialog", { name: "라이브러리 메뉴" })).not.toBeInTheDocument();
+
+    navigation.search = `workspace=${DEFAULT_WORKSPACE}&view=unfiled`;
+    libraryState = readyState({
+      scope: { kind: "unfiled", workspaceId: DEFAULT_WORKSPACE },
+    });
+    view.rerender(
+      <RecorderSessionProvider>
+        <div id="app-content">
+          <LibraryNavigation />
+          <HomeClient />
+        </div>
+      </RecorderSessionProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "기본 · 미분류" })).toHaveFocus());
+  });
+
+  it("keeps a busy editor open and preserves its value after a failed request", async () => {
+    let finishMutation!: (value: Awaited<ReturnType<LibraryProviderValue["runLibraryMutation"]>>) => void;
+    libraryState = readyState({
+      runLibraryMutation: vi.fn(() => new Promise<Awaited<ReturnType<LibraryProviderValue["runLibraryMutation"]>>>((resolve) => { finishMutation = resolve; })),
+    });
+    renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "새 워크스페이스" }));
+    const input = screen.getByRole("textbox", { name: "워크스페이스 이름" });
+    fireEvent.change(input, { target: { value: "실패해도 유지" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("button", { name: "저장 중…" });
+    const dialog = screen.getByRole("dialog", { name: "새 워크스페이스" });
+    const cancel = screen.getByRole("button", { name: "취소" });
+    expect(cancel).toBeDisabled();
+    dispatchNativeCancel(dialog);
+    fireEvent.pointerDown(dialog);
+    fireEvent.click(dialog);
+    fireEvent.click(cancel);
+    expect(dialog).toBeInTheDocument();
+
+    finishMutation({
+      response: new Response(JSON.stringify({}), { status: 500 }),
+      payload: null,
+      accepted: true,
+    });
+    await waitFor(() => expect(screen.getByText(/저장하지 못했습니다/)).toBeInTheDocument());
+    expect(input).toHaveValue("실패해도 유지");
+    expect(input).toHaveFocus();
+  });
+
+  it("hands successful create navigation to the new scope heading", async () => {
+    const createdWorkspace = {
+      id: "40000000-0000-4000-8000-000000000004",
+      name: "새 업무",
+      order: 2,
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z",
+    };
+    const base = readyState();
+    const nextLibrary = {
+      ...base.library!,
+      workspaces: [...base.library!.workspaces, createdWorkspace],
+    };
+    const nextVersion = { ...VERSION, revision: VERSION.revision + 1 };
+    libraryState = readyState({
+      runLibraryMutation: vi.fn(async () => ({
+        response: new Response(JSON.stringify({ mode: "ready", version: nextVersion, library: nextLibrary }), { status: 200 }),
+        payload: { mode: "ready" as const, version: nextVersion, library: nextLibrary },
+        accepted: true,
+      })),
+    });
+    const view = renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "새 워크스페이스" }));
+    const input = screen.getByRole("textbox", { name: "워크스페이스 이름" });
+    fireEvent.change(input, { target: { value: createdWorkspace.name } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith(`/?workspace=${createdWorkspace.id}`));
+    expect(window.sessionStorage.getItem("ai-note-focus-scope")).toBe("1");
+
+    navigation.search = `workspace=${createdWorkspace.id}`;
+    libraryState = readyState({
+      version: nextVersion,
+      library: nextLibrary,
+      scope: { kind: "workspace", workspaceId: createdWorkspace.id },
+    });
+    view.rerender(
+      <RecorderSessionProvider>
+        <div id="app-content">
+          <LibraryNavigation />
+          <HomeClient />
+        </div>
+      </RecorderSessionProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: `${createdWorkspace.name} · 모든 회의` })).toHaveFocus());
+  });
+
+  it("closes the underlying mobile drawer before a nested create hands off focus", async () => {
+    const createdWorkspace = {
+      id: "50000000-0000-4000-8000-000000000005",
+      name: "모바일 새 업무",
+      order: 2,
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z",
+    };
+    const base = readyState();
+    const nextLibrary = {
+      ...base.library!,
+      workspaces: [...base.library!.workspaces, createdWorkspace],
+    };
+    const nextVersion = { ...VERSION, revision: VERSION.revision + 1 };
+    libraryState = readyState({
+      runLibraryMutation: vi.fn(async () => ({
+        response: new Response(JSON.stringify({ mode: "ready", version: nextVersion, library: nextLibrary }), { status: 200 }),
+        payload: { mode: "ready" as const, version: nextVersion, library: nextLibrary },
+        accepted: true,
+      })),
+    });
+    const view = renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "라이브러리 메뉴 열기" }));
+    const drawer = screen.getByRole("dialog", { name: "라이브러리 메뉴" });
+    fireEvent.click(within(drawer).getByRole("button", { name: "새 워크스페이스" }));
+    const input = screen.getByRole("textbox", { name: "워크스페이스 이름" });
+    fireEvent.change(input, { target: { value: createdWorkspace.name } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith(`/?workspace=${createdWorkspace.id}`));
+    expect(screen.queryByRole("dialog", { name: "라이브러리 메뉴" })).not.toBeInTheDocument();
+
+    navigation.search = `workspace=${createdWorkspace.id}`;
+    libraryState = readyState({
+      version: nextVersion,
+      library: nextLibrary,
+      scope: { kind: "workspace", workspaceId: createdWorkspace.id },
+    });
+    view.rerender(
+      <RecorderSessionProvider>
+        <div id="app-content">
+          <LibraryNavigation />
+          <HomeClient />
+        </div>
+      </RecorderSessionProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: `${createdWorkspace.name} · 모든 회의` })).toHaveFocus());
+  });
+
+  it("returns focus to the original trigger after a successful rename", async () => {
+    const next = readyState();
+    libraryState = readyState({
+      runLibraryMutation: vi.fn(async () => ({
+        response: new Response(JSON.stringify({ mode: "ready", version: VERSION, library: next.library }), { status: 200 }),
+        payload: { mode: "ready" as const, version: VERSION, library: next.library },
+        accepted: true,
+      })),
+    });
+    renderShell();
+    const trigger = screen.getByRole("button", { name: "기본 이름 수정" });
+    fireEvent.click(trigger);
+    const input = screen.getByRole("textbox", { name: "워크스페이스 이름" });
+    fireEvent.change(input, { target: { value: "기본 수정" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "워크스페이스 이름 수정" })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("canonicalizes a cross-workspace folder to the requested workspace All once", async () => {

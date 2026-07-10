@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 
+import { AppDialog } from "@/components/AppDialog";
 import { useOptionalLibrary } from "@/components/LibraryProvider";
 import { formatDuration, pickAudioMime, rms } from "@/lib/recorder";
 import type {
@@ -538,10 +539,8 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
   }, [hasUnsavedAudio]);
 
   const cancelPendingNavigation = useCallback(() => {
-    const trigger = pendingNavigation?.trigger;
     setPendingNavigation(null);
-    window.setTimeout(() => trigger?.focus(), 0);
-  }, [pendingNavigation]);
+  }, []);
 
   const discardAndNavigate = useCallback(() => {
     const pending = pendingNavigation;
@@ -605,16 +604,6 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
   }, [hasUnsavedAudio]);
 
   useEffect(() => {
-    if (!pendingNavigation) return;
-    cancelNavigationRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") cancelPendingNavigation();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [cancelPendingNavigation, pendingNavigation]);
-
-  useEffect(() => {
     if (!pendingNavigation || hasUnsavedAudio) return;
     const pending = pendingNavigation;
     setPendingNavigation(null);
@@ -674,11 +663,9 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
         <RecorderNavigationDialog
           phase={phase}
           cancelRef={cancelNavigationRef}
+          returnFocus={pendingNavigation.trigger}
           onCancel={cancelPendingNavigation}
-          onStop={() => {
-            stop();
-            cancelPendingNavigation();
-          }}
+          onStop={stop}
           onDiscard={discardAndNavigate}
         />
       )}
@@ -699,6 +686,8 @@ export function useOptionalRecorderSession(): RecorderSessionValue | null {
 function RecorderCompactControls() {
   const session = useRecorderSession();
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const discardTriggerRef = useRef<HTMLButtonElement>(null);
+  const keepRecordingRef = useRef<HTMLButtonElement>(null);
   if (session.phase === "idle") return null;
   const label = session.phase === "recording"
     ? `기록 중 · ${formatDuration(session.elapsedMs)}`
@@ -735,7 +724,7 @@ function RecorderCompactControls() {
         <button type="button" onClick={() => void session.retry()} className="min-h-11 rounded-full bg-ink px-4 text-[13px] font-semibold text-bg">저장 다시 시도</button>
       )}
       {session.phase !== "saved" && (
-        <button type="button" onClick={() => setConfirmDiscard(true)} className="min-h-11 rounded-full border border-error/50 px-4 text-[13px] font-semibold text-error">
+        <button ref={discardTriggerRef} type="button" onClick={() => setConfirmDiscard(true)} className="min-h-11 rounded-full border border-error/50 px-4 text-[13px] font-semibold text-error">
           녹음 버리기
         </button>
       )}
@@ -745,24 +734,23 @@ function RecorderCompactControls() {
         </button>
       )}
       {confirmDiscard && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-ink/35 p-4">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="recorder-discard-title"
-            className="w-full max-w-md rounded-2xl border border-line bg-panel p-6 shadow-xl"
-          >
-            <h2 id="recorder-discard-title" className="text-[18px] font-bold text-ink">
-              녹음을 영구히 버릴까요?
-            </h2>
+        <AppDialog
+          open
+          title="녹음을 영구히 버릴까요?"
+          initialFocusRef={keepRecordingRef}
+          returnFocus={discardTriggerRef}
+          onDismiss={() => setConfirmDiscard(false)}
+        >
+          {(dismiss) => (
+            <>
             <p className="mt-2 text-[14px] leading-relaxed text-inkSoft">
               아직 게시되지 않은 원본 오디오와 저장 복구 상태가 삭제되며 되돌릴 수 없습니다.
             </p>
             <div className="mt-5 flex flex-wrap justify-end gap-2">
               <button
-                autoFocus
+                ref={keepRecordingRef}
                 type="button"
-                onClick={() => setConfirmDiscard(false)}
+                onClick={() => dismiss("explicit_cancel")}
                 className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent"
               >
                 유지하기
@@ -778,8 +766,9 @@ function RecorderCompactControls() {
                 녹음 영구히 버리기
               </button>
             </div>
-          </div>
-        </div>
+            </>
+          )}
+        </AppDialog>
       )}
     </aside>
   );
@@ -788,32 +777,38 @@ function RecorderCompactControls() {
 function RecorderNavigationDialog({
   phase,
   cancelRef,
+  returnFocus,
   onCancel,
   onStop,
   onDiscard,
 }: {
   phase: RecorderSessionPhase;
   cancelRef: RefObject<HTMLButtonElement>;
+  returnFocus: HTMLElement | null;
   onCancel: () => void;
   onStop: () => void;
   onDiscard: () => void;
 }) {
   const recording = phase === "recording" || phase === "requesting_permission";
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink/35 p-4">
-      <div role="dialog" aria-modal="true" aria-labelledby="recorder-navigation-title" className="w-full max-w-md rounded-2xl border border-line bg-panel p-6 shadow-xl">
-        <h2 id="recorder-navigation-title" className="text-[18px] font-bold text-ink">
-          녹음이 아직 저장되지 않았습니다
-        </h2>
+    <AppDialog
+      open
+      title="녹음이 아직 저장되지 않았습니다"
+      initialFocusRef={cancelRef}
+      returnFocus={returnFocus}
+      onDismiss={() => onCancel()}
+    >
+      {(dismiss) => (
+        <>
         <p className="mt-2 text-[14px] leading-relaxed text-inkSoft">
           이 화면을 떠나면 현재 녹음 또는 저장 대기 오디오를 잃을 수 있습니다.
         </p>
         <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <button ref={cancelRef} type="button" onClick={onCancel} className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent">
+          <button ref={cancelRef} type="button" onClick={() => dismiss("explicit_cancel")} className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent">
             {recording ? "계속 녹음" : "현재 화면에 머물기"}
           </button>
           {phase === "recording" && (
-            <button type="button" onClick={onStop} className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-ink">
+            <button type="button" onClick={() => { onStop(); dismiss("explicit_cancel"); }} className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-ink">
               기록 중지하고 머물기
             </button>
           )}
@@ -821,7 +816,8 @@ function RecorderNavigationDialog({
             녹음 버리고 이동
           </button>
         </div>
-      </div>
-    </div>
+        </>
+      )}
+    </AppDialog>
   );
 }

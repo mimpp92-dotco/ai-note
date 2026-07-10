@@ -177,6 +177,7 @@ export function ContainerDeleteDialog(props: ContainerDeleteDialogProps) {
       title={props.kind === "folder" ? "폴더 삭제 후 보존" : "워크스페이스 삭제 후 보존"}
       onClose={props.onClose}
       trigger={props.trigger}
+      busy={saving}
     >
       <form onSubmit={(event) => void submit(event)}>
         {loading && <p className="text-[13px] text-inkSoft">최신 영향을 계산하는 중…</p>}

@@ -123,7 +123,10 @@ export function HomeClient() {
   useEffect(() => {
     if (!scope || window.sessionStorage.getItem("ai-note-focus-scope") !== "1") return;
     window.sessionStorage.removeItem("ai-note-focus-scope");
-    window.requestAnimationFrame(() => headingRef.current?.focus());
+    window.requestAnimationFrame(() => {
+      if (document.activeElement?.closest("dialog[open]")) return;
+      headingRef.current?.focus();
+    });
   }, [scope]);
 
   useEffect(() => {

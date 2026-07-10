@@ -82,6 +82,10 @@ function response(body: unknown, status = 200) {
   });
 }
 
+function dispatchNativeCancel(dialog: HTMLElement) {
+  fireEvent(dialog, new Event("cancel", { cancelable: true }));
+}
+
 describe("LibraryLocationPicker", () => {
   beforeEach(() => {
     libraryState = state();
@@ -108,7 +112,9 @@ describe("LibraryLocationPicker", () => {
       onClose={vi.fn()}
       onMoved={onMoved}
     />);
-    fireEvent.change(screen.getByRole("combobox", { name: "이동할 워크스페이스" }), {
+    const workspaceSelect = screen.getByRole("combobox", { name: "이동할 워크스페이스" });
+    await waitFor(() => expect(workspaceSelect).toHaveFocus());
+    fireEvent.change(workspaceSelect, {
       target: { value: WORKSPACE_B },
     });
     fireEvent.change(screen.getByRole("searchbox", { name: "폴더 검색" }), {
@@ -148,7 +154,7 @@ describe("LibraryLocationPicker", () => {
     expect(screen.getByRole("button", { name: "이 위치로 이동" })).toBeDisabled();
   });
 
-  it("limits folder moves to one workspace and explains the v1 boundary", () => {
+  it("limits folder moves to one workspace, focuses search, and explains the v1 boundary", async () => {
     render(<LibraryLocationPicker
       kind="folder"
       folderId={CHILD_A}
@@ -157,6 +163,7 @@ describe("LibraryLocationPicker", () => {
       onMoved={vi.fn()}
     />);
     expect(screen.getByText(/다른 워크스페이스로 폴더 이동은 지원하지 않습니다/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("searchbox", { name: "폴더 검색" })).toHaveFocus());
     expect(screen.queryByText(/개인 기록/)).not.toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /업무 \/ 고객 A/ })).toBeDisabled();
   });
@@ -193,5 +200,41 @@ describe("LibraryLocationPicker", () => {
       expectedRevision: VERSION.revision,
       parentFolderId: null,
     });
+  });
+
+  it("does not dismiss a busy move and keeps selection after a request failure", async () => {
+    let finishMutation!: (value: Awaited<ReturnType<LibraryProviderValue["runLibraryMutation"]>>) => void;
+    libraryState.runLibraryMutation = vi.fn(() => new Promise<Awaited<ReturnType<LibraryProviderValue["runLibraryMutation"]>>>((resolve) => { finishMutation = resolve; }));
+    const onClose = vi.fn();
+    render(<LibraryLocationPicker
+      kind="meeting"
+      meetingId="meeting-1"
+      current={{ workspaceId: WORKSPACE_A, folderId: CHILD_A }}
+      trigger={null}
+      onClose={onClose}
+      onMoved={vi.fn()}
+    />);
+    const destination = screen.getByRole("radio", { name: /업무 \/ 미분류/ });
+    fireEvent.click(destination);
+    fireEvent.click(screen.getByRole("button", { name: "이 위치로 이동" }));
+    await screen.findByRole("button", { name: "이동 중…" });
+    const dialog = screen.getByRole("dialog", { name: "회의 이동" });
+    const cancel = screen.getByRole("button", { name: "취소" });
+    expect(cancel).toBeDisabled();
+    dispatchNativeCancel(dialog);
+    fireEvent.pointerDown(dialog);
+    fireEvent.click(dialog);
+    fireEvent.click(cancel);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+
+    finishMutation({
+      response: response({ error: { code: "move_failed" } }, 500),
+      payload: null,
+      accepted: true,
+    });
+    await waitFor(() => expect(screen.getByText(/이동하지 못했습니다/)).toBeInTheDocument());
+    expect(destination).toBeChecked();
+    expect(screen.getByRole("dialog", { name: "회의 이동" })).toBeInTheDocument();
   });
 });

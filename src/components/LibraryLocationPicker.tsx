@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { LibraryDialogShell } from "@/components/LibraryPrimitives";
 import { useLibrary } from "@/components/LibraryProvider";
@@ -49,6 +49,8 @@ export function LibraryLocationPicker(props: LibraryLocationPickerProps) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const workspaceSelectRef = useRef<HTMLSelectElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setWorkspaceId(initialWorkspaceId);
@@ -137,11 +139,14 @@ export function LibraryLocationPicker(props: LibraryLocationPickerProps) {
       title={props.kind === "meeting" ? "회의 이동" : "폴더 이동"}
       onClose={props.onClose}
       trigger={props.trigger}
+      initialFocusRef={props.kind === "meeting" ? workspaceSelectRef : searchInputRef}
+      busy={saving}
     >
       {props.kind === "meeting" ? (
         <label className="block text-[13px] font-medium text-ink">
           이동할 워크스페이스
           <select
+            ref={workspaceSelectRef}
             aria-label="이동할 워크스페이스"
             value={workspaceId}
             onChange={(event) => {
@@ -167,6 +172,7 @@ export function LibraryLocationPicker(props: LibraryLocationPickerProps) {
       <label className="mt-4 block text-[13px] font-medium text-ink">
         폴더 검색
         <input
+          ref={searchInputRef}
           type="search"
           aria-label="폴더 검색"
           value={query}

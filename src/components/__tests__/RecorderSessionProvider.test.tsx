@@ -87,6 +87,10 @@ async function startRecording() {
   await waitFor(() => expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/));
 }
 
+function dispatchNativeCancel(dialog: HTMLElement) {
+  fireEvent(dialog, new Event("cancel", { cancelable: true }));
+}
+
 describe("RecorderSessionProvider", () => {
   beforeEach(() => {
     navigation.push.mockReset();
@@ -131,6 +135,7 @@ describe("RecorderSessionProvider", () => {
     expect(screen.getByText("녹음을 저장하는 중…")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "녹음 버리기" }));
     expect(screen.getByRole("dialog", { name: "녹음을 영구히 버릴까요?" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "유지하기" })).toHaveFocus());
     expect(screen.getByTestId("session")).toHaveTextContent(/^uploading:/);
     fireEvent.click(screen.getByRole("button", { name: "녹음 영구히 버리기" }));
     expect(screen.getByTestId("session")).toHaveTextContent("idle:none");
@@ -157,17 +162,33 @@ describe("RecorderSessionProvider", () => {
   it("blocks link and programmatic non-scope navigation, focuses cancel, and discards explicitly", async () => {
     render(<App />);
     await startRecording();
-    fireEvent.click(screen.getByRole("link", { name: "설정으로" }));
+    const link = screen.getByRole("link", { name: "설정으로" });
+    fireEvent.click(link);
     expect(navigation.push).not.toHaveBeenCalled();
     const cancel = await screen.findByRole("button", { name: "계속 녹음" });
     await waitFor(() => expect(cancel).toHaveFocus());
-    fireEvent.click(cancel);
+    dispatchNativeCancel(screen.getByRole("dialog", { name: "녹음이 아직 저장되지 않았습니다" }));
+    await waitFor(() => expect(link).toHaveFocus());
     expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/);
 
     fireEvent.click(screen.getByRole("button", { name: "프로그램 이동" }));
     fireEvent.click(await screen.findByRole("button", { name: "녹음 버리고 이동" }));
     expect(navigation.push).toHaveBeenCalledWith("/settings");
     expect(screen.getByTestId("session")).toHaveTextContent("idle:none");
+  });
+
+  it("returns from permanent discard confirmation to its connected trigger", async () => {
+    render(<App full={false} />);
+    const session = getRecorderSession();
+    await act(async () => session.start());
+    await waitFor(() => expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/));
+    const trigger = screen.getByRole("button", { name: "녹음 버리기" });
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "녹음을 영구히 버릴까요?" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "유지하기" })).toHaveFocus());
+    dispatchNativeCancel(dialog);
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/);
   });
 
   it("allows a scope-query-only navigation without interrupting recording", async () => {

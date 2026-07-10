@@ -102,6 +102,13 @@ flowchart LR
 - `GuardedLink`, guarded programmatic router, `popstate`가 destination-aware guard 하나를 사용한다. 같은 pathname의 workspace/folder/view query 변화만 session을 유지한 채 통과하고, 다른 route는 cancel/stop-and-stay/explicit discard 선택 전까지 막는다. Cancel/Escape는 원래 trigger로 focus를 돌린다.
 - Health polling은 recorder/library 요청과 abort/epoch를 공유하지 않는다. Existing module-level endpoint single-flight poller를 여러 shell consumer가 구독해도 timer/fetch는 한 세트다.
 
+## Client modal lifecycle
+
+- `src/components/AppDialog.tsx`의 app-level `AppDialog`/`AppDrawer`만 modal lifecycle를 소유한다. Native `<dialog>.showModal()` browser top layer가 stacking context와 무관한 paint order, background modality, focus containment, topmost `cancel`을 제공하고 Library/Recorder component는 title·form·validation·mutation·feature action만 소유한다.
+- Primitive는 controlled `open`, feature-owned initial/return focus, `escape|backdrop|explicit_cancel` reason을 처리한다. Callback은 current ref로 읽어 parent poll rerender가 initial focus를 반복하지 않으며, user dismissal일 때만 connected trigger 또는 safe fallback으로 돌아간다. Navigation/generation success는 scope-heading handoff가 stale trigger 복귀보다 우선한다.
+- Browser modality와 document scroll은 별도 계약이다. 열린 app modal마다 idempotent registration을 갖는 module-scoped ref count가 첫 open에서 기존 `body.style.overflow`를 저장하고, nested top surface가 닫혀도 lock을 유지하며, 마지막 close/unmount에서 원래 값을 복구한다.
+- Busy mutation은 native cancel·backdrop·explicit cancel을 모두 거부하고 cancel control을 실제 disabled한다. 실패는 surface/value/selection을 유지하고, generation reset unmount는 focus-return intent 없이 scroll registration만 정리한다.
+
 ## Library client freshness·bounded cache
 
 - Root layout의 단일 `LibraryProvider`가 authoritative `version+library`, degraded model, canonical scope, expanded folders, scoped page window와 monotonic generation epoch를 소유한다. Queryless legacy meeting list는 제거됐고 모든 목록은 bounded scope/cursor를 요구한다.
@@ -109,12 +116,12 @@ flowchart LR
 - Status-only `summary-work`와 `organization-pending`은 library revision과 분리된 sequence/operation epoch를 가진다. Resolver/move/delete invalidation 뒤 old same-version pending response가 row/count를 되살릴 수 없다. Existing `useHealth` poller와 abort/epoch/timer를 공유하지 않는다.
 - Scoped meeting cache는 normalized entity와 page IDs를 한 eviction transaction으로 관리한다. Current page ±2, 최대 5 pages/500 entities만 보존하고 cursor history는 lightweight metadata로 남긴다. Evicted page back-navigation은 refetch하며 library version 또는 scope generation이 바뀌면 page/entity/cursor를 전량 reset한다.
 - Resource poller는 endpoint별 single-flight, AbortController, hidden-tab pause, focus refresh, bounded exponential backoff를 사용한다. Nonterminal active page polling은 3초, stable resource는 느린 주기로 전환할 수 있도록 분리한다.
-- Canonical scope helper는 `?workspace=<id>`, optional `view=unfiled|folder=<id>`를 pure resolve하고 invalid/missing/cross-workspace 조합을 default workspace All로 한 번만 replace할 reason과 함께 반환한다. Drawer/dialog/disclosure primitives는 dialog focus/Escape/list semantics만 선언하며 구현하지 않은 ARIA tree role은 사용하지 않는다.
+- Canonical scope helper는 `?workspace=<id>`, optional `view=unfiled|folder=<id>`를 pure resolve하고 invalid/missing/cross-workspace 조합을 default workspace All로 한 번만 replace할 reason과 함께 반환한다. Drawer/dialog는 app-level native top-layer primitive를 재사용하고 disclosure는 list semantics만 선언하며 구현하지 않은 ARIA tree role은 사용하지 않는다.
 
 ## Activated scoped library client
 
 - `/`은 `?workspace=<id>`, optional `view=unfiled` 또는 `folder=<id>`를 navigation 정본으로 사용한다. Query 없음/missing workspace는 default All, invalid folder/view는 requested workspace All로 one-replace canonicalize한다. Workspace All row만 effective breadcrumb를 포함하고 unfiled/folder는 direct placement만 반환한다.
-- Desktop rail/mobile focus-trapped drawer는 workspace switcher, All/unfiled, nested max-depth-3 folders, glossary/settings와 shared health를 제공한다. Workspace name create/rename, folder name/color create/edit, same-workspace subtree move와 preservation container delete를 노출한다. Corrupt registry일 때만 Home degraded panel에서 fingerprint-guarded rebuild를 노출한다.
+- Desktop rail/native top-layer mobile drawer는 workspace switcher, All/unfiled, nested max-depth-3 folders, glossary/settings와 shared health를 제공한다. Workspace name create/rename, folder name/color create/edit, same-workspace subtree move와 preservation container delete를 노출한다. Corrupt registry일 때만 Home degraded panel에서 fingerprint-guarded rebuild를 노출한다.
 - Scoped row detail link는 `sourceWorkspace`, `sourceView:all|unfiled|folder`, optional `sourceFolder` ID만 전달한다. Detail RSC는 current registry에서 조합을 검증하고 invalid/missing/raw return input은 current effective workspace All 또는 safe default All로 다시 해석한다. Arbitrary return pathname/name은 신뢰하지 않는다.
 - `summary-work`의 one-item attention cursor는 page/workspace 밖 실패 회의를 순회한다. Detail은 next item 또는 end의 explicit restart만 유지해 global queue를 client에 누적하지 않는다.
 - Default workspace All은 separate organization-pending max-100 page를 합성한다. Actual은 null이고 safe requested ID hint/detail probe만 노출한다. Canonical placement가 생긴 row는 operation epoch에 의해 stale pending response에서 부활하지 않는다.

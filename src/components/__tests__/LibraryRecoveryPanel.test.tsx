@@ -41,6 +41,10 @@ function renderPanel(
   );
 }
 
+function dispatchNativeCancel(dialog: HTMLElement) {
+  fireEvent(dialog, new Event("cancel", { cancelable: true }));
+}
+
 describe("LibraryRecoveryPanel", () => {
   beforeEach(() => {
     recorderBlocked = false;
@@ -133,5 +137,32 @@ describe("LibraryRecoveryPanel", () => {
     ]);
     expect(navigation.replace).toHaveBeenCalledWith(`/?workspace=${NEW_WORKSPACE_ID}`);
     expect(window.sessionStorage.getItem("ai-note-focus-scope")).toBe("1");
+  });
+
+  it("keeps rebuild open and non-dismissible while the request is in flight", async () => {
+    let finishFetch!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finishFetch = resolve; })));
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "조직 정보 재구축" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /재구축.*정확히 입력/ }), {
+      target: { value: "재구축" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "재구축" }));
+    await screen.findByRole("button", { name: "재구축 중…" });
+    const dialog = screen.getByRole("dialog", { name: "조직 정보 재구축" });
+    const cancel = screen.getByRole("button", { name: "취소" });
+    expect(cancel).toBeDisabled();
+    dispatchNativeCancel(dialog);
+    fireEvent.pointerDown(dialog);
+    fireEvent.click(dialog);
+    fireEvent.click(cancel);
+    expect(dialog).toBeInTheDocument();
+
+    finishFetch(new Response(JSON.stringify({ error: { code: "failed" } }), {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/완료하지 못했습니다/));
+    expect(screen.getByRole("dialog", { name: "조직 정보 재구축" })).toBeInTheDocument();
   });
 });

@@ -63,6 +63,10 @@ function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+function dispatchNativeCancel(dialog: HTMLElement) {
+  fireEvent(dialog, new Event("cancel", { cancelable: true }));
+}
+
 const folderImpact = {
   kind: "folder",
   folderId: FOLDER,
@@ -219,5 +223,44 @@ describe("ContainerDeleteDialog", () => {
     />);
     expect(await screen.findByText("마지막 워크스페이스는 삭제할 수 없습니다.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "워크스페이스만 삭제하고 보존" })).toBeDisabled();
+  });
+
+  it("keeps a delete dialog open while its mutation is in flight", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response({
+      mode: "ready",
+      version: VERSION,
+      library: libraryState.library,
+      impact: folderImpact,
+    })));
+    let finishMutation!: (value: Awaited<ReturnType<LibraryProviderValue["runLibraryMutation"]>>) => void;
+    libraryState.runLibraryMutation = vi.fn(() => new Promise<Awaited<ReturnType<LibraryProviderValue["runLibraryMutation"]>>>((resolve) => { finishMutation = resolve; }));
+    const onClose = vi.fn();
+    render(<ContainerDeleteDialog
+      kind="folder"
+      container={{ id: FOLDER, name: "정리 대상" }}
+      trigger={null}
+      onClose={onClose}
+      onDeleted={vi.fn()}
+    />);
+    await screen.findByText(/회의 1개를 .*상위로 이동/);
+    fireEvent.click(screen.getByRole("button", { name: "폴더만 삭제하고 보존" }));
+    await screen.findByRole("button", { name: "보존하며 삭제 중…" });
+    const dialog = screen.getByRole("dialog", { name: "폴더 삭제 후 보존" });
+    const cancel = screen.getByRole("button", { name: "취소" });
+    expect(cancel).toBeDisabled();
+    dispatchNativeCancel(dialog);
+    fireEvent.pointerDown(dialog);
+    fireEvent.click(dialog);
+    fireEvent.click(cancel);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+
+    finishMutation({
+      response: response({ error: { code: "delete_failed" } }, 500),
+      payload: null,
+      accepted: true,
+    });
+    await waitFor(() => expect(screen.getByText(/삭제하지 못했습니다/)).toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "폴더 삭제 후 보존" })).toBeInTheDocument();
   });
 });

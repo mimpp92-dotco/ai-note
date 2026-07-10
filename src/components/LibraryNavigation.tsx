@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import { GuardedLink, useGuardedRouter } from "@/components/RecorderNavigation";
+import { AppDrawer } from "@/components/AppDialog";
 import {
   ContainerDeleteDialog,
   type ContainerDeleteCommitResult,
@@ -54,7 +55,6 @@ export function LibraryNavigation() {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [folderMoveMessage, setFolderMoveMessage] = useState<string | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const drawerRef = useRef<HTMLDivElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
   const generationEpochRef = useRef(library.generationEpoch);
 
@@ -124,6 +124,11 @@ export function LibraryNavigation() {
     if (shouldNavigate) {
       window.sessionStorage.setItem("ai-note-focus-scope", "1");
       router.push(destination);
+    } else {
+      window.setTimeout(() => {
+        if (deleted.trigger?.isConnected) deleted.trigger.focus();
+        else document.querySelector<HTMLElement>("#main h1")?.focus();
+      }, 0);
     }
   };
 
@@ -132,6 +137,7 @@ export function LibraryNavigation() {
       setDrawerOpen(false);
       setEditor(null);
       setFolderMoveMessage(null);
+      window.sessionStorage.setItem("ai-note-focus-scope", "1");
       generationEpochRef.current = library.generationEpoch;
     }
   }, [library.generationEpoch]);
@@ -149,42 +155,6 @@ export function LibraryNavigation() {
       if (!library.expandedFolderIds.has(id)) library.toggleFolder(id);
     }
   }, [currentFolderId, library]);
-
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const content = document.getElementById("app-content");
-    if (content) content.inert = true;
-    drawerCloseRef.current?.focus();
-    const keydown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setDrawerOpen(false);
-        window.setTimeout(() => menuButtonRef.current?.focus(), 0);
-        return;
-      }
-      if (event.key !== "Tab" || !drawerRef.current) return;
-      const focusable = [...drawerRef.current.querySelectorAll<HTMLElement>(
-        "a[href],button:not([disabled]),select:not([disabled]),input:not([disabled])",
-      )];
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable.at(-1)!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", keydown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      if (content) content.inert = false;
-      document.removeEventListener("keydown", keydown);
-    };
-  }, [drawerOpen]);
 
   const navigation = library.library ? (
     <NavigationContents
@@ -232,43 +202,40 @@ export function LibraryNavigation() {
       <div className="hidden h-screen flex-col lg:flex">{navigation}</div>
 
       {drawerOpen && (
-        <div className="fixed inset-0 z-[60] bg-ink/35 lg:hidden" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) {
-            setDrawerOpen(false);
-            window.setTimeout(() => menuButtonRef.current?.focus(), 0);
-          }
-        }}>
-          <div
-            ref={drawerRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label="라이브러리 메뉴"
-            className="flex h-dvh w-[min(88vw,22rem)] flex-col border-r border-line bg-chrome shadow-xl"
-          >
-            <div className="flex min-h-16 items-center justify-between border-b border-line px-4">
-              <span className="text-[15px] font-bold text-ink">AI NOTE</span>
-              <button
-                ref={drawerCloseRef}
-                type="button"
-                aria-label="라이브러리 메뉴 닫기"
-                onClick={() => {
-                  setDrawerOpen(false);
-                  window.setTimeout(() => menuButtonRef.current?.focus(), 0);
-                }}
-                className="min-h-11 min-w-11 rounded-full border border-line bg-panel text-ink"
-              >
-                ×
-              </button>
-            </div>
-            {navigation}
-          </div>
-        </div>
+        <AppDrawer
+          open
+          title="라이브러리 메뉴"
+          initialFocusRef={drawerCloseRef}
+          returnFocus={menuButtonRef}
+          onDismiss={() => setDrawerOpen(false)}
+          className="lg:hidden"
+          panelClassName="flex w-[min(88vw,22rem)] flex-col border-r border-line bg-chrome shadow-xl"
+        >
+          {(dismiss) => (
+            <>
+              <div className="flex min-h-16 items-center justify-between border-b border-line px-4">
+                <span className="text-[15px] font-bold text-ink">AI NOTE</span>
+                <button
+                  ref={drawerCloseRef}
+                  type="button"
+                  aria-label="라이브러리 메뉴 닫기"
+                  onClick={() => dismiss("explicit_cancel")}
+                  className="min-h-11 min-w-11 rounded-full border border-line bg-panel text-ink"
+                >
+                  ×
+                </button>
+              </div>
+              {navigation}
+            </>
+          )}
+        </AppDrawer>
       )}
 
       <LibraryEditorDialog
         editor={editor}
         onClose={() => setEditor(null)}
         onAction={setEditor}
+        onCreateNavigation={() => setDrawerOpen(false)}
       />
       {editor?.kind === "folder-move" && (
         <LibraryLocationPicker
@@ -276,7 +243,13 @@ export function LibraryNavigation() {
           folderId={editor.folder.id}
           trigger={editor.trigger}
           onClose={() => setEditor(null)}
-          onMoved={() => setFolderMoveMessage(`${editor.folder.name} 폴더를 이동했습니다.`)}
+          onMoved={() => {
+            setFolderMoveMessage(`${editor.folder.name} 폴더를 이동했습니다.`);
+            window.setTimeout(() => {
+              if (editor.trigger?.isConnected) editor.trigger.focus();
+              else document.querySelector<HTMLElement>("#main h1")?.focus();
+            }, 0);
+          }}
         />
       )}
       {editor?.kind === "folder-delete" && (
@@ -582,10 +555,12 @@ function LibraryEditorDialog({
   editor,
   onClose,
   onAction,
+  onCreateNavigation,
 }: {
   editor: Editor | null;
   onClose: () => void;
   onAction: (editor: Editor) => void;
+  onCreateNavigation: () => void;
 }) {
   const library = useLibrary();
   const router = useGuardedRouter();
@@ -606,7 +581,6 @@ function LibraryEditorDialog({
     setColor(editor.kind === "folder-edit" ? editor.folder.color : "brown");
     setError(null);
     setSaving(false);
-    window.setTimeout(() => nameInputRef.current?.focus(), 0);
   }, [editor]);
 
   if (
@@ -701,14 +675,31 @@ function LibraryEditorDialog({
       }
       if (!result.accepted) return;
       const next = result.payload?.library;
+      let navigated = false;
       if (editor.kind === "workspace-create") {
         const created = next?.workspaces.find((item) => !beforeWorkspaces.has(item.id));
-        if (created) router.push(`/?workspace=${created.id}`);
+        if (created) {
+          onCreateNavigation();
+          window.sessionStorage.setItem("ai-note-focus-scope", "1");
+          router.push(`/?workspace=${created.id}`);
+          navigated = true;
+        }
       } else if (editor.kind === "folder-create") {
         const created = next?.folders.find((item) => !beforeFolders.has(item.id));
-        if (created) router.push(`/?workspace=${created.workspaceId}&folder=${created.id}`);
+        if (created) {
+          onCreateNavigation();
+          window.sessionStorage.setItem("ai-note-focus-scope", "1");
+          router.push(`/?workspace=${created.workspaceId}&folder=${created.id}`);
+          navigated = true;
+        }
       }
       onClose();
+      if (!navigated) {
+        window.setTimeout(() => {
+          if (editor.trigger?.isConnected) editor.trigger.focus();
+          else document.querySelector<HTMLElement>("#main h1")?.focus();
+        }, 0);
+      }
     } catch {
       setError("저장하지 못했습니다. 잠시 후 다시 시도해 주세요.");
       window.setTimeout(() => nameInputRef.current?.focus(), 0);
@@ -722,13 +713,19 @@ function LibraryEditorDialog({
     void submit();
   };
   return (
-    <LibraryDialogShell open title={title} onClose={onClose} trigger={editor.trigger}>
+    <LibraryDialogShell
+      open
+      title={title}
+      onClose={onClose}
+      trigger={editor.trigger}
+      initialFocusRef={nameInputRef}
+      busy={saving}
+    >
       <form onSubmit={(event) => void submit(event)}>
         <label className="block text-[13px] font-medium text-ink">
           {workspace ? "워크스페이스 이름" : "폴더 이름"}
           <input
             ref={nameInputRef}
-            autoFocus
             aria-label={workspace ? "워크스페이스 이름" : "폴더 이름"}
             value={name}
             onChange={(event) => { setName(event.currentTarget.value); setError(null); }}
@@ -760,6 +757,7 @@ function LibraryEditorDialog({
           <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-4">
             <button
               type="button"
+              disabled={saving}
               onClick={() => onAction({ kind: "folder-move", folder: editor.folder, trigger: editor.trigger })}
               className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent"
             >
@@ -767,6 +765,7 @@ function LibraryEditorDialog({
             </button>
             <button
               type="button"
+              disabled={saving}
               onClick={() => onAction({ kind: "folder-delete", folder: editor.folder, trigger: editor.trigger })}
               className="min-h-11 rounded-full border border-warn/50 px-4 text-[13px] font-semibold text-warn"
             >
@@ -778,7 +777,7 @@ function LibraryEditorDialog({
           <div className="mt-4 border-t border-line pt-4">
             <button
               type="button"
-              disabled={currentLibrary.workspaces.length === 1}
+              disabled={saving || currentLibrary.workspaces.length === 1}
               onClick={() => onAction({ kind: "workspace-delete", workspace: editor.workspace, trigger: editor.trigger })}
               className="min-h-11 rounded-full border border-warn/50 px-4 text-[13px] font-semibold text-warn disabled:opacity-40"
             >

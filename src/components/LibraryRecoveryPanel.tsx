@@ -221,6 +221,7 @@ export function LibraryRecoveryPanel({
         title="조직 정보 재구축"
         onClose={close}
         trigger={triggerRef.current}
+        busy={busy}
       >
         <form onSubmit={(event) => void submit(event)}>
           <p className="text-[14px] leading-relaxed text-inkSoft">

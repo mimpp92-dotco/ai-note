@@ -1,60 +1,59 @@
 "use client";
 
 import {
+  type RefObject,
   type ReactNode,
-  useEffect,
   useId,
   useRef,
   useState,
 } from "react";
+
+import { AppDialog } from "@/components/AppDialog";
 
 export function LibraryDialogShell({
   open,
   title,
   onClose,
   trigger = null,
+  initialFocusRef,
+  busy = false,
   children,
 }: {
   open: boolean;
   title: string;
   onClose: () => void;
   trigger?: HTMLElement | null;
+  initialFocusRef?: RefObject<HTMLElement>;
+  busy?: boolean;
   children: ReactNode;
 }) {
-  const titleId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    cancelRef.current?.focus();
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      onClose();
-      window.setTimeout(() => trigger?.focus(), 0);
-    };
-    document.addEventListener("keydown", keydown);
-    return () => document.removeEventListener("keydown", keydown);
-  }, [onClose, open, trigger]);
-  if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink/35 p-4">
-      <section role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-full max-w-md rounded-2xl border border-line bg-panel p-6 shadow-xl">
-        <h2 id={titleId} className="text-[18px] font-bold text-ink">{title}</h2>
+    <AppDialog
+      open={open}
+      title={title}
+      initialFocusRef={initialFocusRef ?? cancelRef}
+      returnFocus={trigger}
+      dismissible={!busy}
+      onDismiss={() => onClose()}
+    >
+      {(dismiss) => (
+        <>
         <div className="mt-4">{children}</div>
         <div className="mt-5 flex justify-end">
           <button
             ref={cancelRef}
             type="button"
-            onClick={() => {
-              onClose();
-              window.setTimeout(() => trigger?.focus(), 0);
-            }}
+            disabled={busy}
+            onClick={() => dismiss("explicit_cancel")}
             className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent"
           >
             취소
           </button>
         </div>
-      </section>
-    </div>
+        </>
+      )}
+    </AppDialog>
   );
 }
 
