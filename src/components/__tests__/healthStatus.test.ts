@@ -29,9 +29,10 @@ describe("healthStatus", () => {
     expect(providerLabel("ollama")).toBe("Ollama");
 
     expect(
-      formatLlmStatus({ configured: true, provider: "claude-cli", model: "sonnet", ok: true, detail: "ready" }),
+      formatLlmStatus({ configured: true, provider: "claude-cli", model: "sonnet", ok: true, detail: "available" }),
     ).toMatchObject({
-      label: "Claude CLI sonnet · 연결됨",
+      label: "Claude CLI sonnet · 감지됨",
+      title: expect.stringContaining("첫 요약"),
       tone: "success",
     });
     expect(formatLlmStatus({ configured: true, provider: "codex-cli", ok: true, detail: "available" })).toMatchObject({

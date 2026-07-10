@@ -15,6 +15,21 @@ const MEETINGS_POLL_MS = 3000;
 // home doesn't refetch-flash. Health pills/onboarding read the shared useHealth hook.
 let meetingsCache: MeetingListItem[] | null = null;
 
+// Split transcribed-but-unsummarized meetings for the home banner: "auto-
+// processing" (no error) vs "needs attention" (a retry_summary error the worker
+// backed off from). Showing the latter as "자동 처리 중" would be a false-green
+// promise, so they are counted and surfaced separately.
+export function splitBacklog(meetings: MeetingListItem[]): {
+  pending: number;
+  needsAttention: number;
+} {
+  const transcribed = meetings.filter((m) => m.status === "transcribed");
+  return {
+    pending: transcribed.filter((m) => m.error?.action !== "retry_summary").length,
+    needsAttention: transcribed.filter((m) => m.error?.action === "retry_summary").length,
+  };
+}
+
 // Client home dashboard. Reads state through app-api (force-dynamic routes) with
 // no-store polling; never touches the filesystem or an LLM directly.
 export function HomeClient() {
@@ -49,7 +64,7 @@ export function HomeClient() {
     };
   }, []);
 
-  const pendingCount = (meetings ?? []).filter((m) => m.status === "transcribed").length;
+  const { pending: pendingCount, needsAttention: needsAttentionCount } = splitBacklog(meetings ?? []);
   const modelReadiness = getLlmReadiness(llm);
 
   // Row-action callbacks: merge/remove the one item (server already persisted the
@@ -83,7 +98,11 @@ export function HomeClient() {
 
       <Recorder />
 
-      <PendingBanner count={pendingCount} readiness={modelReadiness} />
+      <PendingBanner
+        count={pendingCount}
+        needsAttention={needsAttentionCount}
+        readiness={modelReadiness}
+      />
 
       {meetings !== null &&
         (meetings.length === 0 ? (
