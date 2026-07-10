@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     "auto-processing".
   - **Poller hygiene**: the shared health poller dedups in-flight fetches per
     endpoint so a slow check can't stack across poll ticks.
+- **Isolated claude summarize invocation** (ADR 0010):
+  - **No context pollution**: claude summary calls now run in an isolated temp
+    cwd (`os.tmpdir()`) with MCP + slash commands off, so the project's
+    workspace `CLAUDE.md`/MCP context no longer leaks into the corrected
+    transcript (a past pollution bug). The prompt and summary schema are
+    unchanged.
+  - **$0 guard**: paid `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` are scrubbed from
+    the child environment so a subscription-OAuth CLI is never silently metered
+    to a paid API; `HOME`/`PATH` (OAuth keychain + binary lookup) are kept.
 
 ## [0.1.0] - 2026-07-08
 

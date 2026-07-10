@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+
 import { LLM_GENERATION_TIMEOUT_MS, runProcess } from "@/services/llm/exec";
 import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services/llm/types";
 
@@ -11,11 +13,32 @@ export class ClaudeCliAdapter implements LlmAdapter {
   constructor(private readonly settings: LlmSettings) {}
 
   // `opts.json` is ignored: summarizeCore extracts JSON from plain text output.
+  //
+  // Isolated + self-contained (aligned with codexCli's `-C tmpdir()` pattern):
+  // run in a temp cwd, never the project directory, so no workspace CLAUDE.md /
+  // MCP context leaks into the correction (a past pollution bug). MCP + slash
+  // commands are off for a minimal session with a clean teardown. Paid API keys
+  // are scrubbed from the child env so a subscription-OAuth CLI is never silently
+  // metered to a paid API ($0 invariant); HOME/PATH stay so OAuth keychain access
+  // and binary lookup still work. The transcript goes via stdin only (never argv:
+  // `ps` exposure + ARG_MAX). Generation timeout stays at 600s.
   async run(prompt: string): Promise<string> {
-    const args = ["-p", ...(this.settings.model ? ["--model", this.settings.model] : [])];
+    const args = [
+      "-p",
+      "--strict-mcp-config",
+      "--mcp-config",
+      '{"mcpServers":{}}',
+      "--disable-slash-commands",
+      ...(this.settings.model ? ["--model", this.settings.model] : []),
+    ];
+    const env = { ...process.env };
+    delete env.ANTHROPIC_API_KEY;
+    delete env.OPENAI_API_KEY;
     const { stdout } = await runProcess("claude", args, {
       stdin: prompt,
       timeoutMs: LLM_GENERATION_TIMEOUT_MS,
+      cwd: tmpdir(),
+      env,
     });
     return stdout.trim();
   }

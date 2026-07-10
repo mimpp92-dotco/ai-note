@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { tmpdir } from "node:os";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the subprocess helper so run() never shells out; we only assert the args it
@@ -13,7 +15,7 @@ import { LLM_GENERATION_TIMEOUT_MS, runProcess } from "@/services/llm/exec";
 
 const runProcessMock = vi.mocked(runProcess);
 
-describe("ClaudeCliAdapter.run — generation timeout", () => {
+describe("ClaudeCliAdapter.run — isolated invocation", () => {
   beforeEach(() => runProcessMock.mockClear());
 
   it("passes the 10-minute LLM generation timeout (not the 120s default)", async () => {
@@ -21,11 +23,69 @@ describe("ClaudeCliAdapter.run — generation timeout", () => {
 
     await new ClaudeCliAdapter({ provider: "claude-cli" }).run("프롬프트");
 
-    expect(runProcessMock).toHaveBeenCalledWith(
-      "claude",
-      ["-p"],
-      expect.objectContaining({ stdin: "프롬프트", timeoutMs: LLM_GENERATION_TIMEOUT_MS }),
-    );
+    const opts = runProcessMock.mock.calls[0]?.[2];
+    expect(opts?.stdin).toBe("프롬프트");
+    expect(opts?.timeoutMs).toBe(LLM_GENERATION_TIMEOUT_MS);
+  });
+
+  it("runs with MCP off + slash off (self-contained, clean teardown)", async () => {
+    await new ClaudeCliAdapter({ provider: "claude-cli" }).run("p");
+
+    const args = runProcessMock.mock.calls[0]?.[1] ?? [];
+    expect(runProcessMock.mock.calls[0]?.[0]).toBe("claude");
+    expect(args).toContain("-p");
+    expect(args).toContain("--strict-mcp-config");
+    expect(args).toContain("--mcp-config");
+    expect(args).toContain('{"mcpServers":{}}');
+    expect(args).toContain("--disable-slash-commands");
+  });
+
+  it("runs in an isolated temp cwd, NOT the project directory", async () => {
+    await new ClaudeCliAdapter({ provider: "claude-cli" }).run("p");
+
+    const cwd = runProcessMock.mock.calls[0]?.[2]?.cwd;
+    expect(cwd).toBeDefined();
+    expect(cwd?.startsWith(tmpdir())).toBe(true);
+    expect(cwd).not.toBe(process.cwd()); // regression guard: no workspace context
+  });
+
+  it("scrubs paid API keys from the child env but keeps HOME/PATH ($0 guard)", async () => {
+    const prevA = process.env.ANTHROPIC_API_KEY;
+    const prevO = process.env.OPENAI_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "sk-ant-should-not-leak";
+    process.env.OPENAI_API_KEY = "sk-openai-should-not-leak";
+    try {
+      await new ClaudeCliAdapter({ provider: "claude-cli" }).run("p");
+
+      const env = runProcessMock.mock.calls[0]?.[2]?.env;
+      expect(env).toBeDefined();
+      expect(env?.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env?.OPENAI_API_KEY).toBeUndefined();
+      expect(env?.PATH).toBe(process.env.PATH);
+      expect(env?.HOME).toBe(process.env.HOME);
+    } finally {
+      if (prevA === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prevA;
+      if (prevO === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = prevO;
+    }
+  });
+
+  it("passes the transcript via stdin only, never in argv (PII / ARG_MAX)", async () => {
+    const transcript = "민감한 전사 내용 — 홍길동 010-1234-5678";
+    await new ClaudeCliAdapter({ provider: "claude-cli" }).run(transcript);
+
+    const [, args, opts] = runProcessMock.mock.calls[0] ?? [];
+    expect(opts?.stdin).toBe(transcript);
+    expect((args ?? []).some((a) => a.includes(transcript))).toBe(false);
+  });
+
+  it("wires --model when a model is configured", async () => {
+    await new ClaudeCliAdapter({ provider: "claude-cli", model: "sonnet" }).run("p");
+
+    const args = runProcessMock.mock.calls[0]?.[1] ?? [];
+    expect(args).toContain("--model");
+    expect(args[args.indexOf("--model") + 1]).toBe("sonnet");
   });
 });
 
