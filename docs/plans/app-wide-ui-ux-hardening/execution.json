@@ -1,0 +1,88 @@
+{
+  "slug": "app-wide-ui-ux-hardening",
+  "model": "codex",
+  "reconciledAgainst": "b4c4bde7a7d4792e01de00ec9194a921ab5cd516",
+  "phases": [
+    {
+      "phase": 1,
+      "name": "native-dialog-and-modal-lifecycle",
+      "state": "completed",
+      "summary": "Phase 1 완료 — app-level native AppDialog/AppDrawer로 활성 modal surface를 통합하고 feature별 focus·busy dismissal·nested scroll lock을 보존했으며 synthetic Actual Chrome matrix와 전체 582개 테스트 및 모든 완료 게이트를 통과했다.",
+      "verify": {
+        "cmd": "set -eu\nnpm test -- \\\n  src/components/__tests__/AppDialog.test.tsx \\\n  src/components/__tests__/LibraryPrimitives.test.tsx \\\n  src/components/__tests__/LibraryNavigation.test.tsx \\\n  src/components/__tests__/LibraryLocationPicker.test.tsx \\\n  src/components/__tests__/ContainerDeleteDialog.test.tsx \\\n  src/components/__tests__/LibraryRecoveryPanel.test.tsx \\\n  src/components/__tests__/RecorderSessionProvider.test.tsx\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
+      },
+      "commit": "1d959395919f4083c1dbf8e1a7508c9df47d9ab0",
+      "attempts": 1,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-11T08:17:02+0900",
+      "completedAt": "2026-07-11T08:33:17+0900",
+      "retryCount": 3
+    },
+    {
+      "phase": 2,
+      "name": "library-home-responsive-polish",
+      "state": "pending",
+      "summary": "",
+      "verify": {
+        "cmd": "",
+        "passed": false
+      },
+      "commit": "",
+      "attempts": 0,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "",
+      "completedAt": ""
+    },
+    {
+      "phase": 3,
+      "name": "detail-hierarchy-tabs-and-audio",
+      "state": "pending",
+      "summary": "",
+      "verify": {
+        "cmd": "",
+        "passed": false
+      },
+      "commit": "",
+      "attempts": 0,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "",
+      "completedAt": ""
+    },
+    {
+      "phase": 4,
+      "name": "form-state-and-accessibility",
+      "state": "pending",
+      "summary": "",
+      "verify": {
+        "cmd": "",
+        "passed": false
+      },
+      "commit": "",
+      "attempts": 0,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "",
+      "completedAt": ""
+    },
+    {
+      "phase": 5,
+      "name": "regression-cleanup-and-final-qa",
+      "state": "pending",
+      "summary": "",
+      "verify": {
+        "cmd": "",
+        "passed": false
+      },
+      "commit": "",
+      "attempts": 0,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "",
+      "completedAt": ""
+    }
+  ]
+}
