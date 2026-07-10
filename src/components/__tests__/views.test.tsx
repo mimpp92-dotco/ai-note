@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EmptyState } from "@/components/EmptyState";
 import { GlossaryClient } from "@/components/GlossaryClient";
+import { splitBacklog } from "@/components/HomeClient";
 import { MeetingDetailView } from "@/components/MeetingDetailView";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
@@ -114,6 +115,38 @@ describe("PendingBanner", () => {
   it("still renders when only needs-attention is nonzero (pending count zero)", () => {
     const { container } = render(<PendingBanner count={0} needsAttention={1} readiness="ready" />);
     expect(container).not.toBeEmptyDOMElement();
+  });
+
+  it("counts needs-attention meetings in the not-ready backlog total", () => {
+    render(<PendingBanner count={2} needsAttention={1} readiness="unavailable" />);
+    expect(screen.getByText("3개 회의가 요약 대기 중")).toBeInTheDocument();
+  });
+});
+
+describe("splitBacklog — home banner counts", () => {
+  const item = (over: Partial<MeetingListItem>): MeetingListItem => ({
+    id: "x",
+    title: "t",
+    status: "transcribed",
+    startedAt: "2026-07-05T13:30:00.000Z",
+    error: null,
+    ...over,
+  });
+
+  it("counts transcribed-without-retry_summary as pending, retry_summary as needs-attention", () => {
+    expect(
+      splitBacklog([
+        item({ id: "a" }),
+        item({ id: "b", error: { message: "x", action: "retry_summary" } }),
+        item({ id: "c", status: "summarized" }),
+        item({ id: "d", status: "transcribing" }),
+        item({ id: "e", error: { message: "x", action: "retry_transcription" } }),
+      ]),
+    ).toEqual({ pending: 2, needsAttention: 1 });
+  });
+
+  it("returns zeros for an empty list", () => {
+    expect(splitBacklog([])).toEqual({ pending: 0, needsAttention: 0 });
   });
 });
 

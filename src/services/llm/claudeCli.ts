@@ -7,6 +7,20 @@ import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services
 // prompt from STDIN when piped. Summary tasks are self-contained (no tools,
 // no elevated permissions), so we never pass --dangerously-skip-permissions.
 
+// Env vars that can route `claude` to a PAID / metered backend — credentials
+// (API keys, Bearer auth token) or backend redirects (Bedrock/Vertex/base URL).
+// Scrubbed from the child env so an isolated summary always uses the local
+// subscription OAuth login and is never silently billed to a paid API ($0
+// invariant, ADR 0010). OAuth/keychain live in HOME, not env, so they survive.
+const PAID_BILLING_ENV_VARS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "OPENAI_API_KEY",
+] as const;
+
 export class ClaudeCliAdapter implements LlmAdapter {
   readonly provider: LlmProvider = "claude-cli";
 
@@ -17,11 +31,11 @@ export class ClaudeCliAdapter implements LlmAdapter {
   // Isolated + self-contained (aligned with codexCli's `-C tmpdir()` pattern):
   // run in a temp cwd, never the project directory, so no workspace CLAUDE.md /
   // MCP context leaks into the correction (a past pollution bug). MCP + slash
-  // commands are off for a minimal session with a clean teardown. Paid API keys
-  // are scrubbed from the child env so a subscription-OAuth CLI is never silently
-  // metered to a paid API ($0 invariant); HOME/PATH stay so OAuth keychain access
-  // and binary lookup still work. The transcript goes via stdin only (never argv:
-  // `ps` exposure + ARG_MAX). Generation timeout stays at 600s.
+  // commands are off for a minimal session with a clean teardown. Paid-billing
+  // env vars are scrubbed (PAID_BILLING_ENV_VARS) so a subscription-OAuth CLI is
+  // never silently metered to a paid API ($0 invariant); HOME/PATH stay so OAuth
+  // keychain access and binary lookup still work. The transcript goes via stdin
+  // only (never argv: `ps` exposure + ARG_MAX). Generation timeout stays at 600s.
   async run(prompt: string): Promise<string> {
     const args = [
       "-p",
@@ -32,8 +46,7 @@ export class ClaudeCliAdapter implements LlmAdapter {
       ...(this.settings.model ? ["--model", this.settings.model] : []),
     ];
     const env = { ...process.env };
-    delete env.ANTHROPIC_API_KEY;
-    delete env.OPENAI_API_KEY;
+    for (const key of PAID_BILLING_ENV_VARS) delete env[key];
     const { stdout } = await runProcess("claude", args, {
       stdin: prompt,
       timeoutMs: LLM_GENERATION_TIMEOUT_MS,

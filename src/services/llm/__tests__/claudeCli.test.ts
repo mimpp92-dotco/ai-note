@@ -49,25 +49,36 @@ describe("ClaudeCliAdapter.run — isolated invocation", () => {
     expect(cwd).not.toBe(process.cwd()); // regression guard: no workspace context
   });
 
-  it("scrubs paid API keys from the child env but keeps HOME/PATH ($0 guard)", async () => {
-    const prevA = process.env.ANTHROPIC_API_KEY;
-    const prevO = process.env.OPENAI_API_KEY;
-    process.env.ANTHROPIC_API_KEY = "sk-ant-should-not-leak";
-    process.env.OPENAI_API_KEY = "sk-openai-should-not-leak";
+  it("scrubs paid-billing env vars from the child env but keeps HOME/PATH ($0 guard)", async () => {
+    const scrubbed = {
+      ANTHROPIC_API_KEY: "sk-ant-should-not-leak",
+      ANTHROPIC_AUTH_TOKEN: "bearer-should-not-leak",
+      ANTHROPIC_BASE_URL: "https://paid.example/api",
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      CLAUDE_CODE_USE_VERTEX: "1",
+      OPENAI_API_KEY: "sk-openai-should-not-leak",
+    };
+    const prev = Object.fromEntries(
+      Object.keys(scrubbed).map((k) => [k, process.env[k]]),
+    );
+    Object.assign(process.env, scrubbed);
     try {
       await new ClaudeCliAdapter({ provider: "claude-cli" }).run("p");
 
       const env = runProcessMock.mock.calls[0]?.[2]?.env;
       expect(env).toBeDefined();
-      expect(env?.ANTHROPIC_API_KEY).toBeUndefined();
-      expect(env?.OPENAI_API_KEY).toBeUndefined();
+      for (const key of Object.keys(scrubbed)) {
+        expect(env?.[key]).toBeUndefined();
+      }
       expect(env?.PATH).toBe(process.env.PATH);
       expect(env?.HOME).toBe(process.env.HOME);
+      // The global env is untouched — we scrub a copy, not process.env itself.
+      expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-should-not-leak");
     } finally {
-      if (prevA === undefined) delete process.env.ANTHROPIC_API_KEY;
-      else process.env.ANTHROPIC_API_KEY = prevA;
-      if (prevO === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = prevO;
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
   });
 

@@ -65,9 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     workspace `CLAUDE.md`/MCP context no longer leaks into the corrected
     transcript (a past pollution bug). The prompt and summary schema are
     unchanged.
-  - **$0 guard**: paid `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` are scrubbed from
-    the child environment so a subscription-OAuth CLI is never silently metered
-    to a paid API; `HOME`/`PATH` (OAuth keychain + binary lookup) are kept.
+  - **$0 guard**: paid-billing env vars — credentials (`ANTHROPIC_API_KEY`,
+    `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`) and backend redirects
+    (`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`/`VERTEX`) — are scrubbed from
+    the child environment so a subscription-OAuth CLI is never silently metered to
+    a paid API; `HOME`/`PATH` (OAuth keychain + binary lookup) are kept.
 
 ## [0.1.0] - 2026-07-08
 
