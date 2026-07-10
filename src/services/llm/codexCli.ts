@@ -1,6 +1,6 @@
 import { tmpdir } from "node:os";
 
-import { runProcess } from "@/services/llm/exec";
+import { LLM_GENERATION_TIMEOUT_MS, runProcess } from "@/services/llm/exec";
 import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services/llm/types";
 
 // Codex CLI backend — BEST-EFFORT. `codex exec` is an agentic runner (not a plain
@@ -28,7 +28,7 @@ export class CodexCliAdapter implements LlmAdapter {
     ];
     const { stdout } = await runProcess("codex", args, {
       stdin: prompt,
-      timeoutMs: 180_000,
+      timeoutMs: LLM_GENERATION_TIMEOUT_MS,
     });
     return extractFinalMessage(stdout);
   }

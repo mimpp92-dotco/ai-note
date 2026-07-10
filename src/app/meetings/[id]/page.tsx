@@ -8,6 +8,7 @@ import { summarySchema } from "@/domain/summarySchema";
 import { assertSafeId } from "@/lib/meetingId";
 import { meetingPaths } from "@/lib/paths";
 import { deriveStatus, readStatus } from "@/lib/status";
+import { isSummarizeInflight } from "@/lib/summarize";
 
 // Reads data/ artifacts at request time → must be dynamic + Node runtime. This is a
 // read-only view: it derives the display status (title promotion) but never
@@ -91,6 +92,7 @@ export default async function MeetingDetailPage({ params }: { params: Promise<{ 
       segments={readSegments(p.segments)}
       summary={readSummary(p.summary)}
       hasAudio={existsSync(p.play) || existsSync(p.audio)}
+      resummarizeInflight={isSummarizeInflight(id)}
     />
   );
 }

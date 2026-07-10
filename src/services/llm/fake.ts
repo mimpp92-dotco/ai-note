@@ -6,6 +6,8 @@ import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services
 //     summary JSON string.
 //   - correction step → passthrough of the raw transcript after the "[원문]"
 //     marker (identical length ⇒ clears summarizeCore's 30% over-edit guard).
+// FAKE_LLM_FAIL=1 makes run() throw instead — a test seam for the failure path
+// (retry_summary error, status handling) without a real subprocess or timeout.
 
 const CANNED_SUMMARY = JSON.stringify({
   title: "FAKE 회의 요약",
@@ -31,6 +33,7 @@ export class FakeAdapter implements LlmAdapter {
   }
 
   async run(prompt: string, opts?: { json?: boolean }): Promise<string> {
+    if (process.env.FAKE_LLM_FAIL === "1") throw new Error("FAKE_LLM_FAIL");
     if (opts?.json || prompt.includes("JSON 스키마")) return CANNED_SUMMARY;
     const idx = prompt.indexOf(RAW_MARKER);
     if (idx !== -1) return prompt.slice(idx + RAW_MARKER.length).trim();

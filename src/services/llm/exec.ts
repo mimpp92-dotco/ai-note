@@ -21,6 +21,13 @@ export interface RunProcessResult {
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
 
+// Timeout for an LLM *generation* call (correction / summary). A long meeting's
+// correction step re-emits the whole transcript, which blows past the 120s default
+// (observed "process timed out after 120000ms" on an 88-min meeting). Re-summarize
+// is async (fire-and-forget + client polling), so the user never blocks on this —
+// a generous fixed ceiling is cheap. Health checks keep their own short timeouts.
+export const LLM_GENERATION_TIMEOUT_MS = 600_000; // 10 minutes
+
 export async function runProcess(
   file: string,
   args: string[],

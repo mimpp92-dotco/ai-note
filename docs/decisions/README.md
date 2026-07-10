@@ -8,8 +8,8 @@
 ## 새 ADR 추가
 
 ```bash
-cp docs/decisions/0000-template.md docs/decisions/0009-내-결정.md
-$EDITOR docs/decisions/0009-내-결정.md   # 5칸 채우고 아래 목록에 추가
+cp docs/decisions/0000-template.md docs/decisions/0010-내-결정.md
+$EDITOR docs/decisions/0010-내-결정.md   # 5칸 채우고 아래 목록에 추가
 ```
 
 ## 목록
@@ -22,3 +22,4 @@ $EDITOR docs/decisions/0009-내-결정.md   # 5칸 채우고 아래 목록에 �
 | [0006](0006-lean-mvp-defer-v2.md) | 린 MVP-0 — 견고성 일부 v2 연기 | 채택됨 |
 | [0007](0007-delete-meeting-record.md) | 회의 삭제 = 폴더 전체 영구 삭제(rename-then-rm) | 채택됨 |
 | [0008](0008-title-override.md) | 표시 제목은 `titleOverride`로 app-api 소유(override 우선) | 채택됨 |
+| [0009](0009-async-resummarize-failure-visibility.md) | 재요약 비동기화(202) + 실패 가시성 + 생성 타임아웃 600초 | 채택됨 |

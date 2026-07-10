@@ -19,8 +19,9 @@ import { POST as llmSettingsPOST } from "@/app/api/settings/llm/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
 import { meetingPaths } from "@/lib/paths";
-import { writeSettings } from "@/lib/settings";
+import { settingsPath, writeSettings } from "@/lib/settings";
 import { initialStatus, writeStatus } from "@/lib/status";
+import { isSummarizeInflight } from "@/lib/summarize";
 
 // Integration test for the app-api route handlers. Boots the whisper service with
 // FAKE_WHISPER=1 (pure stdlib, no venv/model/network) and FAKE_FFMPEG=1 (byte copy,
@@ -371,21 +372,63 @@ describe("manual re-summarize (force)", () => {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
 
-  it("{resummarize:true} regenerates a summarized meeting (200); a plain POST still 409s", async () => {
+  // The route fires runSummarize and returns 202 without awaiting it. Drain that
+  // background run so it can't outlive the test (and race the FAKE_LLM teardown).
+  async function settleSummarize(id: string) {
+    for (let i = 0; i < 400 && isSummarizeInflight(id); i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+
+  it("{resummarize:true} accepts a re-summarize (202); a plain POST still 409s", async () => {
     process.env.FAKE_LLM = "1";
     await writeSettings({ provider: "claude-cli" });
     const id = "m-resummarize";
-    await seedSummarized(id); // summary.json present (fixture)
+    await seedSummarized(id); // summary.json present (fixture: title "데일리 스크럼 2026-07-05")
     try {
       // plain POST on an already-summarized meeting is refused
       expect((await summarizePOST(summarizeReq(id), ctx(id))).status).toBe(409);
 
-      // forced re-summarize regenerates via the offline FakeAdapter
+      // forced re-summarize is accepted asynchronously (202), then runs in the
+      // background via the offline FakeAdapter.
       const forced = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
-      expect(forced.status).toBe(200);
-      expect(existsSync(meetingPaths(id).summary)).toBe(true);
+      expect(forced.status).toBe(202);
+      await settleSummarize(id);
+
+      // Prove the background run actually regenerated summary.json (not just that the
+      // fixture still exists): the FakeAdapter writes a distinct title, and status
+      // lands back on summarized with the attempt counter reset and no error.
+      const regenerated = JSON.parse(readFileSync(meetingPaths(id).summary, "utf-8"));
+      expect(regenerated.title).toBe("FAKE 회의 요약");
+      expect(regenerated.title).not.toBe("데일리 스크럼 2026-07-05");
+      const after = JSON.parse(readFileSync(meetingPaths(id).status, "utf-8"));
+      expect(after.status).toBe("summarized");
+      expect(after.error).toBeNull();
+      expect(after.summarizeAttempts).toBe(0);
     } finally {
       delete process.env.FAKE_LLM;
     }
+  });
+
+  it("refuses (409) a re-summarize while one is already in flight", async () => {
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-resummarize-inflight";
+    await seedSummarized(id);
+    const g = globalThis as typeof globalThis & { __aiNoteSummarizeInflight?: Set<string> };
+    (g.__aiNoteSummarizeInflight ??= new Set<string>()).add(id);
+    try {
+      const res = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
+      expect(res.status).toBe(409);
+    } finally {
+      g.__aiNoteSummarizeInflight?.delete(id);
+    }
+  });
+
+  it("returns 400 when no model is configured", async () => {
+    const id = "m-resummarize-nomodel";
+    await seedSummarized(id);
+    rmSync(settingsPath(), { force: true }); // no settings.json → getConfiguredAdapter null
+    const res = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
+    expect(res.status).toBe(400);
   });
 });
