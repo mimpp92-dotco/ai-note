@@ -20,17 +20,18 @@ export class ClaudeCliAdapter implements LlmAdapter {
     return stdout.trim();
   }
 
+  // Lightweight detection only: `claude --version` confirms the binary exists
+  // without auth (mirrors codexCli). A real `claude -p` probe took 20–100s+ on a
+  // cold start (global plugins/hooks) and tripped its own timeout, surfacing a
+  // false "check login" even when login was fine. Auth is verified on the first
+  // real summary; a failure there is reported via runSummarize's status.error.
   async health(): Promise<LlmHealth> {
     try {
-      const { stdout } = await runProcess("claude", ["-p"], {
-        stdin: "Reply with exactly: ok",
-        timeoutMs: 25_000,
-      });
-      if (stdout.trim().length > 0) return { ok: true, detail: "claude CLI ready" };
-      return { ok: false, detail: "claude not ready — check `claude` login" };
+      await runProcess("claude", ["--version"], { timeoutMs: 15_000 });
+      return { ok: true, detail: "claude CLI available (auth verified on first summary)" };
     } catch (err) {
       if (isEnoent(err)) return { ok: false, detail: "claude CLI not found on PATH" };
-      return { ok: false, detail: "claude not ready — check `claude` login" };
+      return { ok: false, detail: "claude CLI error" };
     }
   }
 }

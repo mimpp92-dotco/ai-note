@@ -77,7 +77,10 @@ export async function runProcess(
       if (timedOut) return reject(new Error(`process timed out after ${timeoutMs}ms`));
       if (overflow) return reject(new Error("process output exceeded maxBuffer"));
       if (code !== 0) {
-        return reject(new Error(`process exited with code ${code}: ${stderr.slice(0, 500)}`));
+        // claude writes some failures (e.g. "Not logged in · Please run /login") to
+        // stdout and exits 1; fall back to stdout so the reason isn't lost.
+        const reason = stderr.trim() || stdout.trim();
+        return reject(new Error(`process exited with code ${code}: ${reason.slice(0, 500)}`));
       }
       resolve({ stdout, stderr });
     });

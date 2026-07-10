@@ -4,29 +4,52 @@ import type { LlmReadiness } from "@/components/healthStatus";
 
 // Home backlog banner for meetings transcribed but not yet summarized. The app
 // summarizes in-process only when the configured model is currently usable.
-export function PendingBanner({ count, readiness }: { count: number; readiness: LlmReadiness }) {
-  if (count <= 0) return null;
+// `count` = meetings the worker will auto-process; `needsAttention` = meetings
+// whose auto-summary already failed (worker backed off) — showing those as
+// "자동 처리 중" would be a false-green promise, so they get "확인 필요" instead.
+export function PendingBanner({
+  count,
+  needsAttention = 0,
+  readiness,
+}: {
+  count: number;
+  needsAttention?: number;
+  readiness: LlmReadiness;
+}) {
+  if (count <= 0 && needsAttention <= 0) return null;
 
   if (readiness === "ready") {
+    const processing = count > 0;
     return (
       <div className="flex items-center gap-2 rounded-[14px] border border-line bg-panel px-5 py-4">
-        <span
-          className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent motion-reduce:animate-none"
-          aria-hidden="true"
-        />
+        {processing && (
+          <span
+            className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+        )}
         <p className="text-[14px] text-ink">
-          <span className="font-semibold">{count}개 회의</span> 요약 자동 처리 중…
+          {processing && (
+            <>
+              <span className="font-semibold">{count}개 회의</span> 요약 자동 처리 중…
+            </>
+          )}
+          {processing && needsAttention > 0 && " · "}
+          {needsAttention > 0 && (
+            <span className="font-semibold text-warn">{needsAttention}개 확인 필요</span>
+          )}
         </p>
       </div>
     );
   }
 
+  const total = count + needsAttention;
   const unavailable = readiness === "unavailable";
   return (
     <div className={`rounded-[14px] border px-5 py-4 ${unavailable ? "border-error/40 bg-error/5" : "border-warn/40 bg-warnBg"}`}>
       <div className="flex items-center justify-between gap-4">
         <p className="text-[14px] text-ink">
-          <span className="font-semibold">{count}개 회의가 요약 대기 중</span> —{" "}
+          <span className="font-semibold">{total}개 회의가 요약 대기 중</span> —{" "}
           {unavailable ? "요약 모델을 확인하세요." : "모델을 설정하면 자동 생성됩니다."}
         </p>
         <Link

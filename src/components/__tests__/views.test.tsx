@@ -97,6 +97,24 @@ describe("PendingBanner", () => {
     const { container } = render(<PendingBanner count={0} readiness="unconfigured" />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("splits auto-processing and needs-attention when a model is ready", () => {
+    render(<PendingBanner count={2} needsAttention={1} readiness="ready" />);
+    expect(screen.getByText("2개 회의")).toBeInTheDocument();
+    expect(screen.getByText(/요약 자동 처리 중/)).toBeInTheDocument();
+    expect(screen.getByText("1개 확인 필요")).toBeInTheDocument();
+  });
+
+  it("shows only needs-attention (no false auto-processing) when a summary failed but nothing is pending", () => {
+    render(<PendingBanner count={0} needsAttention={2} readiness="ready" />);
+    expect(screen.getByText("2개 확인 필요")).toBeInTheDocument();
+    expect(screen.queryByText(/요약 자동 처리 중/)).not.toBeInTheDocument();
+  });
+
+  it("still renders when only needs-attention is nonzero (pending count zero)", () => {
+    const { container } = render(<PendingBanner count={0} needsAttention={1} readiness="ready" />);
+    expect(container).not.toBeEmptyDOMElement();
+  });
 });
 
 describe("Recorder — responsive layout", () => {
@@ -283,7 +301,7 @@ describe("Sidebar — 활성 항목", () => {
     expect(screen.getByText("시스템")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /설정/ })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Whisper base · 준비됨")).toBeInTheDocument());
-    expect(screen.getByText("Claude CLI sonnet · 연결됨")).toBeInTheDocument();
+    expect(screen.getByText("Claude CLI sonnet · 감지됨")).toBeInTheDocument();
   });
 
   it("모바일 compact 전환을 위한 responsive shell class를 가진다", () => {

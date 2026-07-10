@@ -44,6 +44,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `summarized` state (instead of demoting to `transcribed`) and surfaces a
     "재요약 실패" banner with retry; `deriveStatus` preserves the `retry_summary`
     error on promotion so the GET route no longer silently erases it.
+- **Honest LLM health & status** (claude):
+  - **No false "실패 — check login"**: the sidebar claude health check now does a
+    lightweight `claude --version` detection (labelled "감지됨", like codex) instead
+    of a 25s `claude -p` probe a cold start could trip — auth is confirmed on the
+    first real summary. The catch-all that reported every error as "check login" is
+    gone.
+  - **Error reason surfaced**: `exec` now includes the process's stdout tail in the
+    failure error when stderr is empty, so a summary failure shows claude's actual
+    reason (e.g. "Not logged in · Please run /login") instead of a blank exit code.
+  - **No false-green backlog**: the home banner splits "요약 자동 처리 중 N" from
+    "확인 필요 M" (transcribed meetings whose auto-summary failed and the worker
+    backed off), so an exhausted meeting is no longer shown as forever
+    "auto-processing".
+  - **Poller hygiene**: the shared health poller dedups in-flight fetches per
+    endpoint so a slow check can't stack across poll ticks.
 
 ## [0.1.0] - 2026-07-08
 

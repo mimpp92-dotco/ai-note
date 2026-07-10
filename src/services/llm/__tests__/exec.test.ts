@@ -24,6 +24,15 @@ describe("runProcess", () => {
     await expect(runProcess("node", ["-e", "process.exit(3)"])).rejects.toThrow();
   });
 
+  it("surfaces stdout in the error when stderr is empty (claude prints auth errors to stdout)", async () => {
+    await expect(
+      runProcess("node", [
+        "-e",
+        "process.stdout.write('Not logged in · Please run /login');process.exit(1)",
+      ]),
+    ).rejects.toThrow(/Not logged in/);
+  });
+
   it("rejects when the process exceeds the timeout", async () => {
     await expect(
       runProcess("node", ["-e", "setTimeout(()=>{},5000)"], { timeoutMs: 200 }),

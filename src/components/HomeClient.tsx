@@ -49,7 +49,12 @@ export function HomeClient() {
     };
   }, []);
 
-  const pendingCount = (meetings ?? []).filter((m) => m.status === "transcribed").length;
+  const transcribed = (meetings ?? []).filter((m) => m.status === "transcribed");
+  // A first-time auto-summary that failed keeps `transcribed` + a retry_summary
+  // error (the worker has backed off, summarizeWorker.ts). Counting it as "자동
+  // 처리 중" would be a false-green promise, so split it out as "확인 필요".
+  const pendingCount = transcribed.filter((m) => m.error?.action !== "retry_summary").length;
+  const needsAttentionCount = transcribed.filter((m) => m.error?.action === "retry_summary").length;
   const modelReadiness = getLlmReadiness(llm);
 
   // Row-action callbacks: merge/remove the one item (server already persisted the
@@ -83,7 +88,11 @@ export function HomeClient() {
 
       <Recorder />
 
-      <PendingBanner count={pendingCount} readiness={modelReadiness} />
+      <PendingBanner
+        count={pendingCount}
+        needsAttention={needsAttentionCount}
+        readiness={modelReadiness}
+      />
 
       {meetings !== null &&
         (meetings.length === 0 ? (

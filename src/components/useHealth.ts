@@ -23,6 +23,10 @@ const subscribers = new Set<() => void>();
 let whisperTimer: ReturnType<typeof setInterval> | null = null;
 let llmTimer: ReturnType<typeof setInterval> | null = null;
 let refCount = 0;
+// Per-endpoint in-flight guards so a slow health call can't stack on the next
+// poll tick. Reset in finally so a rejected fetch never wedges the poller.
+let whisperInflight = false;
+let llmInflight = false;
 
 function emit(patch: Partial<Health>) {
   state = { ...state, ...patch };
@@ -30,20 +34,28 @@ function emit(patch: Partial<Health>) {
 }
 
 async function loadWhisper() {
+  if (whisperInflight) return;
+  whisperInflight = true;
   try {
     const res = await fetch("/api/whisper/health", { cache: "no-store" });
     emit({ whisper: (await res.json()) as WhisperHealthState });
   } catch {
     emit({ whisper: { connected: false } });
+  } finally {
+    whisperInflight = false;
   }
 }
 
 async function loadLlm() {
+  if (llmInflight) return;
+  llmInflight = true;
   try {
     const res = await fetch("/api/settings/llm/health", { cache: "no-store" });
     emit({ llm: (await res.json()) as LlmHealthState });
   } catch {
     // Transient — keep the last known state.
+  } finally {
+    llmInflight = false;
   }
 }
 

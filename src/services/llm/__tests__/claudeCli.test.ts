@@ -28,3 +28,41 @@ describe("ClaudeCliAdapter.run — generation timeout", () => {
     );
   });
 });
+
+describe("ClaudeCliAdapter.health — lightweight detection", () => {
+  beforeEach(() => runProcessMock.mockClear());
+
+  it("detects the binary via `claude --version` (no auth-probing summary call)", async () => {
+    runProcessMock.mockResolvedValueOnce({ stdout: "1.2.3 (Claude Code)", stderr: "" });
+
+    const health = await new ClaudeCliAdapter({ provider: "claude-cli" }).health();
+
+    expect(runProcessMock).toHaveBeenCalledWith(
+      "claude",
+      ["--version"],
+      expect.objectContaining({ timeoutMs: 15_000 }),
+    );
+    expect(health.ok).toBe(true);
+    expect(health.detail).toMatch(/first summary/i);
+  });
+
+  it("reports not-found on ENOENT", async () => {
+    runProcessMock.mockRejectedValueOnce(
+      Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" }),
+    );
+
+    const health = await new ClaudeCliAdapter({ provider: "claude-cli" }).health();
+
+    expect(health.ok).toBe(false);
+    expect(health.detail).toMatch(/not found on PATH/i);
+  });
+
+  it("never returns the misleading 'check login' catch-all for a generic error", async () => {
+    runProcessMock.mockRejectedValueOnce(new Error("some transient failure"));
+
+    const health = await new ClaudeCliAdapter({ provider: "claude-cli" }).health();
+
+    expect(health.ok).toBe(false);
+    expect(health.detail).not.toMatch(/login/i);
+  });
+});

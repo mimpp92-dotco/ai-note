@@ -131,7 +131,10 @@ export function formatLlmStatus(health: LlmHealthState | null): StatusDisplay {
     });
   }
 
-  if (health.provider === "codex-cli") {
+  // CLI backends (codex/claude) do binary-only detection: `ok` means "detected",
+  // not "authenticated". Show "감지됨" (optimistic) — real auth is confirmed on the
+  // first summary. Non-CLI backends (ollama) keep the verified "연결됨" below.
+  if (health.provider === "codex-cli" || health.provider === "claude-cli") {
     return withTone({
       label: `${name} · 감지됨`,
       shortLabel: "감지됨",
