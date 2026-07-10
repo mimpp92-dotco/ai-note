@@ -690,9 +690,10 @@ describe("MeetingDetailView — 다시 요약", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "재시도" }));
-    // Enters busy and STAYS busy (does not instant-complete on the stale error).
-    await waitFor(() => expect(screen.getByRole("button", { name: "재시도 중…" })).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "재시도 중…" })).toBeInTheDocument();
+    // Enters the in-progress state (spinner) and STAYS there — the stale error is not
+    // read as this run's instant failure, and the banner is replaced by the spinner.
+    await waitFor(() => expect(screen.getByText("요약 생성 중…")).toBeInTheDocument());
+    expect(screen.queryByText(/재요약 실패/)).not.toBeInTheDocument();
   });
 
   it("재요약 폴링이 in-flight 락 해제 후 나타난 retry_summary 에러를 실패로 감지한다", async () => {
@@ -750,6 +751,56 @@ describe("MeetingDetailView — 다시 요약", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("진행 중에 페이지를 새로 열면(서버 in-flight) 버튼 없이도 '요약 생성 중'으로 보인다", () => {
+    // Cold entry: no local click, but the server reports a run in flight. deriveStatus
+    // masks status as summarized (old summary.json exists) — the UI must still read busy.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 202 }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        resummarizeInflight={true}
+      />,
+    );
+    // Status card shows the spinner, and the top badge reads "요약 생성 중".
+    expect(screen.getByText("요약 생성 중…")).toBeInTheDocument();
+    expect(screen.getAllByText("요약 생성 중").length).toBeGreaterThan(0);
+    // "다시 요약" is disabled while a run is in flight (clicking it would 409).
+    const button = screen.getByRole("button", { name: "요약 중…" });
+    expect(button).toBeDisabled();
+  });
+
+  it("서버 in-flight가 해제되고 새 요약이 오면 자동으로 완료 상태가 된다(cold entry)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 202 }));
+    const props = {
+      id: "m1",
+      status: makeStatus({ status: "summarized" }),
+      transcript: { text: "본문", corrected: true },
+      segments: [] as never[],
+      hasAudio: false,
+    };
+    const { rerender } = render(
+      <MeetingDetailView {...props} summary={SUMMARY} resummarizeInflight={true} />,
+    );
+    expect(screen.getByText("요약 생성 중…")).toBeInTheDocument();
+
+    // The run finishes: lock clears and a new summary arrives via a server refresh.
+    rerender(
+      <MeetingDetailView
+        {...props}
+        summary={{ ...SUMMARY, oneLine: "새로 생성된 요약." }}
+        resummarizeInflight={false}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByText("요약 생성 중…")).not.toBeInTheDocument());
+    // Back to a normal summarized view with the re-summarize button enabled.
+    expect(screen.getByRole("button", { name: "다시 요약" })).toBeEnabled();
   });
 
   it("아직 요약되지 않은 회의에는 '다시 요약' 버튼이 없다", () => {

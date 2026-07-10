@@ -7,6 +7,7 @@
 수동 "다시 요약"의 신뢰성 3종을 함께 고친다.
 - **비동기화**: `POST /api/meetings/[id]/summarize`는 동기 사전검증(400/404/409/no_model) 후 `runSummarize(force)`를 논-await로 발사하고 **202**를 즉시 반환한다.
 - **완료 감지(인플라이트 락 기반)**: `deriveStatus`가 옛 `summary.json` 존재로 재요약 중 `summarizing`을 `summarized`로 가리므로 `status.status`로는 완료를 못 본다. 상세 페이지가 `isSummarizeInflight(id)`를 `resummarizeInflight` prop으로 노출하고, 클라이언트는 202 후 로컬 "요약 중" + 3초 `router.refresh()`로 폴링하며 판정한다 — **요약 내용 변경=성공(즉시)** / **인플라이트 락을 관측한 뒤 해제되면: `retry_summary` 에러면 실패·아니면 성공(내용이 동일해도)** / **~30분(생성 3콜 상한 초과)=타임아웃 폴백**. 락 관측 전의 stale prop(옛 에러/미기동)은 완료로 오인하지 않게 게이트한다.
+- **진행 중 표시(cold entry)**: 진행 여부는 `resummarizing`(이 탭의 낙관 플래그) **OR** `resummarizeInflight`(서버 락)로 파생한다. 그래서 재요약 중 페이지를 새로 열어(로컬 플래그 없음) 서버 락만 true여도 상단 badge는 "요약 생성 중", StatusCard는 스피너, "다시 요약"/"재시도" 버튼은 비활성으로 보이고 완료 시 자동 갱신된다. 워커 첫 요약도 같은 락에 잡히므로 폴링을 하나로 통합했다(타임아웃 상한은 로컬 시작 재요약에만 적용).
 - **실패 가시성/상태 정합**: 재요약(force) 실패 시 `summary.json`이 있으면 `transcribed`로 강등하지 않고 `summarized`를 유지 + `retry_summary` 에러 첨부(옛 요약 보존). `deriveStatus`는 `summarized` 승격 시 `retry_summary` 에러를 **보존**하고 그 외 에러만 정리한다.
 - **생성 타임아웃**: 교정·요약 호출에 고정 `LLM_GENERATION_TIMEOUT_MS = 600_000`(10분). 헬스체크·`exec.ts` 기본값(120초)은 유지. 재요약은 순차 최대 3콜(교정→요약→폴백 요약)이라 클라이언트 타임아웃 폴백은 `3×600s+30s`로 서버 최악 예산 위에 잡는다.
 
