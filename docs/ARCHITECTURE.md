@@ -14,17 +14,19 @@ whisper/               # 로컬 Python whisper 서비스(uv 3.11/3.12 핀 venv)
 scripts/               # check-links.mjs (링크 무결성 체커)
 .claude/commands/      # meeting-summarize.md
 data/meetings/{id}/    # 런타임 산출물(gitignore, fixtures 제외)
+data/meeting-tombstones/{id}.json # 영구 ID delete fence(app lifecycle writer)
+data/library.json      # workspace/folder/placement 중앙 registry(app-api 단일 writer)
 fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fallback
 ```
 
 ## 프로세스 & 데이터 흐름
 ```
 브라우저(녹음, 오디오만·메모리 버퍼) ─stop─▶ POST /api/meetings/{id}/finalize(바이너리 스트림)
-  app-api: audio.webm 저장(atomic) + ffmpeg -c copy → play.webm + 자동 전사 위임
-app-api ─POST /transcribe(202+jobId)─▶ whisper(127.0.0.1, 배치 ko large-v3)
+  app-api: durable intent → hidden audio+status+receipt → directory publish → remux/placement/전사 독립 처리
+app-api ─POST /transcribe({meetingId,dispatchId})─▶ whisper(127.0.0.1, 배치 ko large-v3)
   whisper: raw.md(세그먼트-per-line) + segments.json 디스크 기록 → 상태 HTTP 반환
   app-api: 잡 폴링 → status.json 갱신(transcribing→transcribed)
-요약 워커(로컬 CLI/Ollama) {id|latest}: raw.md → summarize-core → transcript.md + summary.json
+요약 워커(로컬 CLI/Ollama) {id|latest}: raw.md → staging-only summarize-core → app publisher → transcript.md + summary.json
 ```
 
 ```mermaid
@@ -34,18 +36,127 @@ flowchart LR
     W -->|"raw.md · segments.json"| API
     API -->|status.json| UI
     W -->|raw.md| SUM["요약 워커 · 로컬 CLI/Ollama"]
-    SUM -->|"transcript.md · summary.json"| V["열람 · 내보내기"]
+    SUM -->|validated payload| PUB["app summarize publisher"]
+    PUB -->|"transcript.md · summary.json"| V["열람 · 내보내기"]
 ```
 
-## 파일 소유권 (단일 writer, 동시성 없음 — 1인/1탭)
+## 파일 소유권 (단일 writer)
 | 파일 | writer | 비고 |
 |------|--------|------|
-| `status.json` | **app-api만** | 생명주기 + `review` + `titleOverride`. `summarized`는 `summary.json` 존재로 파생. 삭제(`DELETE`)는 폴더 전체 폐기(ADR 0007) |
-| `audio.webm` / `play.webm` | app-api | 원본 불변 / 리먹스 |
+| `status.json` | **app-api만** | 생명주기 + `review` + `titleOverride`. `summarized`는 `summary.json` 존재로 파생 |
+| `audio.webm` / `play.webm` | app finalize publisher | 원본 불변 / 리먹스 |
+| `.finalize-receipt.json` | app finalize publisher | immutable metadata/location/audio identity; same-ID probe source |
 | `raw.md` + `segments.json` | whisper | 원본 불변 |
-| `transcript.md` + `summary.json` | 요약 워커 | 재생성 가능 |
+| `transcript.md` + `summary.json` | **app summarize publisher만** | 재생성 가능. `summary.json`이 generation completion marker |
+| `data/library.json` | **library repository만** | workspace/folder/placement metadata. Meeting directory는 이동하지 않음 |
+| `.whisper-dispatch.json` | **whisper만** | audio identity + durable dispatch publication phase |
+| `meeting-tombstones/{id}.json` | **app lifecycle만** | 영구 logical-delete fence. 물리 cleanup 후에도 보존 |
 
-모든 쓰기는 **atomic(temp→fsync→rename)**. 공유 파일 동시 쓰기가 없으므로 락/낙관적 동시성 불필요.
+## Local-only ingress·public boundary
+
+- 모든 current API route와 `/meetings/[id]` data-reading RSC는 params 해석·body read·filesystem/network/spawn보다 먼저 공통 guard를 통과한다. Host는 raw exact `127.0.0.1|localhost` + valid port만, API Fetch Metadata는 `same-origin`만 허용한다. Direct document navigation의 `Sec-Fetch-Site:none`은 page에서만 허용한다.
+- Unsafe method는 non-null Origin의 scheme/hostname/port가 request와 exact match해야 한다. `localhost`↔`127.0.0.1` alias 교차도 허용하지 않고 forwarded header/CORS를 신뢰하지 않는다.
+- JSON route는 `application/json` + optional UTF-8 charset, declared/streamed raw-byte cap, schema별 unknown-field 정책을 적용한다.
+- Public meeting DTO는 lifecycle/title/review/progress만 allowlist한다. Absolute path, Whisper job/dispatch, attempt, future internal field와 raw fs/provider output은 static error mapper에서 제거한다. 모든 data response는 `Cache-Control:no-store`다.
+
+모든 쓰기는 **temp→file fsync→rename→parent-directory fsync** 순서다. `rename`이 논리적 commit 지점이며 generic FileOps는 `not_committed`, `committed_durable`, `committed_best_effort`(directory sync가 알려진 미지원), `committed_durability_pending`(지원 환경의 일시 sync 실패)을 구분한다. Post-rename 실패는 canonical을 rollback하거나 blind replay하지 않는다. Central registry mutation은 absolute `library.json` path process queue와 `libraryId+revision` 낙관적 token을 함께 사용한다(ADR 0011).
+
+## library.json v1 계약
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "libraryId": "server UUID",
+  "revision": 0,
+  "defaultWorkspaceId": "workspace UUID",
+  "workspaces": [],
+  "folders": [],
+  "placements": []
+}
+```
+
+- Workspace는 최소 1개이며 이름은 전역 unique다. Folder는 같은 workspace/parent 안에서 이름이 unique이고 root를 1로 세어 최대 깊이 3이다. Folder 색은 `brown|sand|amber|olive|sage`다.
+- Meeting별 placement는 최대 하나다. `folderId:null`은 workspace의 미분류이고, placement가 바뀌어도 `data/meetings/{id}/`는 안정적으로 유지된다.
+- Repository read mode는 `missing|ready|corrupt|unsupported_version|io_error`다. 오직 queue 안에서 재확인한 `ENOENT`만 bootstrap하며 다른 degraded mode는 덮지 않는다.
+- Bootstrap은 valid live legacy meeting만 기본 workspace 미분류로 배치한다. Reconcile은 placement 없는 live record를 derived default로 보이고 다음 성공 mutation에서 materialize하되, `placementResolution:pending|unavailable`은 receipt resolver보다 먼저 default가 생기지 않도록 defer한다. Missing directory placement는 정리하고 corrupt/unreadable/unsafe status placement는 보존한다.
+- Ready read/commit은 root별 immutable last-good organization hint를 process memory에 남긴다. Last-good은 mutation/rollback source가 아니다.
+- 모든 record scanner는 runtime `StatusJson` 검증 뒤 공통 `classifyMeetingRecord()`를 사용한다. 분류는 `live|corrupt_status|unreadable_status|unsafe_record|incomplete|hidden_staging|hidden_deleted`, count는 `visibleMeetingCount|affectedPlacementCount|hiddenInvalidStatusCount`로 구분한다. Canonical placement 없는 pending/unavailable meeting은 folder count와 분리된 `organizationPendingCount` 및 bounded `/api/organization-pending` resource로 제공한다.
+- Bounded library read는 raw-last/summary artifact를 status view에 즉시 derive하고 status update를 lock-order-safe background queue에 넣는다. 따라서 restart 뒤 detail을 열지 않아도 목록과 worker가 완료 상태로 수렴한다. Background summarize candidate scan도 동일 no-follow observation/classifier만 사용한다.
+
+## Atomic finalize·placement recovery (ADR 0016)
+
+- Guard/safe ID/tombstone/metadata 검증과 exclusive finalize operation 뒤, body를 읽기 전에 `data/meetings/.finalize-{id}/.finalize-intent.json`을 create-exclusive→file sync→parent sync한다. Intent는 validated recording metadata와 explicit/legacy-default/unavailable requested-location snapshot을 고정한다.
+- Audio는 hidden staging의 temp→file sync→rename으로 쓰고 SHA-256을 계산한다. Initial `status.json`에는 `placementResolution:{state:"pending",receiptHash}`를 두며 immutable `.finalize-receipt.json`은 intent metadata와 audio hash를 보존한다. Receipt sync 뒤 intent를 unlink하고 staging namespace를 sync한다.
+- Tombstone을 재확인하고 operation→artifact write lease 아래 staging directory를 canonical meeting directory로 rename한다. 이 rename이 logical publish다. Parent sync의 일시 실패는 `artifact:"published",durability:"pending"`이며 upload를 rollback/replay하지 않는다.
+- Published same-ID request는 replacement body를 보지 않고 authoritative receipt와 current playback/placement/dispatch를 probe한다. Remux, latest-state placement resolver, durable transcription dispatch는 서로 독립적으로 시도하며 partial failure도 2xx artifact result를 유지한다.
+- Published retry/probe는 meetings parent namespace를 다시 sync해 이전 directory-rename durability pending을 `durable|best_effort|pending`으로 재판정한다. Existing staging intent도 body를 받기 전에 staging namespace sync를 재시도한다.
+- Resolver는 exact folder → requested workspace unfiled → current default unfiled fallback 순서를 쓴다. Null request/degraded registry는 unavailable이다. Existing canonical placement는 old receipt보다 우선하고, placement commit 뒤 matching receipt hash status만 `resolved`로 갱신한다.
+- `GET /api/meetings/{id}/location`은 한 registry read의 effective location/breadcrumb와 version을 반환한다. Organization-pending page는 별도 sequence/cursor/observedAt freshness를 가지며 canonical scope 집계에 섞이지 않는다.
+
+## Recorder session·navigation ownership
+
+- Root layout의 client `RecorderSessionProvider`가 route component보다 오래 `requesting_permission → recording → stopping → captured → uploading → finalize_ambiguous|saved|failed` lifecycle, stable meeting ID, MediaRecorder/stream, captured Blob/metadata, upload abort handle을 소유한다. `Recorder`는 provider view/controller일 뿐이며 Home unmount가 capture를 정리하지 않는다.
+- Recorder start는 canonical scope의 `{workspaceId,folderId|null}`만 snapshot한다. Workspace All/미분류는 workspace unfiled, folder는 exact folder이며 recording 중 scope query가 바뀌어도 metadata를 바꾸지 않는다. Last-good은 같은 ID hint를 보내되 server의 latest registry resolver가 actual/fallback/unavailable을 결정하고 fresh global fallback은 location을 보내지 않는다.
+- Network loss/timeout/5xx는 `finalize_ambiguous`로 분류하고 Blob·meeting ID·metadata를 유지한다. Retry는 먼저 same-ID `probe=1`을 body 없이 보내 published/resume/not-committed를 구분하며, only `not_committed|body_required`에서만 원래 Blob을 다시 전송한다. Published receipt는 artifact durability, playback, requested/actual placement, transcription을 독립 결과로 반환하므로 partial 실패를 upload 실패로 합치지 않는다.
+- Layout compact slot은 non-idle session을 모든 route에서 계속 보여 주고 recording stop, retained Blob save/retry, 확인을 거친 irreversible discard를 제공한다. `beforeunload`은 unsaved state에서 best-effort 경고만 하며 durable 저장을 약속하지 않는다.
+- `GuardedLink`, guarded programmatic router, `popstate`가 destination-aware guard 하나를 사용한다. 같은 pathname의 workspace/folder/view query 변화만 session을 유지한 채 통과하고, 다른 route는 cancel/stop-and-stay/explicit discard 선택 전까지 막는다. Cancel/Escape는 원래 trigger로 focus를 돌린다.
+- Health polling은 recorder/library 요청과 abort/epoch를 공유하지 않는다. Existing module-level endpoint single-flight poller를 여러 shell consumer가 구독해도 timer/fetch는 한 세트다.
+
+## Library client freshness·bounded cache
+
+- Root layout의 단일 `LibraryProvider`가 authoritative `version+library`, degraded model, canonical scope, expanded folders, scoped page window와 monotonic generation epoch를 소유한다. Queryless legacy meeting list는 제거됐고 모든 목록은 bounded scope/cursor를 요구한다.
+- Versioned response 우선순위는 explicit generation reset → higher revision(always accept) → lower revision(always reject) → same version의 operation epoch/latest-started sequence다. Mutation 시작은 related poll을 abort/pause하고 epoch를 올리며 success와 authoritative 409가 pre-mutation poll보다 우선한다. Generation reset은 in-flight mutation까지 abort하고 accepted old payload/snapshot을 caller에 반환하지 않는다.
+- Status-only `summary-work`와 `organization-pending`은 library revision과 분리된 sequence/operation epoch를 가진다. Resolver/move/delete invalidation 뒤 old same-version pending response가 row/count를 되살릴 수 없다. Existing `useHealth` poller와 abort/epoch/timer를 공유하지 않는다.
+- Scoped meeting cache는 normalized entity와 page IDs를 한 eviction transaction으로 관리한다. Current page ±2, 최대 5 pages/500 entities만 보존하고 cursor history는 lightweight metadata로 남긴다. Evicted page back-navigation은 refetch하며 library version 또는 scope generation이 바뀌면 page/entity/cursor를 전량 reset한다.
+- Resource poller는 endpoint별 single-flight, AbortController, hidden-tab pause, focus refresh, bounded exponential backoff를 사용한다. Nonterminal active page polling은 3초, stable resource는 느린 주기로 전환할 수 있도록 분리한다.
+- Canonical scope helper는 `?workspace=<id>`, optional `view=unfiled|folder=<id>`를 pure resolve하고 invalid/missing/cross-workspace 조합을 default workspace All로 한 번만 replace할 reason과 함께 반환한다. Drawer/dialog/disclosure primitives는 dialog focus/Escape/list semantics만 선언하며 구현하지 않은 ARIA tree role은 사용하지 않는다.
+
+## Activated scoped library client
+
+- `/`은 `?workspace=<id>`, optional `view=unfiled` 또는 `folder=<id>`를 navigation 정본으로 사용한다. Query 없음/missing workspace는 default All, invalid folder/view는 requested workspace All로 one-replace canonicalize한다. Workspace All row만 effective breadcrumb를 포함하고 unfiled/folder는 direct placement만 반환한다.
+- Desktop rail/mobile focus-trapped drawer는 workspace switcher, All/unfiled, nested max-depth-3 folders, glossary/settings와 shared health를 제공한다. Workspace name create/rename, folder name/color create/edit, same-workspace subtree move와 preservation container delete를 노출한다. Corrupt registry일 때만 Home degraded panel에서 fingerprint-guarded rebuild를 노출한다.
+- Scoped row detail link는 `sourceWorkspace`, `sourceView:all|unfiled|folder`, optional `sourceFolder` ID만 전달한다. Detail RSC는 current registry에서 조합을 검증하고 invalid/missing/raw return input은 current effective workspace All 또는 safe default All로 다시 해석한다. Arbitrary return pathname/name은 신뢰하지 않는다.
+- `summary-work`의 one-item attention cursor는 page/workspace 밖 실패 회의를 순회한다. Detail은 next item 또는 end의 explicit restart만 유지해 global queue를 client에 누적하지 않는다.
+- Default workspace All은 separate organization-pending max-100 page를 합성한다. Actual은 null이고 safe requested ID hint/detail probe만 노출한다. Canonical placement가 생긴 row는 operation epoch에 의해 stale pending response에서 부활하지 않는다.
+- Recorder start는 모든 ready/last-good scope와 fresh global fallback에 노출한다. Ready All/미분류/folder는 각각 canonical unfiled/exact folder ID를 고정하고, last-good은 read-only hint와 실제 위치가 달라질 수 있다는 copy를 보이며, global fallback은 no-location intent를 명시한다. 성공 뒤 actual breadcrumb/link를 사용하고 unavailable receipt는 default-All organization-pending section에서 계속 발견할 수 있다.
+- Degraded last-good은 fresh status와 read-only tree를 합성하고 fresh-process fallback은 bounded global list를 제공한다. 모든 mode에 retry/fixed data-root reveal을 제공한다. `corrupt`만 explicit rebuild를 추가하며 unsupported/I/O/recovery-conflict/not-supported에는 rebuild action이 없다.
+
+## Meeting·folder move
+
+- `PATCH /api/meetings/{id}/location`은 expected `libraryId+revision`, explicit workspace/folder IDs와 meeting `move` operation lease를 요구한다. Library queue 안에서 latest classified live record와 destination을 다시 확인하고 missing/stale destination은 fallback 없이 typed 409로 반환한다. Move는 summarize/transcription과 병행할 수 있지만 finalize/delete/cleanup과 충돌한다.
+- Meeting 이동은 placement만 교체하며 `data/meetings/{id}`와 audio/raw/segments/transcript/summary/status bytes를 이동하지 않는다. Pending/unavailable finalize meeting을 사용자가 이동하면 matching status를 resolved로 마무리하고, crash 뒤 receipt resolver는 existing canonical placement를 우선해 이전 요청 위치로 되돌리지 않는다.
+- `PATCH /api/folders/{id}/parent`는 name/color edit와 분리된 intent다. 같은 workspace 안에서만 root 또는 다른 folder로 reparent하고 self/descendant/current parent, depth 3 초과, target sibling normalized-name conflict를 commit 전 거부한다. Source/target sibling order는 deterministic하게 재정규화한다.
+- Shared picker는 meeting의 cross-workspace destination과 folder의 same-workspace boundary를 구분하고 ancestor breadcrumb로 duplicate leaf name을 식별한다. 409는 authoritative tree를 적용하고 selection을 비우며 자동 대체하지 않는다.
+- Move success는 higher revision으로 old poll을 차단한다. Workspace All에 계속 포함되는 row는 actual breadcrumb를 patch하고 filtered/cross-workspace source에서는 제거한다. Detail source IDs는 source가 여전히 meeting을 포함하면 유지하고 아니면 exact actual folder/unfiled context로 바꾼다. Raw return URL/name은 사용하지 않는다.
+
+## Preservation container delete
+
+- `GET /api/folders/{id}/delete-preview`와 workspace counterpart는 current version, visible meeting, affected placement, hidden invalid-status placement, child/folder, unresolved finalize receipt intent 수를 분리해 반환한다. Preview는 `meeting_artifacts_preserved`를 명시하고 folder promotion normalized-name conflict IDs 및 workspace destination candidates/last-workspace block을 포함한다.
+- `DELETE /api/folders/{id}`는 expected generation+revision 아래 library queue에서 latest scan과 pending receipt를 다시 계산한다. Direct placements는 parent folder 또는 workspace unfiled로 rehome하고 direct children은 source 위치에 relative-order block으로 한 단계 승격한다. Promotion name conflict 하나라도 있으면 folder/placement/order를 전부 commit하지 않으며 suffix/merge하지 않는다.
+- `DELETE /api/workspaces/{id}`는 source와 다른 existing destination을 필수로 받고 모든 source placement(visible/hidden 포함)를 destination unfiled로 옮긴 뒤 source folders/workspace를 제거한다. Source가 default면 destination을 같은 commit에서 새 default로 정하고 마지막 workspace는 항상 거부한다.
+- Container delete는 meeting directory나 audio/raw/segments/transcript/summary/status를 읽어 옮기거나 삭제하지 않는다. Pending receipt의 immutable requested location도 rewrite하지 않는다. Delete가 먼저면 이후 finalize resolver가 missing folder→requested workspace unfiled 또는 missing workspace→current default unfiled로 fallback하고, placement가 먼저면 최신 delete preview/retry가 이를 rehome한다.
+- UI는 preview token으로 commit하므로 rename/create/finalize/move가 먼저 linearize하면 authoritative 409 뒤 preview를 다시 읽는다. Folder conflict는 항목별 이름을 보여 주고, workspace는 destination+정확한 source name 확인을 요구한다. Deleted current folder는 parent/unfiled, deleted current workspace는 destination All로 canonical navigate하며 surviving descendant ID는 유지한다.
+- `pendingLocationIntentCount`는 published pending/unavailable receipt뿐 아니라 아직 status가 없는 `.finalize-{id}` staging의 strict intent/receipt도 no-follow scan해 중복 없이 센다. Container commit은 meeting artifact와 immutable requested intent를 수정하지 않으며 concurrent finalize는 삭제된 destination에 대한 기존 fallback 규칙을 따른다.
+
+## Library corrupt recovery planner·executor·generation reset (ADR 0017)
+
+- Side effect 없는 `libraryRecoveryIntent`와 `libraryRecoveryPlanner`가 semantic state를 고정한다. Intent v1은 canonical lowercase UUID `recoveryId`, old canonical SHA-256, intended new `libraryId`/document SHA-256, explicit publish/restore phase만 허용한다. Unknown/missing/duplicate field와 stored path는 거부한다.
+- Intent/new temp/archive/restore basename은 workspace/folder 이름이나 file input을 쓰지 않고 validated recoveryId로 재계산한다. Executor가 넘길 path observation은 exact derived absolute path, root containment, every-component no-follow safe를 모두 만족해야 하며 하나라도 unsafe면 planner는 mutation action을 만들지 않는다.
+- Planner input은 bytes/path가 아니라 canonical(`missing|file|invalid`), intent(`missing|valid|invalid|multiple`), new/archive/restore artifact hash·document identity, namespace capability, path safety의 typed observation이다. Historical completed archive 목록은 active artifact 판단에서 분리한다.
+- Pure decision은 `no_op|cleanup_uncommitted|continue_archive|continue_publish|continue_restore|cleanup_committed|abort_to_corrupt|recovery_conflict|recovery_not_supported`와 required old/new hashes, libraryId, next phase, resulting mode를 반환한다. Archive old hash 확인 없이 new publish 완료로 보지 않고, canonical missing+active ambiguous state를 missing bootstrap으로 낮추지 않는다.
+- Restore는 archive를 이동하지 않고 copy source로 보존한다. `restore_prepared→restore_published→restore_verified`를 명시하고 restored canonical hash가 original fingerprint와 같을 때만 marker cleanup을 허용한다. Unknown/phase contradiction/hash·ID mismatch/missing required archive는 default cleanup이 아니라 conflict다.
+- `libraryRecoveryExecutor`는 read/startup/explicit rebuild를 canonical library queue에 직렬화하고 mutation 직전에 observation과 plan precondition을 다시 비교한다. Original canonical→private archive→new canonical 순으로 rename하고 source/destination namespace를 sync한다. Intent phase도 atomic replace하며 `O_TRUNC` 갱신을 금지한다. New publish source가 사라지면 archive copy로 original canonical을 복원하고 archive는 유지한다.
+- `POST /api/library/rebuild`는 exact local request guard와 bounded strict body를 통과한 `expectedMode:"corrupt"+recoveryFingerprint`만 받는다. Path/name/recoveryId는 입력받지 않으며 success도 new version/default workspace/count/archive-preserved boolean만 반환한다. Archive basename·absolute path·meeting ID/raw bytes는 public response에 없다.
+- Rebuild registry는 strict classifier의 visible live meeting만 새 default workspace unfiled에 하나씩 배치하고 새 `libraryId`, revision `0`을 발급한다. Existing pending/unavailable finalize receipt보다 canonical placement가 우선하며 status repair는 library queue를 놓은 뒤 idempotently 수행한다.
+- Client reset은 library/status/pending epochs와 generation epoch를 올리고 old poll/mutation/page request를 폐기한다. Page/entity/cursor, expanded IDs, dialogs/forms/optimistic snapshots, summary-work와 organization-pending을 비운 뒤 새 generation을 fetch한다. URL은 new default All로 replace하고 열린 detail은 RSC refresh 뒤 stale source IDs와 query를 canonical source로 교체한다. Health poller는 재마운트하지 않는다.
+
+## Meeting tombstone·physical cleanup (ADR 0015)
+
+- `DELETE`는 exclusive delete operation→artifact write lease 안에서 strict `{id,deletedAt}` tombstone을 temp→file fsync→rename→`tombstone-directory fsync`로 먼저 commit한다. Tombstone rename이 logical delete이며 meeting directory rename/rm은 후속 physical cleanup이다.
+- Valid tombstone은 live directory보다 항상 우선한다. List/detail/audio/export/reveal, status/summarize/transcribe/finalize writer, worker, library scanner는 해당 ID를 숨기거나 410으로 거절한다. Status updater는 critical section에서 다시 fence를 확인한다.
+- Malformed·unreadable·symlink tombstone은 `delete_state_ambiguous`로 fail-closed한다. Live로 복구하거나 marker/trash를 추측해 수정·삭제하지 않으며 library placement를 보존한다.
+- Physical cleanup은 placement을 제거하고 live directory를 deterministic `.trash-{id}`로 rename·parent sync한 뒤 recursive remove한다. 실패는 2xx `cleanup:"pending"`이며 tombstone을 되돌리지 않는다.
+- Guarded meeting/library access가 process-global deduplicated sweep을 lazy start한다. Sweep는 strict safe tombstone/deterministic trash만 ID별 cleanup operation→artifact write lease로 처리하고, unrelated dot path/symlink은 건드리지 않는다. Late Whisper raw/segments orphan은 노출되지 않고 다음 sweep에서 수거된다.
 
 ## status.json 계약 (app-api 소유)
 ```jsonc
@@ -57,12 +168,24 @@ flowchart LR
   "error": { "message": "...", "action": "retry_transcription|retry_summary|..." } | null,
   "startedAt": "ISO", "endedAt": "ISO|null", "durationMs": 0, "audioMime": "audio/webm;codecs=opus",
   "whisper": { "jobId": "...|null", "progress": 0.0 },
+  "transcriptionDispatch": {         // 선택. app이 remote await 전 내구 acceptance
+    "dispatchId": "uuid", "createdAt": "ISO",
+    "state": "proposed|accepted|sent|completed|failed"
+  },
+  "placementResolution": {          // 선택. finalize receipt와 placement commit 연결
+    "state": "pending|resolved|unavailable", "receiptHash": "sha256"
+  },
   "paths": { "audio":"...","play":"...","raw":"...","transcript":"...","summary":"...","segments":"..." },
   "review": { "participants": [] },  // 상세 UI(app-api 경유) 입력
   "summarizeAttempts": 0,            // 선택. 요약 실패 횟수(워커 백오프용). 성공/수동 재시도 시 0으로 리셋
+  "summarizeAttempt": {              // 선택. adapter 실행·202 전 durable acceptance receipt
+    "attemptId": "uuid", "kind": "initial|resummarize", "startedAt": "ISO",
+    "preTranscriptHash": "optional sha256", "preSummaryHash": "optional sha256"
+  },
   "updatedAt": "ISO"
 }
 ```
+StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `review`는 메모리에서만 기본값을 적용하고 read가 write를 유발하지 않는다. Top-level future unknown field는 보존하며 directory ID와 status ID가 다르면 corrupt record다.
 **FSM 6상태:** `recording → recorded → transcribing → transcribed → summarizing → summarized`. 임의 상태에서 오류 시 `error{message,action}` 세팅(상태는 유지); 복구=사용자가 "재시도" → 직전 정상 상태로 재진입. `recording`은 클라이언트 임시 상태, 서버 영속은 `recorded`부터.
 
 ## summary.json 스키마
@@ -73,30 +196,45 @@ flowchart LR
 - `highlights`를 항상 포함(fallback 시 `structured`에 `discussion[:3]` 등으로 채움).
 - `participants`는 **비운다(`[]`)** — 참석자는 `status.review`(사용자 입력)만 authoritative. 모델이 전사에서 주운 이름을 자동 기록 금지(거짓 attendees edge·프라이버시).
 
-## 재요약 (단건 수동)
-`runSummarize(id, { force })` — `force`일 때만 `summary.json` 존재(=`already_summarized`) 조기반환을 우회해 `transcript.md`·`summary.json`(재생성 가능·요약 워커 소유)을 덮어쓴다. 유일한 트리거는 **상세의 "다시 요약" 버튼**(`POST /api/meetings/[id]/summarize` body `{ resummarize: true }`); body 없는 POST는 기존대로 요약본이 있으면 409. 배경 워커는 후보 조건이 "summary.json 없음"이고 `force`를 전달하지 않으므로 요약된 회의를 재요약하지 않는다 — **자동·일괄 재요약은 구조적으로 불가능**. 인플라이트 락은 그대로 적용되고, 사용자 `titleOverride`는 보존된다(ADR 0008).
+## 요약 artifact pair 발행·복구 (ADR 0013)
 
-**비동기(202) + 클라이언트 폴링(ADR 0009):** 교정+요약은 긴 회의에서 수 분 걸리므로 라우트는 동기 사전검증(id 400·미존재 404·인플라이트 409·모델 미설정 400·비-force 재요약 409) 후 `runSummarize`를 **논-await로 발사**하고 **202**를 즉시 반환한다. 완료는 클라이언트가 감지한다: `deriveStatus`가 옛 `summary.json` 존재로 재요약 중 `summarizing`을 `summarized`로 가리므로 `status.status`로는 못 본다. 대신 상세 페이지가 `isSummarizeInflight(id)`를 `resummarizeInflight` prop으로 노출하고, 상세 UI는 202 후 로컬 "요약 중" 상태로 3초마다 `router.refresh()`하며 **요약 내용 변경 → 성공(즉시)** / **인플라이트 락을 관측한 뒤 해제 시: `retry_summary` 에러면 실패·아니면 성공(동일 내용 재생성 포함)** / **~30분(생성 3콜 상한) 초과 → 타임아웃**으로 종료한다. 락 관측 전의 stale prop(옛 에러·미기동 상태)은 완료로 오인하지 않도록 게이트한다. 진행 표시(badge "요약 생성 중"·스피너·버튼 비활성)는 `resummarizing || resummarizeInflight`로 파생하므로, 재요약 중 페이지를 새로 열어 서버 락만 true여도 진행 중으로 정확히 보인다(cold entry).
+- `summarizeCore`는 path를 받지 않고 검증된 transcript/summary payload만 반환한다. Canonical 파일은 `summarizePublisher`만 쓴다.
+- Adapter 실행과 202 응답 전 `status.summarizeAttempt`를 durable/best-effort로 commit한다. 지원 환경의 일시 parent-sync 실패(`pending`)는 launch 0으로 fail-closed한다.
+- Meeting 내 `.summarize-{attemptId}/`에 두 output·strict manifest·이전 transcript backup을 내구 staging한다. Manifest phase는 `prepared → preimage_durable → transcript_published → summary_published`다.
+- Canonical은 write lease 안에서 transcript(T1) 먼저, `summary.json`(S1) 마지막 순서로 발행한다. Summary 발행 전 실패하면 durable backup으로 T0를 복원한다. Matching attempt 상태 clear가 commit된 뒤에만 staging을 지운다.
+- Canonical rename 뒤 directory sync 실패는 이미 commit된 rename으로 처리한다. Transcript 단계의 pending은 preimage로 old pair를 복원하고, summary 단계의 pending은 commit된 new pair를 함께 유지해 `T0/S1`로 되돌리지 않는다. 남은 attempt는 다음 guarded read/restart reconciliation이 hash로 완료한다.
+- 상세·export는 artifact read lease 안에서 두 파일을 같이 읽어 old pair 또는 new pair만 반환한다. Delete/cleanup/publisher는 write lease를 쓴다. Lock 순서는 `meeting operation → artifact RW lease → status queue → library queue`다.
+- 프로세스 재시작 뒤 attempt만 남으면 첫 pair read가 exclusive `summarize_reconcile` operation으로 manifest/staged/pre/current hash를 판정해 완료·resume·복원·중단을 결정한다. 모순된 hash/manifest는 `summarize_ambiguous`로 남기고 추측해 덮어쓰거나 mixed pair를 노출하지 않는다.
+
+## 재요약 (단건 수동)
+`runSummarize(id, { force })` — `force`일 때만 기존 pair의 재생성을 허용한다. Core는 staging payload만 만들고 publisher가 old pair을 보존한 채 new pair을 발행한다. 유일한 트리거는 **상세의 "다시 요약" 버튼**(`POST /api/meetings/[id]/summarize` body `{ resummarize: true }`); body 없는 POST는 요약본이 있으면 409다. 배경 워커는 `force`를 전달하지 않으며 사용자 `titleOverride`는 보존된다(ADR 0008).
+
+**비동기(202) + 클라이언트 폴링(ADR 0009):** 라우트는 사전 검증 후 durable attempt commit이 완료된 경우에만 백그라운드 실행과 **202**를 허용한다. 지원 환경의 일시 namespace-sync 실패는 503/launch 0, 알려진 미지원 플랫폼은 `durability:"best_effort"` 202다. UI는 3초 `router.refresh()`로 내용 변경 또는 coordinator-backed live operation 해제를 완료 신호로 사용한다. Durable attempt만 남은 cold entry는 최초 pair read/summary-work 갱신에서 reconcile한 뒤 completed 또는 `retry_summary` interrupted/ambiguous로 보인다.
 
 **실패 가시성(ADR 0009):** 재요약이 실패하면(기존 `summary.json` 있음) 상태를 `transcribed`로 강등하지 않고 **`summarized`를 유지**한 채 `retry_summary` 에러만 첨부한다(옛 요약 보존). `deriveStatus`는 `summarized` 승격 시 `retry_summary` 에러를 **보존**한다(그 외 에러는 정리) — GET 라우트가 파생 상태를 persist하며 배너를 지우던 조용한-실패를 막기 위함. 요약본이 없는 최초 요약 실패는 기존대로 `transcribed`+에러.
 
 **LLM 생성 타임아웃(ADR 0009):** 교정·요약 서브프로세스/요청은 `LLM_GENERATION_TIMEOUT_MS = 600_000`(10분) 고정. `exec.ts` 기본값(120초)·헬스체크의 짧은 타임아웃은 유지하고 생성 호출에만 적용한다(88분 회의가 120초에 SIGKILL되던 원인). 비동기라 사용자가 직접 대기하지 않으므로 넉넉한 상한의 부담이 작다. 한 번의 재요약은 교정→요약→(폴백 요약) **순차 최대 3콜**이라 서버 최악 예산은 ~30분이며, 클라이언트 타임아웃 폴백(`RESUMMARIZE_TIMEOUT_MS = 3×600s+30s`)은 이 예산을 넘겨 잡아 긴 회의에서 조기 오탐 타임아웃을 막는다.
 
 ## whisper HTTP 계약 (127.0.0.1)
-- **주소 고정(계약)**: `LOCAL_STT_HOST=127.0.0.1`, `LOCAL_STT_PORT=8123`. whisper는 여기에 바인딩하고, app-api 프록시/클라이언트는 이 env를 (핸들러 내 지연) 읽어 접속한다. step1이 env 기본값으로 제공, step2가 바인딩, step3가 프록시.
+- **주소 고정(계약)**: `LOCAL_STT_HOST`는 exact `127.0.0.1|localhost`, port는 explicit 1–65535만 허용한다. whisper는 여기에 바인딩하고 app-api는 handler 안에서 지연 검증해 접속하며 redirect를 따르지 않는다.
 - `GET /health` → `{ ok, model, ready }` (app-api가 same-origin 프록시 `/api/whisper/health`로 노출).
-- `POST /transcribe` `{ audioPath, rawPath, segmentsPath }` → `202 { jobId }`. 잡 폴링 `GET /jobs/{jobId}` → `{ status:"processing|done|error", progress, error? }`.
-- whisper가 `raw.md`(세그먼트-per-line, 분할점 보장) + `segments.json`(`[{start,end,text}]`)을 **주어진 경로에 디스크 기록**.
+- `POST /transcribe` `{meetingId,dispatchId}` → `202 {dispatchId,status}`. Poll은 `GET /jobs/{meetingId}/{dispatchId}`. Absolute path/filename/output directory는 받지 않는다.
+- Whisper는 configured data root 아래의 `audio.webm`, `segments.json`, `raw.md`를 no-follow/containment 검사 후 파생한다. `segments.json`을 먼저, authoritative `raw.md`를 마지막에 publish한다.
+- App은 remote await 전 `status.transcriptionDispatch` proposed marker를 durable/best-effort commit한다. Response loss·app restart·retry는 같은 ID를 재전송하고, service가 기존 canonical ID를 반환할 때만 expected-proposed CAS로 adopt한 뒤 canonical request를 보낸다(ADR 0014).
+- Service-owned `.whisper-dispatch.json`은 `{schemaVersion,meetingId,dispatchId,audioSha256,phase,durability}`를 meeting lock 아래 durable create/update한다. `durability`는 `pending|durable|best_effort`, phase는 `accepted|segments_published|raw_published`다. Same pair retry/restart는 resume, same audio fresh proposal은 `adopt_existing_dispatch`, 다른 audio identity는 reject한다.
+- `segments.json`을 먼저 발행하고 claim을 `segments_published`로 올린 뒤 `raw.md`를 downstream completion marker로 마지막 발행한다. New record는 matching dispatch/audio + valid segments + `raw_published` + `durable|best_effort`일 때만 transcribed/detail/summary candidate로 본다. Claim-less legacy raw는 immutable completed로 호환한다.
+- Direct service는 exact Host/port, exact JSON+byte cap, unknown field reject, browser Origin/Fetch Metadata reject, no CORS다. App marker는 browser/server fetch 구분용이고 path 선택 권한을 만들지 않는다.
 - `FAKE_WHISPER=1` 스텁이 **동일 계약** 준수(모델 없이 canned segments 반환) → hermetic 테스트용.
 - ffmpeg는 mlx-whisper가 CLI 호출 → whisper·app-api(리먹스) 양쪽 **preflight** 체크(`/opt/homebrew/bin/ffmpeg`).
 
 ## LLM settings & health 계약
 - `GET /api/settings/llm` → 저장된 `{ provider, model?, baseUrl? }` 또는 `{ provider:null }`. app-api가 `data/settings.json`의 단일 writer이며 API 키를 저장하지 않는다.
 - `POST /api/settings/llm` → `{ provider:"claude-cli"|"codex-cli"|"ollama", model?, baseUrl? }`. 저장 전 `model/baseUrl`은 trim한다. `provider:"ollama"`는 `model` 필수이며 비어 있으면 400. `baseUrl`은 Ollama 설정에만 저장한다.
+- Ollama `baseUrl`은 저장 시와 사용 직전에 explicit-port `http://127.0.0.1|localhost`만 허용한다(credentials/path/query/hash/redirect 금지). Unsafe legacy value는 transcript를 읽거나 network를 호출하기 전에 unavailable이다.
 - `GET /api/settings/llm/health` → `{ configured:false }` 또는 `{ configured:true, provider, model?, ok, detail }`. `model`은 settings의 모델명만 노출하고 `baseUrl`은 반환하지 않는다. legacy Ollama 설정에 `model`이 없으면 daemon 상태와 무관하게 `{ ok:false, detail:"Ollama model not set" }`.
 - health는 UI와 설정 화면의 readiness/test-connection 용도다. **CLI provider(claude/codex)의 `ok`는 바이너리 감지이지 인증 보장이 아니다(낙관적)** — 실제 인증·요약 가능 여부는 첫 요약에서 확인된다. 홈 배너와 상세 상태 카드는 `configured && ok`일 때만 “요약 자동 처리 중”으로 안내한다. 감지형 health는 로그인 깨짐을 요약 전에 못 잡으므로, 홈 배너는 전사됐지만 요약 안 된 회의를 **“처리 중 N”(에러 없음)과 “확인 필요 M”(`retry_summary` 에러)로 분리**해 거짓초록을 막는다. 배경 워커 후보 선정은 기존처럼 settings 존재 기반이며, 실제 실행 실패는 `runSummarize()`의 retryable error로 기록한다(claude는 미로그인 시 이유를 stdout으로 출력하므로 `exec.ts`가 stderr가 비면 stdout 꼬리를 에러에 싣는다).
 - Claude·Codex CLI health는 `claude --version`/`codex --version` 수준의 binary 감지다(인증 불요·즉시 반환이라 콜드 스타트 타임아웃 오탐이 없다). UI 문구는 둘 다 “감지됨”으로 표시하고 인증/실제 요약 가능 여부는 첫 요약 실행에서 확인한다.
-- **claude 요약 호출 격리(ADR 0010):** claude 생성 호출(`run()`)은 격리 임시 cwd(`os.tmpdir()`)에서 인라인 MCP-off(`--strict-mcp-config --mcp-config '{"mcpServers":{}}'`)·slash-off(`--disable-slash-commands`)로 실행하고, 자식 env에서 유료 청구 env(자격증명 `ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY` + 백엔드 리다이렉트 `ANTHROPIC_BASE_URL`·`CLAUDE_CODE_USE_BEDROCK`/`VERTEX`)를 스크럽한다(구독 OAuth와 `HOME`/`PATH`는 유지 → $0 유지). 프로젝트 디렉토리 밖에서 돌기 때문에 워크스페이스 `CLAUDE.md`/MCP 컨텍스트가 교정 출력에 새지 않는다(과거 오염 버그 제거). 전사(PII)는 stdin으로만 전달하며, 프롬프트·`summary.json` 스키마·`summarizeCore` 계약은 불변. 생성 타임아웃은 600초(위 참조).
+- **claude 요약 호출 격리(ADR 0010):** claude 생성 호출(`run()`)은 invocation별 `mkdtemp` 격리 cwd에서 인라인 MCP-off(`--strict-mcp-config --mcp-config '{"mcpServers":{}}'`)·slash-off(`--disable-slash-commands`)로 실행하고, 종료 뒤 temp를 best-effort cleanup한다. 자식 env에서 유료 청구 env(자격증명 `ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY` + 백엔드 리다이렉트 `ANTHROPIC_BASE_URL`·`CLAUDE_CODE_USE_BEDROCK`/`VERTEX`)를 스크럽한다(구독 OAuth와 `HOME`/`PATH`는 유지 → $0 유지). 프로젝트 디렉토리 밖에서 돌기 때문에 워크스페이스 `CLAUDE.md`/MCP 컨텍스트가 교정 출력에 새지 않는다(과거 오염 버그 제거). 전사(PII)는 stdin으로만 전달하며, 프롬프트·`summary.json` 스키마·`summarizeCore` 계약은 불변. 생성 타임아웃은 600초(위 참조).
 
 ## 프롬프트 (교정·요약)
 
@@ -146,4 +284,4 @@ JSON 스키마: {SUMMARY_SCHEMA_HINT}
 
 ## 상태 관리
 - 서버 상태(회의 목록/상태): app-api가 `data/meetings/*/status.json`을 읽어 파생. 클라이언트는 폴링(`force-dynamic`+`no-store`).
-- 클라이언트 상태: React `useState/useReducer`(녹음 세션, 탭 등). 전역 상태 라이브러리 불필요.
+- 클라이언트 상태: layout-scoped React provider(녹음 session/navigation guard) + route-local `useState/useReducer`(탭/폼). 외부 전역 상태 라이브러리 불필요.

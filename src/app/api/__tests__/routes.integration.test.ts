@@ -19,6 +19,7 @@ import { POST as llmSettingsPOST } from "@/app/api/settings/llm/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
 import { meetingPaths } from "@/lib/paths";
+import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
 import { settingsPath, writeSettings } from "@/lib/settings";
 import { initialStatus, writeStatus } from "@/lib/status";
 import { isSummarizeInflight } from "@/lib/summarize";
@@ -30,6 +31,24 @@ import { isSummarizeInflight } from "@/lib/summarize";
 
 const SERVER = join(process.cwd(), "whisper", "server.py");
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+const APP_ORIGIN = "http://127.0.0.1:3000";
+
+function appRequest(input: string, init: RequestInit = {}): Request {
+  const url = input.startsWith("http://t")
+    ? `${APP_ORIGIN}${input.slice("http://t".length)}`
+    : new URL(input, APP_ORIGIN).toString();
+  const headers = new Headers(init.headers);
+  headers.set("host", "127.0.0.1:3000");
+  const method = (init.method ?? "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") headers.set("origin", APP_ORIGIN);
+  if (init.body !== undefined && !headers.has("content-type")) {
+    headers.set(
+      "content-type",
+      url.includes("/finalize") ? "audio/webm;codecs=opus" : "application/json",
+    );
+  }
+  return new Request(url, { ...init, headers });
+}
 
 let proc: ChildProcess;
 let workDir: string;
@@ -59,7 +78,7 @@ function waitForListening(child: ChildProcess, timeoutMs: number): Promise<numbe
 async function pollUntilStatus(id: string, want: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await getMeeting(new Request(`http://t/api/meetings/${id}`), ctx(id));
+    const res = await getMeeting(appRequest(`http://t/api/meetings/${id}`), ctx(id));
     const body = await res.json();
     if (body.status === want) return body;
     await new Promise((r) => setTimeout(r, 40));
@@ -70,7 +89,13 @@ async function pollUntilStatus(id: string, want: string, timeoutMs: number) {
 beforeAll(async () => {
   workDir = mkdtempSync(join(tmpdir(), "app-api-"));
   proc = spawn("python3", [SERVER], {
-    env: { ...process.env, FAKE_WHISPER: "1", LOCAL_STT_HOST: "127.0.0.1", LOCAL_STT_PORT: "0" },
+    env: {
+      ...process.env,
+      AI_NOTE_DATA_ROOT: join(workDir, "data"),
+      FAKE_WHISPER: "1",
+      LOCAL_STT_HOST: "127.0.0.1",
+      LOCAL_STT_PORT: "0",
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const port = await waitForListening(proc, 15000);
@@ -89,7 +114,7 @@ afterAll(() => {
 
 function finalizeReq(id: string, bytes: Uint8Array) {
   const qs = `durationMs=5000&mime=${encodeURIComponent("audio/webm;codecs=opus")}`;
-  return new Request(`http://t/api/meetings/${id}/finalize?${qs}`, {
+  return appRequest(`http://t/api/meetings/${id}/finalize?${qs}`, {
     method: "POST",
     body: bytes,
     duplex: "half",
@@ -98,7 +123,7 @@ function finalizeReq(id: string, bytes: Uint8Array) {
 
 describe("app-api routes", () => {
   it("GET /api/whisper/health proxies the local service (connected)", async () => {
-    const res = await whisperHealth();
+    const res = await whisperHealth(appRequest("/api/whisper/health"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.connected).toBe(true);
@@ -107,7 +132,7 @@ describe("app-api routes", () => {
 
   it("POST /api/settings/llm rejects Ollama without a model", async () => {
     const res = await llmSettingsPOST(
-      new Request("http://t/api/settings/llm", {
+      appRequest("http://t/api/settings/llm", {
         method: "POST",
         body: JSON.stringify({ provider: "ollama" }),
       }),
@@ -119,7 +144,7 @@ describe("app-api routes", () => {
     process.env.FAKE_LLM = "1";
     await writeSettings({ provider: "claude-cli", model: "sonnet", baseUrl: "http://should-not-leak" });
     try {
-      const res = await llmHealthGET();
+      const res = await llmHealthGET(appRequest("/api/settings/llm/health"));
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toEqual({
@@ -137,7 +162,7 @@ describe("app-api routes", () => {
 
   it("GET /api/settings/llm/health treats legacy Ollama settings without model as unavailable", async () => {
     await writeSettings({ provider: "ollama" });
-    const res = await llmHealthGET();
+    const res = await llmHealthGET(appRequest("/api/settings/llm/health"));
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
       configured: true,
@@ -152,7 +177,7 @@ describe("app-api routes", () => {
     const res = await finalizePOST(finalizeReq(id, new Uint8Array([1, 2, 3, 4, 5])), ctx(id));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.transcription).toBe("enqueued");
+    expect(body.transcription).toBe("accepted");
     expect(body.status).toBe("transcribing");
 
     const p = meetingPaths(id);
@@ -167,6 +192,9 @@ describe("app-api routes", () => {
     // whisper (FAKE) writes raw.md + segments.json → derived transcribed
     const transcribed = await pollUntilStatus(id, "transcribed", 15000);
     expect(transcribed.whisper.progress).toBe(1);
+    expect(JSON.stringify(transcribed)).not.toContain("jobId");
+    expect(JSON.stringify(transcribed)).not.toContain("/data/meetings");
+    expect(JSON.stringify(transcribed)).not.toContain("summarizeAttempts");
     const p = meetingPaths(id);
     expect(existsSync(p.raw)).toBe(true);
     expect(existsSync(p.segments)).toBe(true);
@@ -174,14 +202,14 @@ describe("app-api routes", () => {
     // stand in for /meeting-summarize: transcript.md + summary.json
     writeFileSync(p.transcript, "교정된 전사\n");
     writeFileSync(p.summary, readFileSync(join(originalCwd, "fixtures", "summary.happy.json"), "utf-8"));
-    const summarized = await (await getMeeting(new Request(`http://t/api/meetings/${id}`), ctx(id))).json();
+    const summarized = await (await getMeeting(appRequest(`http://t/api/meetings/${id}`), ctx(id))).json();
     expect(summarized.status).toBe("summarized");
     expect(summarized.title).toBe("데일리 스크럼 2026-07-05"); // promoted from summary.title
   });
 
   it("POST /api/transcribe refuses a meeting that is already transcribed (raw.md immutable)", async () => {
     const res = await transcribePOST(
-      new Request("http://t/api/transcribe", {
+      appRequest("http://t/api/transcribe", {
         method: "POST",
         body: JSON.stringify({ id: "meeting-alpha" }),
       }),
@@ -189,16 +217,19 @@ describe("app-api routes", () => {
     expect(res.status).toBe(409);
   });
 
-  it("finalize refuses to overwrite an already-finalized meeting (audio immutable)", async () => {
+  it("finalize probes an already-published meeting without overwriting immutable audio", async () => {
     const id = "meeting-alpha";
+    const before = readFileSync(meetingPaths(id).audio);
     const res = await finalizePOST(finalizeReq(id, new Uint8Array([9, 9, 9])), ctx(id));
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ artifact: "already_published" });
+    expect(readFileSync(meetingPaths(id).audio)).toEqual(before);
   });
 
   it("POST review records participants into status.review", async () => {
     const id = "meeting-alpha";
     const res = await reviewPOST(
-      new Request(`http://t/api/meetings/${id}/review`, {
+      appRequest(`http://t/api/meetings/${id}/review`, {
         method: "POST",
         body: JSON.stringify({ participants: ["딜런"] }),
       }),
@@ -209,29 +240,48 @@ describe("app-api routes", () => {
     expect(body.review.participants).toEqual(["딜런"]);
   });
 
-  it("GET /api/meetings lists finalized meetings, newest first", async () => {
-    const res = await listMeetings();
+  it("GET /api/meetings lists finalized meetings through a bounded global page", async () => {
+    const res = await listMeetings(appRequest("/api/meetings?view=global&limit=100"));
     const body = await res.json();
     expect(Array.isArray(body.meetings)).toBe(true);
     expect(body.meetings.some((m: { id: string }) => m.id === "meeting-alpha")).toBe(true);
+    expect((await listMeetings(appRequest("/api/meetings"))).status).toBe(400);
   });
 
   it("rejects unsafe meeting ids (path traversal)", async () => {
     const bad = "../escape";
-    const getRes = await getMeeting(new Request("http://t/api/meetings/x"), ctx(bad));
+    const getRes = await getMeeting(appRequest("http://t/api/meetings/x"), ctx(bad));
     expect(getRes.status).toBe(400);
     const finRes = await finalizePOST(finalizeReq(bad, new Uint8Array([1])), ctx(bad));
     expect(finRes.status).toBe(400);
     const revRes = await reviewPOST(
-      new Request("http://t/api/meetings/x/review", { method: "POST", body: "{}" }),
+      appRequest("http://t/api/meetings/x/review", { method: "POST", body: "{}" }),
       ctx(bad),
     );
     expect(revRes.status).toBe(400);
   });
 
   it("returns 404 for an unknown meeting", async () => {
-    const res = await getMeeting(new Request("http://t/api/meetings/nope"), ctx("nope"));
+    const res = await getMeeting(appRequest("http://t/api/meetings/nope"), ctx("nope"));
     expect(res.status).toBe(404);
+  });
+
+  it("rejects before awaiting params or touching a params-derived path", async () => {
+    let paramsObserved = false;
+    const params = {
+      then() {
+        paramsObserved = true;
+        throw new Error("params must not be observed");
+      },
+    } as unknown as Promise<{ id: string }>;
+    const response = await getMeeting(
+      new Request("http://evil.test/api/meetings/private", {
+        headers: { host: "evil.test" },
+      }),
+      { params },
+    );
+    expect(response.status).toBe(403);
+    expect(paramsObserved).toBe(false);
   });
 });
 
@@ -254,8 +304,8 @@ async function seedSummarized(id: string) {
 }
 
 const titleReq = (id: string, body: unknown) =>
-  new Request(`http://t/api/meetings/${id}/title`, { method: "POST", body: JSON.stringify(body) });
-const deleteReq = (id: string) => new Request(`http://t/api/meetings/${id}`, { method: "DELETE" });
+  appRequest(`http://t/api/meetings/${id}/title`, { method: "POST", body: JSON.stringify(body) });
+const deleteReq = (id: string) => appRequest(`http://t/api/meetings/${id}`, { method: "DELETE" });
 
 describe("title edit / delete / export overlay", () => {
   it("POST title on a summarized meeting sets titleOverride and it survives re-derive", async () => {
@@ -264,7 +314,7 @@ describe("title edit / delete / export overlay", () => {
     const res = await titlePOST(titleReq(id, { title: "내가 고친 제목" }), ctx(id));
     expect(res.status).toBe(200);
 
-    const got = await (await getMeeting(new Request(`http://t/api/meetings/${id}`), ctx(id))).json();
+    const got = await (await getMeeting(appRequest(`http://t/api/meetings/${id}`), ctx(id))).json();
     expect(got.title).toBe("내가 고친 제목"); // not re-promoted from summary.title
     expect(got.titleOverride).toBe("내가 고친 제목");
     expect(got.status).toBe("summarized");
@@ -292,22 +342,22 @@ describe("title edit / delete / export overlay", () => {
     await seedSummarized(id);
     await titlePOST(titleReq(id, { title: "내보내기 제목" }), ctx(id));
 
-    const md = await (await exportGET(new Request(`http://t/api/meetings/${id}/export?fmt=md`), ctx(id))).text();
+    const md = await (await exportGET(appRequest(`http://t/api/meetings/${id}/export?fmt=md`), ctx(id))).text();
     expect(md).toContain("# 내보내기 제목");
 
-    const jsonText = await (await exportGET(new Request(`http://t/api/meetings/${id}/export?fmt=json`), ctx(id))).text();
+    const jsonText = await (await exportGET(appRequest(`http://t/api/meetings/${id}/export?fmt=json`), ctx(id))).text();
     expect(JSON.parse(jsonText).title).toBe("데일리 스크럼 2026-07-05"); // raw summary.title, not overridden
   });
 
   it("export md uses summary.title (not the stale auto title) when there is no titleOverride", async () => {
     const id = "m-export-nooverride";
     await seedSummarized(id); // status.title stays the auto placeholder; no titleOverride
-    const md = await (await exportGET(new Request(`http://t/api/meetings/${id}/export?fmt=md`), ctx(id))).text();
+    const md = await (await exportGET(appRequest(`http://t/api/meetings/${id}/export?fmt=md`), ctx(id))).text();
     expect(md).toContain("# 데일리 스크럼 2026-07-05"); // the AI title shown in the UI
     expect(md).not.toMatch(/^# 회의 /m); // never the "회의 YYYY-MM-DD HH:MM" placeholder
   });
 
-  it("DELETE removes the folder (200), is idempotent (404), and 400s a bad id", async () => {
+  it("DELETE tombstones and removes the folder (200), is idempotent (200), and 400s a bad id", async () => {
     const id = "m-delete";
     await seedSummarized(id);
     const p = meetingPaths(id);
@@ -315,21 +365,20 @@ describe("title edit / delete / export overlay", () => {
 
     expect((await deleteMeeting(deleteReq(id), ctx(id))).status).toBe(200);
     expect(existsSync(p.dir)).toBe(false);
-    expect((await deleteMeeting(deleteReq(id), ctx(id))).status).toBe(404);
+    expect((await deleteMeeting(deleteReq(id), ctx(id))).status).toBe(200);
     expect((await deleteMeeting(deleteReq("x"), ctx("../escape"))).status).toBe(400);
   });
 
   it("DELETE is refused with 409 while a summarize is in-flight", async () => {
     const id = "m-delete-inflight";
     await seedSummarized(id);
-    const g = globalThis as typeof globalThis & { __aiNoteSummarizeInflight?: Set<string> };
-    (g.__aiNoteSummarizeInflight ??= new Set<string>()).add(id);
+    const lease = await acquireMeetingOperation(id, "summarize");
     try {
       const res = await deleteMeeting(deleteReq(id), ctx(id));
       expect(res.status).toBe(409);
       expect(existsSync(meetingPaths(id).dir)).toBe(true); // not removed
     } finally {
-      g.__aiNoteSummarizeInflight?.delete(id); // don't leak the lock into later tests
+      lease.release();
     }
   });
 });
@@ -337,7 +386,7 @@ describe("title edit / delete / export overlay", () => {
 describe("glossary route", () => {
   it("POST normalizes and GET round-trips the {terms, corrections} object", async () => {
     const post = await glossaryPOST(
-      new Request("http://t/api/glossary", {
+      appRequest("http://t/api/glossary", {
         method: "POST",
         body: JSON.stringify({
           terms: ["  OKR ", "OKR", ""],
@@ -351,7 +400,7 @@ describe("glossary route", () => {
     expect(post.status).toBe(200);
     expect(await post.json()).toEqual({ terms: ["OKR"], corrections: [{ from: "김민중", to: "김민준" }] });
 
-    expect(await (await glossaryGET()).json()).toEqual({
+    expect(await (await glossaryGET(appRequest("/api/glossary"))).json()).toEqual({
       terms: ["OKR"],
       corrections: [{ from: "김민중", to: "김민준" }],
     });
@@ -359,7 +408,7 @@ describe("glossary route", () => {
 
   it("rejects a non-object body with 400", async () => {
     const res = await glossaryPOST(
-      new Request("http://t/api/glossary", { method: "POST", body: JSON.stringify("nope") }),
+      appRequest("http://t/api/glossary", { method: "POST", body: JSON.stringify("nope") }),
     );
     expect(res.status).toBe(400);
   });
@@ -367,9 +416,9 @@ describe("glossary route", () => {
 
 describe("manual re-summarize (force)", () => {
   const summarizeReq = (id: string, body?: unknown) =>
-    new Request(`http://t/api/meetings/${id}/summarize`, {
+    appRequest(`http://t/api/meetings/${id}/summarize`, {
       method: "POST",
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      body: JSON.stringify(body ?? {}),
     });
 
   // The route fires runSummarize and returns 202 without awaiting it. Drain that
@@ -414,13 +463,12 @@ describe("manual re-summarize (force)", () => {
     await writeSettings({ provider: "claude-cli" });
     const id = "m-resummarize-inflight";
     await seedSummarized(id);
-    const g = globalThis as typeof globalThis & { __aiNoteSummarizeInflight?: Set<string> };
-    (g.__aiNoteSummarizeInflight ??= new Set<string>()).add(id);
+    const lease = await acquireMeetingOperation(id, "summarize");
     try {
       const res = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
       expect(res.status).toBe(409);
     } finally {
-      g.__aiNoteSummarizeInflight?.delete(id);
+      lease.release();
     }
   });
 

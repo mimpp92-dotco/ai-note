@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Local workspace/folder library**: a 272px desktop rail and accessible mobile
+  drawer now switch between workspace All, Unfiled, and direct folder pages.
+  Users can create/rename workspaces and create/edit folders up to three levels
+  with semantic colors. Meeting files keep stable paths; organization is stored
+  in the central `library.json` registry.
+- **Bounded, recoverable library navigation**: canonical scope URLs, cursor
+  next/previous pages, source-safe detail back links, global summary-attention
+  navigation, and a separate "organization pending" section keep meetings
+  discoverable without building an unbounded client list.
+- **Read-only degraded library views**: a last-good tree or bounded global
+  fallback remains available when registry data is corrupt, from a newer app
+  version, or temporarily unreadable. Retry and fixed data-folder reveal are
+  available; mutations stay disabled while recording can retain the last-known
+  destination as an explicit, read-only hint.
+- **Scoped, interruption-safe recording**: recording is available from every
+  ready/last-good library scope and snapshots canonical destination IDs at
+  start. Lost finalize responses are recovered with a same-ID bodyless probe;
+  the retained Blob is resent only after the server confirms no publication.
+  Result cards separate artifact durability, actual/fallback placement,
+  playback preparation, and transcription recovery.
+- **Metadata-only meeting and folder moves**: meetings can move within or across
+  workspaces while their artifact directory and immutable bytes stay fixed.
+  Folder subtrees can move within one workspace with cycle, depth, sibling-name,
+  revision, and stale-destination checks. Shared pickers preserve safe detail
+  context and clear stale selections instead of silently falling back.
+- **Preservation-first container deletion**: folder/workspace previews separate
+  visible meetings, affected and hidden placements, children, and pending
+  finalize intents. Folder deletion rehomes meetings and promotes children;
+  workspace deletion moves all meetings to a chosen destination Unfiled and
+  atomically updates the default. Meeting artifact files are never deleted.
+- **Crash-safe corrupt-library recovery**: corrupt registry views can explicitly
+  rebuild from a fingerprint-guarded dialog after preserving the original in a
+  private local archive. Restart planning, atomic intent phases, required
+  namespace durability, recorder Blob gating, and full client generation reset
+  prevent unsupported states or late old-generation responses from overwriting
+  organization data.
+
 - **Meeting title editing**: rename a summarized meeting from the list (kebab
   menu → 이름 수정). The manual title is stored as `titleOverride` in
   `status.json`, so it survives re-summarize and every re-derive.

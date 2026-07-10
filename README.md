@@ -8,9 +8,9 @@ The summary is yours — a `summary.json` and a Markdown transcript you can copy
 
 ## Screenshots
 
-| Home | Structured summary | Model settings |
-|:---:|:---:|:---:|
-| ![Home — record and meeting list](docs/media/home.png) | ![Meeting detail with structured summary and export toolbar](docs/media/detail.png) | ![Keyless model settings](docs/media/settings.png) |
+| Home | Structured summary | Model settings | Mobile library |
+|:---:|:---:|:---:|:---:|
+| ![Home — workspace folder and meeting list](docs/media/home.png) | ![Meeting detail with structured summary and export toolbar](docs/media/detail.png) | ![Keyless model settings](docs/media/settings.png) | ![Mobile workspace folder meeting list](docs/media/mobile.png) |
 
 ## Why it's private
 
@@ -27,7 +27,35 @@ record (browser mic) → local Whisper (STT) → local AI summary (worker) → v
 1. Click **Start** — audio is captured in the browser and saved locally.
 2. On stop, a local **Whisper** service transcribes it (`raw.md`).
 3. A background worker feeds the transcript to your configured model and writes a corrected transcript (`transcript.md`) + structured summary (`summary.json`) — automatically, even if you close the tab.
-4. Review, then **copy / download / reveal the folder**.
+4. Organize meetings in local workspaces and up to three folder levels, then
+   review and **copy / download / reveal the folder**.
+
+The library rail supports workspace switching, All / Unfiled / direct-folder
+views, workspace and folder creation/renaming, and semantic folder colors.
+Meeting files stay at their stable `data/meetings/{id}/` paths; organization is
+metadata only. If the registry cannot be read, the app keeps meetings visible in
+a read-only last-good or global fallback view instead of silently rewriting it.
+Only a corrupt registry offers explicit rebuild: the app requires the latest
+fingerprint, preserves the original in a private local archive, creates a new
+library generation, and places discovered live meetings in the new default
+workspace's Unfiled view. Newer-format, I/O, unsupported-durability, and
+ambiguous recovery states remain read-only and are never overwritten. Recovery
+archives may contain local metadata and are retained under `data/` until you
+remove them locally; their paths and contents are never returned to the browser.
+
+Recording is available from every library scope. The destination is captured
+when recording starts; interrupted saves keep the same meeting ID and audio in
+memory, probe the local server before retrying, and report the actual/fallback
+location separately from playback and transcription status.
+
+Meetings can move to any workspace, folder, or Unfiled location without moving
+their artifact directory. Folder subtrees can be reparented within their current
+workspace; cross-workspace folder moves are intentionally not supported.
+
+Deleting a folder or workspace is an organization-only operation: a preview
+shows every affected meeting, hidden placement, child folder, and pending save
+intent. Meetings and their recordings/transcripts/summaries are rehomed and
+preserved; only the selected container metadata is removed.
 
 ## Requirements
 

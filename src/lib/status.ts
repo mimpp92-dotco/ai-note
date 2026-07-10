@@ -1,10 +1,23 @@
-import { existsSync, readFileSync } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
+import { constants, existsSync, readFileSync } from "node:fs";
+import {
+  lstat,
+  open,
+  readdir,
+  realpath,
+} from "node:fs/promises";
+import { relative } from "node:path";
 
 import type { MeetingStatus, StatusJson } from "@/domain/meeting";
-import { atomicWriteFile } from "@/lib/atomicWrite";
+import { parseStatusJson } from "@/domain/library";
 import { isSafeId } from "@/lib/meetingId";
-import { meetingPaths, meetingsRoot } from "@/lib/paths";
+import { startMeetingCleanupSweep } from "@/lib/meetingCleanup";
+import { inspectMeetingTombstone } from "@/lib/meetingTombstone";
+import { dataRoot, meetingPaths, meetingsRoot } from "@/lib/paths";
+import {
+  getStatusUpdater,
+  type StatusUpdateResult,
+} from "@/lib/statusUpdater";
+import { inspectTranscriptionPublication } from "@/lib/transcriptionArtifacts";
 
 // app-api is the primary writer of status.json. These helpers own reading, writing
 // (atomic), and — per the contract — deriving transcribed/summarized purely from
@@ -60,21 +73,70 @@ export function initialStatus(id: string, input: InitialStatusInput): StatusJson
 }
 
 export async function readStatus(id: string): Promise<StatusJson | null> {
+  void startMeetingCleanupSweep().catch(() => {});
+  if ((await inspectMeetingTombstone(id)).state !== "none") return null;
+  const paths = meetingPaths(id);
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  let raw: string;
   try {
-    const raw = await readFile(meetingPaths(id).status, "utf-8");
-    return JSON.parse(raw) as StatusJson;
+    const rootInfo = await lstat(meetingsRoot());
+    const directoryInfo = await lstat(paths.dir);
+    const statusInfo = await lstat(paths.status);
+    if (
+      rootInfo.isSymbolicLink()
+      || !rootInfo.isDirectory()
+      || directoryInfo.isSymbolicLink()
+      || !directoryInfo.isDirectory()
+      || statusInfo.isSymbolicLink()
+      || !statusInfo.isFile()
+    ) return null;
+    const resolvedRoot = await realpath(meetingsRoot());
+    const resolvedDirectory = await realpath(paths.dir);
+    const rel = relative(resolvedRoot, resolvedDirectory);
+    if (rel.startsWith("..") || rel.startsWith("/") || rel.startsWith("\\")) return null;
+    handle = await open(paths.status, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    raw = await handle.readFile("utf8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    // A corrupt/hand-edited status.json shouldn't 500 the list route or stall the
-    // worker — treat it as absent (the meeting is re-derivable from its artifacts).
-    if (err instanceof SyntaxError) return null;
+    if (["ENOENT", "ELOOP"].includes((err as NodeJS.ErrnoException).code ?? "")) return null;
     throw err;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+  try {
+    return parseStatusJson(JSON.parse(raw) as unknown, id);
+  } catch {
+    // A corrupt/hand-edited status.json should not stall legacy consumers. The
+    // library scanner preserves its placement and reports the richer category.
+    return null;
   }
 }
 
 export async function writeStatus(id: string, status: StatusJson): Promise<void> {
-  const withStamp: StatusJson = { ...status, updatedAt: new Date().toISOString() };
-  await atomicWriteFile(meetingPaths(id).status, JSON.stringify(withStamp, null, 2) + "\n");
+  const updater = getStatusUpdater(dataRoot());
+  if (await updater.read(id)) await updater.update(id, () => status);
+  else await updater.create(id, status);
+}
+
+export async function createStatus(
+  id: string,
+  status: StatusJson,
+  ownerToken?: string,
+): Promise<StatusUpdateResult> {
+  return getStatusUpdater(dataRoot()).create(id, status, ownerToken);
+}
+
+export async function updateStatus(
+  id: string,
+  ownerToken: string | undefined,
+  reducer: (latest: StatusJson) => StatusJson,
+): Promise<StatusUpdateResult> {
+  return getStatusUpdater(dataRoot()).update(id, reducer, ownerToken);
+}
+
+export async function retryStatusDurability(
+  id: string,
+): Promise<"durable" | "best_effort" | "pending"> {
+  return getStatusUpdater(dataRoot()).retryPending(id);
 }
 
 function readJson<T>(path: string): T | null {
@@ -98,9 +160,30 @@ export function deriveStatus(id: string, persisted: StatusJson): { status: Statu
   let rank = RANK[s.status];
   let changed = false;
 
-  if (existsSync(p.raw) && rank < RANK.transcribed) {
-    s = { ...s, status: "transcribed", whisper: { ...s.whisper, progress: 1 }, error: null };
+  const transcription = inspectTranscriptionPublication(
+    id,
+    persisted.transcriptionDispatch?.dispatchId,
+  );
+  if (transcription.state === "complete" && rank < RANK.transcribed) {
+    s = {
+      ...s,
+      status: "transcribed",
+      whisper: { ...s.whisper, progress: 1 },
+      error: null,
+    };
     rank = RANK.transcribed;
+    changed = true;
+  }
+  if (
+    transcription.state === "complete"
+    && s.transcriptionDispatch
+    && s.transcriptionDispatch.state !== "completed"
+  ) {
+    s = {
+      ...s,
+      transcriptionDispatch: { ...s.transcriptionDispatch, state: "completed" },
+      whisper: { ...s.whisper, progress: 1 },
+    };
     changed = true;
   }
 
@@ -140,10 +223,15 @@ export function deriveStatus(id: string, persisted: StatusJson): { status: Statu
 export async function listMeetingIds(): Promise<string[]> {
   try {
     const entries = await readdir(meetingsRoot(), { withFileTypes: true });
-    return entries
+    const candidates = entries
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .filter((name) => isSafeId(name) && existsSync(meetingPaths(name).status));
+    const visible: string[] = [];
+    for (const id of candidates) {
+      if ((await inspectMeetingTombstone(id)).state === "none") visible.push(id);
+    }
+    return visible;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;

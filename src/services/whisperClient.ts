@@ -1,8 +1,5 @@
 import { localSttBaseUrl } from "@/lib/config";
-
-// Thin HTTP wrapper around the local whisper service (docs/ARCHITECTURE.md —
-// whisper HTTP 계약). The base URL is read lazily from config inside each call
-// (127.0.0.1:8123 default), so importing this module touches no env — build-green.
+import { isSafeId } from "@/lib/meetingId";
 
 export interface WhisperHealth {
   ok: boolean;
@@ -14,35 +11,166 @@ export interface WhisperHealth {
 export interface WhisperJob {
   status: "processing" | "done" | "error";
   progress: number;
-  error?: string;
+  error?: "transcription_failed" | "durability_pending";
 }
 
 export interface EnqueueArgs {
-  audioPath: string;
-  rawPath: string;
-  segmentsPath: string;
+  meetingId: string;
+  dispatchId: string;
+}
+
+export interface EnqueueResponse {
+  dispatchId: string;
+  status: "accepted" | "processing" | "done";
+  legacy?: boolean;
+}
+
+export type WhisperDispatchProposal =
+  | EnqueueResponse
+  | { dispatchId: string; status: "adopt" };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export class WhisperProtocolError extends Error {
+  readonly code: "invalid_whisper_protocol" | "whisper_unavailable";
+
+  constructor(code: WhisperProtocolError["code"]) {
+    super(code);
+    this.name = "WhisperProtocolError";
+    this.code = code;
+  }
+}
+
+function assertProtocolIds(meetingId: string, dispatchId: string): void {
+  if (!isSafeId(meetingId) || !UUID.test(dispatchId)) {
+    throw new WhisperProtocolError("invalid_whisper_protocol");
+  }
+}
+
+async function safeJson(response: { json(): Promise<unknown> }): Promise<Record<string, unknown>> {
+  try {
+    const value = await response.json();
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 export async function fetchWhisperHealth(): Promise<WhisperHealth> {
-  const res = await fetch(`${localSttBaseUrl()}/health`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`whisper /health returned ${res.status}`);
-  return (await res.json()) as WhisperHealth;
+  const response = await fetch(`${localSttBaseUrl()}/health`, {
+    headers: { "X-AI-Note-Service": "app-api-v1" },
+    cache: "no-store",
+    redirect: "error",
+  });
+  if (!response.ok) throw new WhisperProtocolError("whisper_unavailable");
+  const value = await safeJson(response);
+  if (
+    typeof value.ok !== "boolean"
+    || typeof value.model !== "string"
+    || typeof value.ready !== "boolean"
+  ) {
+    throw new WhisperProtocolError("whisper_unavailable");
+  }
+  return {
+    ok: value.ok,
+    model: value.model,
+    ready: value.ready,
+    ...(typeof value.message === "string" ? { message: value.message } : {}),
+  };
 }
 
-export async function enqueueWhisperJob(args: EnqueueArgs): Promise<{ jobId: string }> {
-  const res = await fetch(`${localSttBaseUrl()}/transcribe`, {
+async function postDispatch(args: EnqueueArgs): Promise<{
+  response: Response;
+  payload: Record<string, unknown>;
+}> {
+  const response = await fetch(`${localSttBaseUrl()}/transcribe`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-AI-Note-Service": "app-api-v1",
+    },
     body: JSON.stringify(args),
     cache: "no-store",
+    redirect: "error",
   });
-  if (res.status !== 202) {
-    throw new Error(`whisper /transcribe returned ${res.status}`);
-  }
-  return (await res.json()) as { jobId: string };
+  return { response, payload: await safeJson(response) };
 }
 
-export async function fetchWhisperJob(jobId: string): Promise<WhisperJob> {
-  const res = await fetch(`${localSttBaseUrl()}/jobs/${jobId}`, { cache: "no-store" });
-  return (await res.json()) as WhisperJob;
+function parseEnqueueSuccess(
+  response: Response,
+  payload: Record<string, unknown>,
+): EnqueueResponse {
+  if (response.status !== 200 && response.status !== 202) {
+    throw new WhisperProtocolError("whisper_unavailable");
+  }
+  if (
+    typeof payload.dispatchId !== "string"
+    || !UUID.test(payload.dispatchId)
+    || (payload.status !== "accepted" && payload.status !== "processing" && payload.status !== "done")
+  ) {
+    throw new WhisperProtocolError("whisper_unavailable");
+  }
+  return {
+    dispatchId: payload.dispatchId,
+    status: payload.status,
+    ...(payload.legacy === true ? { legacy: true } : {}),
+  };
+}
+
+export async function enqueueWhisperJob(args: EnqueueArgs): Promise<EnqueueResponse> {
+  const first = await proposeWhisperJob(args);
+  if (first.status === "adopt") {
+    const adopted = await proposeWhisperJob({ meetingId: args.meetingId, dispatchId: first.dispatchId });
+    if (adopted.status === "adopt") throw new WhisperProtocolError("whisper_unavailable");
+    return adopted;
+  }
+  return first;
+}
+
+export async function proposeWhisperJob(args: EnqueueArgs): Promise<WhisperDispatchProposal> {
+  assertProtocolIds(args.meetingId, args.dispatchId);
+  const first = await postDispatch(args);
+  const error = first.payload.error;
+  const errorCode = typeof error === "object" && error !== null && "code" in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  if (
+    first.response.status === 409
+    && errorCode === "adopt_existing_dispatch"
+    && typeof first.payload.dispatchId === "string"
+    && UUID.test(first.payload.dispatchId)
+  ) {
+    return { dispatchId: first.payload.dispatchId, status: "adopt" };
+  }
+  return parseEnqueueSuccess(first.response, first.payload);
+}
+
+export async function fetchWhisperJob(meetingId: string, dispatchId: string): Promise<WhisperJob> {
+  assertProtocolIds(meetingId, dispatchId);
+  const response = await fetch(`${localSttBaseUrl()}/jobs/${meetingId}/${dispatchId}`, {
+    headers: { "X-AI-Note-Service": "app-api-v1" },
+    cache: "no-store",
+    redirect: "error",
+  });
+  if (!response.ok) throw new WhisperProtocolError("whisper_unavailable");
+  const value = await safeJson(response);
+  if (
+    value.status !== "processing"
+    && value.status !== "done"
+    && value.status !== "error"
+  ) {
+    throw new WhisperProtocolError("whisper_unavailable");
+  }
+  const progress = typeof value.progress === "number" && Number.isFinite(value.progress)
+    ? Math.max(0, Math.min(1, value.progress))
+    : 0;
+  return {
+    status: value.status,
+    progress,
+    ...(value.status === "error"
+      ? { error: value.error === "durability_pending" ? "durability_pending" : "transcription_failed" }
+      : {}),
+  };
 }

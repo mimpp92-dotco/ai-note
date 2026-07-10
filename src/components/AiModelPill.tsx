@@ -1,5 +1,4 @@
-import Link from "next/link";
-
+import { GuardedLink as Link } from "@/components/RecorderNavigation";
 import { formatLlmStatus, type LlmHealthState } from "@/components/healthStatus";
 
 // AI-model connection pill for the home header (mirrors WhisperPill). Icon + text,

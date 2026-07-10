@@ -1,5 +1,6 @@
 import { LLM_GENERATION_TIMEOUT_MS } from "@/services/llm/exec";
 import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services/llm/types";
+import { normalizeLoopbackHttpBaseUrl } from "@/lib/localEndpoint";
 
 // Ollama backend — a local model daemon on 127.0.0.1. The daemon is frequently
 // DOWN (not started), so both run() and health() must handle ECONNREFUSED
@@ -12,7 +13,7 @@ export class OllamaAdapter implements LlmAdapter {
   private readonly baseUrl: string;
 
   constructor(private readonly settings: LlmSettings) {
-    this.baseUrl = settings.baseUrl || DEFAULT_BASE_URL;
+    this.baseUrl = normalizeLoopbackHttpBaseUrl(settings.baseUrl || DEFAULT_BASE_URL);
   }
 
   async run(prompt: string, opts?: { json?: boolean }): Promise<string> {
@@ -34,6 +35,8 @@ export class OllamaAdapter implements LlmAdapter {
           ...(opts?.json ? { format: "json" } : {}),
         }),
         signal: controller.signal,
+        redirect: "error",
+        cache: "no-store",
       });
       if (!res.ok) throw new Error(`Ollama request failed: ${res.status} ${res.statusText}`);
 
@@ -51,7 +54,11 @@ export class OllamaAdapter implements LlmAdapter {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3_000);
     try {
-      const res = await fetch(`${this.baseUrl}/api/tags`, { signal: controller.signal });
+      const res = await fetch(`${this.baseUrl}/api/tags`, {
+        signal: controller.signal,
+        redirect: "error",
+        cache: "no-store",
+      });
       if (!res.ok) return { ok: false, detail: `Ollama responded ${res.status}` };
 
       const data = (await res.json()) as { models?: { name?: string }[] };

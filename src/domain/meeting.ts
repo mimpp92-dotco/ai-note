@@ -26,6 +26,7 @@ export type ErrorAction =
   | "retry_summary";
 
 export interface StatusError {
+  code?: string;
   message: string;
   action: ErrorAction;
 }
@@ -33,6 +34,19 @@ export interface StatusError {
 export interface WhisperState {
   jobId: string | null;
   progress: number;
+}
+
+export type TranscriptionDispatchState =
+  | "proposed"
+  | "accepted"
+  | "sent"
+  | "completed"
+  | "failed";
+
+export interface TranscriptionDispatch {
+  dispatchId: string;
+  createdAt: string;
+  state: TranscriptionDispatchState;
 }
 
 // status.json `paths` sub-object — the six artifact paths in the contract
@@ -52,6 +66,17 @@ export interface ReviewInput {
   participants: string[];
 }
 
+export type SummarizeAttemptKind = "initial" | "resummarize";
+
+// Durable acceptance receipt used to recover a summarize after process exit.
+export interface SummarizeAttempt {
+  attemptId: string;
+  kind: SummarizeAttemptKind;
+  startedAt: string;
+  preTranscriptHash?: string;
+  preSummaryHash?: string;
+}
+
 export interface StatusJson {
   id: string;
   title: string;
@@ -66,11 +91,19 @@ export interface StatusJson {
   durationMs: number;
   audioMime: string;
   whisper: WhisperState;
+  transcriptionDispatch?: TranscriptionDispatch;
+  placementResolution?: {
+    state: "pending" | "resolved" | "unavailable";
+    receiptHash: string;
+    resolvedBy?: "rebuild";
+    resolvedLibraryId?: string;
+  };
   paths: StatusPaths;
   review: ReviewInput;
   // Number of failed summarize attempts — the background worker uses this to
   // back off instead of re-spawning a subprocess every poll. Reset by a manual retry.
   summarizeAttempts?: number;
+  summarizeAttempt?: SummarizeAttempt;
   updatedAt: string;
 }
 

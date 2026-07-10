@@ -1,4 +1,6 @@
 import { tmpdir } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 
 import { LLM_GENERATION_TIMEOUT_MS, runProcess } from "@/services/llm/exec";
 import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services/llm/types";
@@ -47,13 +49,20 @@ export class ClaudeCliAdapter implements LlmAdapter {
     ];
     const env = { ...process.env };
     for (const key of PAID_BILLING_ENV_VARS) delete env[key];
-    const { stdout } = await runProcess("claude", args, {
-      stdin: prompt,
-      timeoutMs: LLM_GENERATION_TIMEOUT_MS,
-      cwd: tmpdir(),
-      env,
-    });
-    return stdout.trim();
+    const cwd = await mkdtemp(join(tmpdir(), "ai-note-claude-"));
+    try {
+      const { stdout } = await runProcess("claude", args, {
+        stdin: prompt,
+        timeoutMs: LLM_GENERATION_TIMEOUT_MS,
+        cwd,
+        env,
+      });
+      return stdout.trim();
+    } finally {
+      // Cleanup is deliberately best-effort: a generated result remains valid
+      // even when antivirus/indexer timing prevents immediate temp removal.
+      await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   // Lightweight detection only: `claude --version` confirms the binary exists

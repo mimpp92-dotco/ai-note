@@ -6,10 +6,22 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  createDirectorySyncCapability,
+  createNodeFileOps,
+  type FileOps,
+} from "@/lib/durableFileOps";
 import { meetingPaths } from "@/lib/paths";
+import { dataRoot } from "@/lib/paths";
+import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
 import { writeSettings } from "@/lib/settings";
 import { initialStatus, readStatus, writeStatus } from "@/lib/status";
-import { runSummarize } from "@/lib/summarize";
+import { acceptSummarize, isSummarizeInflight, runSummarize } from "@/lib/summarize";
+import {
+  createStatusUpdater,
+  resetStatusUpdaterStateForTests,
+  setStatusUpdaterForTests,
+} from "@/lib/statusUpdater";
 
 // Exercises the summarize orchestration end-to-end with the offline FakeAdapter.
 // cwd-isolated (meetingsRoot()/settingsPath() are cwd-relative) like the app-api
@@ -35,6 +47,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete globalThis.__aiNoteFakeLlmRunHook;
+  resetStatusUpdaterStateForTests();
   if (savedFakeLlm === undefined) delete process.env.FAKE_LLM;
   else process.env.FAKE_LLM = savedFakeLlm;
   if (savedFakeLlmFail === undefined) delete process.env.FAKE_LLM_FAIL;
@@ -42,6 +56,12 @@ afterEach(() => {
   process.chdir(originalCwd);
   rmSync(workDir, { recursive: true, force: true });
 });
+
+async function waitForSummarize(id: string): Promise<void> {
+  for (let index = 0; index < 200 && isSummarizeInflight(id); index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 async function seedTranscribed(id: string) {
   const p = meetingPaths(id);
@@ -59,6 +79,86 @@ async function seedTranscribed(id: string) {
 }
 
 describe("runSummarize", () => {
+  it("durably records the attempt before the first adapter call and before accepting", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-durable-accept";
+    await seedTranscribed(id);
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let observedAttempt: string | undefined;
+    let adapterStarted!: () => void;
+    const started = new Promise<void>((resolve) => { adapterStarted = resolve; });
+    globalThis.__aiNoteFakeLlmRunHook = async () => {
+      observedAttempt = (await readStatus(id))?.summarizeAttempt?.attemptId;
+      adapterStarted();
+      await blocked;
+    };
+
+    const accepted = await acceptSummarize(id);
+    await started;
+    expect(accepted).toEqual({ accepted: true, durability: "durable" });
+    expect(observedAttempt).toMatch(/^[a-f0-9-]{36}$/u);
+    expect((await readStatus(id))?.summarizeAttempt?.attemptId).toBe(observedAttempt);
+
+    release();
+    await waitForSummarize(id);
+  });
+
+  it("does not launch an adapter when attempt namespace durability is pending", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-pending-accept";
+    await seedTranscribed(id);
+    const base = createNodeFileOps();
+    const fileOps: FileOps = {
+      ...base,
+      openDirectory: async (...args) => {
+        const handle = await base.openDirectory(...args);
+        return {
+          ...handle,
+          sync: async () => { throw Object.assign(new Error("transient"), { code: "EIO" }); },
+        };
+      },
+    };
+    resetStatusUpdaterStateForTests();
+    setStatusUpdaterForTests(dataRoot(), createStatusUpdater({
+      dataRoot: dataRoot(),
+      fileOps,
+      capability: createDirectorySyncCapability("supported"),
+    }));
+    let adapterRuns = 0;
+    globalThis.__aiNoteFakeLlmRunHook = () => { adapterRuns += 1; };
+
+    await expect(acceptSummarize(id)).resolves.toEqual({ accepted: false, reason: "error" });
+    expect(adapterRuns).toBe(0);
+    expect((await readStatus(id))?.summarizeAttempt).toBeDefined();
+    expect(isSummarizeInflight(id)).toBe(false);
+  });
+
+  it("accepts known unsupported directory sync as explicit best-effort durability", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-best-effort-accept";
+    await seedTranscribed(id);
+    resetStatusUpdaterStateForTests();
+    setStatusUpdaterForTests(dataRoot(), createStatusUpdater({
+      dataRoot: dataRoot(),
+      capability: createDirectorySyncCapability("unsupported"),
+    }));
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    globalThis.__aiNoteFakeLlmRunHook = () => blocked;
+
+    await expect(acceptSummarize(id)).resolves.toEqual({
+      accepted: true,
+      durability: "best_effort",
+    });
+    expect((await readStatus(id))?.summarizeAttempt).toBeDefined();
+    release();
+    await waitForSummarize(id);
+  });
+
   it("summarizes a transcribed meeting with the fake adapter", async () => {
     process.env.FAKE_LLM = "1";
     await writeSettings({ provider: "claude-cli" });
@@ -159,6 +259,8 @@ describe("runSummarize", () => {
     const status = await readStatus(id);
     expect(status?.status).toBe("summarized"); // NOT demoted to transcribed
     expect(status?.error?.action).toBe("retry_summary");
+    expect(status?.error?.code).toBe("summary_provider_failed");
+    expect(JSON.stringify(status?.error)).not.toContain("FAKE_LLM_FAIL");
     expect(status?.summarizeAttempts).toBe(1);
     // The still-valid prior summary survives the failed regeneration.
     expect(existsSync(p.summary)).toBe(true);
@@ -187,12 +289,11 @@ describe("runSummarize", () => {
   it("refuses (in_progress) when a summarize is already in-flight, even with force", async () => {
     const id = "meeting-force-inflight";
     await seedTranscribed(id);
-    const g = globalThis as typeof globalThis & { __aiNoteSummarizeInflight?: Set<string> };
-    (g.__aiNoteSummarizeInflight ??= new Set<string>()).add(id);
+    const lease = await acquireMeetingOperation(id, "summarize");
     try {
       expect(await runSummarize(id, { force: true })).toEqual({ ok: false, reason: "in_progress" });
     } finally {
-      g.__aiNoteSummarizeInflight?.delete(id);
+      lease.release();
     }
   });
 });

@@ -1,7 +1,7 @@
 # 0007 — 회의 삭제는 폴더 전체 영구 삭제(rename-then-rm)
 
 - **날짜:** 2026-07-09
-- **상태:** 채택됨
+- **상태:** 대체됨(→ [0015](0015-durable-meeting-tombstone.md))
 
 ## 무엇을 결정했나
 회의록 삭제는 `data/meetings/{id}/` 폴더 전체를 **영구 삭제**한다(휴지통/보관 없음). 삭제는 `rename(dir, ".trash-{id}-{ts}")` 후 `rm -rf`의 2단계로 한다. 요약이 인플라이트(`isSummarizeInflight`)인 회의만 삭제를 막고(409), 그 외 모든 상태(recorded/transcribed/summarized/error/멈춤)는 지울 수 있다.
@@ -21,3 +21,7 @@
 
 ## 곁들임 — 내보내기물 scrub 미적용(의도된 결정)
 `AGENTS.md`는 "요약·내보내기물에 PII/토큰/URL scrub"을 CRITICAL로 적었으나, 로컬 단일 사용자 hand-off 문서(`export`의 `.md`/`.json`)에는 **scrub을 적용하지 않는다**(현재 미구현). 이유: 내보내기 대상은 이미 `data/`만큼 신뢰되는 로컬 파일이고, 단어장(`glossary.json`)에 사람 이름이 들어갈 수 있어 정규 표기를 오히려 보존해야 하며, 자동 scrub은 회의록 본문(숫자·이름)을 손상시킬 위험이 크다. 실제 scrub 구현은 별건(사용자 미요청)으로 두고, `AGENTS.md`/`SECURITY.md` 문구를 이 현실에 맞게 정렬했다.
+
+## 대체 메모
+
+ADR 0015가 logical delete를 durable tombstone commit으로 대체한다. 이 ADR의 rename-then-rm은 physical cleanup으로, late Whisper orphan 허용은 tombstone 가시성 fence + lazy sweep로 계승했다. 로컬 export scrub 미적용 결정도 0015에서 계승한다.

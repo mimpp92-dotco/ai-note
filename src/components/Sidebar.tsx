@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { GuardedLink as Link } from "@/components/RecorderNavigation";
 import { formatLlmStatus, formatWhisperStatus, type LlmHealthState, type WhisperHealthState } from "@/components/healthStatus";
 import { useHealth } from "@/components/useHealth";
 

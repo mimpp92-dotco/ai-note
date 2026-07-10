@@ -33,3 +33,9 @@
 - 테스트 seam: `src/services/llm/fake.ts`(`FAKE_LLM_FAIL=1` → `run()` throw).
 - **미결(F4, 연기)**: 교정이 전사를 재출력하는 구조라 회의가 길수록 시간·토큰이 선형 증가 — 몇 시간짜리는 600초로도 위태롭다. 청킹/교정 생략은 별도 이슈.
 - **알려진 한계(minor)**: 재요약 실행이 폴 간격(3초)보다 빨리 실패하면 락을 관측하지 못해 실패를 즉시 못 잡고 타임아웃/수동 새로고침으로 드러난다. 실제 LLM 호출은 3초를 넘겨 현실 확률이 낮아 별도 처리하지 않는다.
+
+## Phase 7 갱신 — durable active/interrupted/completed
+
+- 202의 근거는 in-memory 락만이 아니라 adapter 실행 전 commit한 `status.summarizeAttempt`다. Live coordinator operation이 있으면 active, attempt만 남으면 restart reconciliation 대상이다.
+- `summary.json`을 마지막 completion marker로 발행하며 identical-content 재생성도 intended hash가 일치하면 completed다.
+- 중단은 기존 pair를 복원·유지한 뒤 `retry_summary`로 보이고, 모순은 `summarize_ambiguous`로 fail-closed한다. 세부 내구성·lock 계약은 ADR [0013](0013-durable-summarize-pair-publication.md)이 정제한다.

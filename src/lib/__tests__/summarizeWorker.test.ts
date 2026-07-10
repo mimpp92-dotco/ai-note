@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { mkdtempSync, rmSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -69,6 +69,26 @@ describe("findSummarizeCandidates", () => {
   it("excludes a meeting that already has summary.json", async () => {
     await writeSettings({ provider: "claude-cli" });
     await seed("meeting-done", { summary: true });
+    expect(await findSummarizeCandidates()).toEqual([]);
+  });
+
+  it("uses the shared no-follow classifier and skips a symlinked status record", async () => {
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-symlink-status";
+    const p = meetingPaths(id);
+    await mkdir(p.dir, { recursive: true });
+    const outside = join(workDir, "outside-status.json");
+    await writeFile(outside, JSON.stringify({
+      ...initialStatus(id, {
+        startedAt: "2026-07-05T09:00:00.000Z",
+        endedAt: "2026-07-05T09:05:00.000Z",
+        durationMs: 300_000,
+        audioMime: "audio/webm",
+      }),
+      status: "transcribed",
+    }));
+    await symlink(outside, p.status);
+    await writeFile(p.raw, "회의 원문\n");
     expect(await findSummarizeCandidates()).toEqual([]);
   });
 });

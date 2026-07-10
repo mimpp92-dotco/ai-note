@@ -1,6 +1,8 @@
 "use client";
 
 import { useRecorder } from "@/components/useRecorder";
+import type { RecorderRequestedLocation } from "@/components/RecorderSessionProvider";
+import { RecorderFinalizeResultView } from "@/components/RecorderFinalizeResultView";
 import { formatDuration } from "@/lib/recorder";
 
 // Human labels for the server-derived lifecycle polled after upload.
@@ -12,10 +14,32 @@ const STATUS_LABELS: Record<string, string> = {
   summarized: "요약 완료",
 };
 
-export function Recorder() {
-  const { phase, elapsedMs, level, error, serverStatus, start, stop } = useRecorder();
+export function Recorder({
+  requestedLocation,
+}: {
+  requestedLocation?: RecorderRequestedLocation;
+} = {}) {
+  const {
+    phase,
+    elapsedMs,
+    level,
+    error,
+    serverStatus,
+    finalizeResult,
+    hasRetainedBlob,
+    retryDisposition,
+    start,
+    stop,
+    retry,
+    probe,
+  } = useRecorder();
 
   const recording = phase === "recording";
+  const busy = phase === "requesting_permission" || phase === "stopping" || phase === "uploading";
+  const retryable = phase === "captured" || phase === "finalize_ambiguous" || (
+    phase === "failed" && hasRetainedBlob && retryDisposition === "body_required"
+  );
+  const blocked = phase === "failed" && hasRetainedBlob && retryDisposition === "blocked";
   // Speech RMS rarely exceeds ~0.3, so scale up for a readable meter fill.
   const meterPct = Math.min(100, Math.round(level * 300));
   const statusLabel = serverStatus
@@ -33,11 +57,29 @@ export function Recorder() {
         </div>
         <button
           type="button"
-          onClick={recording ? stop : () => void start()}
-          disabled={phase === "uploading"}
+          onClick={recording
+            ? stop
+            : phase === "finalize_ambiguous"
+              ? () => void probe()
+              : retryable
+                ? () => void retry()
+                : () => void start({ requestedLocation })}
+          disabled={busy || blocked}
           className="w-full shrink-0 rounded-full bg-ink px-5 py-2.5 text-[14px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50 sm:w-auto"
         >
-          {recording ? "기록 중지" : phase === "uploading" ? "저장 중…" : "실시간 기록 시작"}
+          {recording
+            ? "기록 중지"
+            : phase === "requesting_permission"
+              ? "권한 확인 중…"
+              : phase === "stopping" || phase === "captured"
+                ? "녹음 정리 중…"
+                : phase === "uploading"
+                  ? "저장 중…"
+                  : retryable
+                    ? phase === "finalize_ambiguous" ? "저장 상태 확인" : "저장 다시 시도"
+                    : blocked
+                      ? "저장 상태 충돌"
+                      : "실시간 기록 시작"}
         </button>
       </div>
 
@@ -70,21 +112,49 @@ export function Recorder() {
           </div>
         )}
 
-        {phase === "idle" && (
+        {(phase === "idle" || phase === "saved") && (
           <p className="text-[13px] text-inkSoft">
-            버튼을 눌러 녹음을 시작하세요. 마이크 권한이 필요합니다.
+            {phase === "saved"
+              ? `저장 완료${statusLabel ? ` · ${statusLabel}` : ""}`
+              : "버튼을 눌러 녹음을 시작하세요. 마이크 권한이 필요합니다."}
           </p>
         )}
 
-        {(phase === "uploading" || phase === "done") && (
+        {(phase === "requesting_permission"
+          || phase === "stopping"
+          || phase === "captured"
+          || phase === "uploading") && (
           <p className="text-[14px] text-inkSoft">
-            {phase === "uploading"
-              ? "녹음을 저장하는 중…"
-              : `저장 완료${statusLabel ? ` · ${statusLabel}` : ""}`}
+            {phase === "requesting_permission"
+              ? "마이크 권한을 확인하는 중…"
+              : phase === "uploading"
+                ? "녹음을 저장하는 중…"
+                : "녹음을 안전하게 정리하는 중…"}
           </p>
         )}
 
-        {phase === "error" && error && <p className="text-[14px] text-error">{error}</p>}
+        {(phase === "failed" || phase === "finalize_ambiguous") && error && (
+          <p className="text-[14px] text-error">{error}</p>
+        )}
+        {blocked && (
+          <div className="mt-3 space-y-3 rounded-[12px] border border-warn/40 bg-warnBg px-4 py-3">
+            <p className="text-[13px] leading-relaxed text-ink">
+              서버 상태가 충돌하거나 삭제 경계가 모호해 원본을 덮어쓰지 않습니다. 데이터 폴더를 확인한 뒤 보존한 녹음을 유지하거나 명시적으로 버리세요.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void fetch("/api/library/reveal", { method: "POST" }).catch(() => {});
+              }}
+              className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent"
+            >
+              데이터 폴더 열기
+            </button>
+          </div>
+        )}
+        {phase === "saved" && finalizeResult && (
+          <RecorderFinalizeResultView result={finalizeResult} onRefresh={() => void probe()} />
+        )}
       </div>
     </section>
   );

@@ -2,7 +2,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { meetingDir, meetingPaths, meetingsRoot } from "@/lib/paths";
+import { dataRoot, libraryPath, meetingDir, meetingPaths, meetingsRoot } from "@/lib/paths";
 
 describe("meeting paths", () => {
   it("builds artifact paths under data/meetings/{id}/", () => {
@@ -22,5 +22,10 @@ describe("meeting paths", () => {
   it("refuses unsafe ids (path traversal defense)", () => {
     expect(() => meetingDir("../escape")).toThrow();
     expect(() => meetingPaths("/etc")).toThrow();
+  });
+
+  it("keeps the central library next to the stable meetings root", () => {
+    expect(libraryPath()).toBe(join(dataRoot(), "library.json"));
+    expect(meetingsRoot()).toBe(join(dataRoot(), "meetings"));
   });
 });

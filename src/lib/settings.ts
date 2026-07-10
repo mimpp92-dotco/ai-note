@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { atomicWriteFile } from "@/lib/atomicWrite";
+import { normalizeLoopbackHttpBaseUrl } from "@/lib/localEndpoint";
 import { LLM_PROVIDERS, type LlmSettings } from "@/services/llm/types";
 
 // LLM settings live in data/settings.json — app-api is the single writer, the
@@ -22,7 +23,7 @@ export async function readSettings(): Promise<LlmSettings | null> {
     return {
       provider: parsed.provider,
       ...(parsed.model ? { model: parsed.model } : {}),
-      ...(parsed.baseUrl ? { baseUrl: parsed.baseUrl } : {}),
+      ...(parsed.provider === "ollama" && parsed.baseUrl ? { baseUrl: parsed.baseUrl } : {}),
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -34,5 +35,13 @@ export async function readSettings(): Promise<LlmSettings | null> {
 }
 
 export async function writeSettings(settings: LlmSettings): Promise<void> {
-  await atomicWriteFile(settingsPath(), JSON.stringify(settings, null, 2) + "\n");
+  const model = settings.model?.trim();
+  const normalized: LlmSettings = {
+    provider: settings.provider,
+    ...(model ? { model } : {}),
+    ...(settings.provider === "ollama" && settings.baseUrl
+      ? { baseUrl: normalizeLoopbackHttpBaseUrl(settings.baseUrl) }
+      : {}),
+  };
+  await atomicWriteFile(settingsPath(), JSON.stringify(normalized, null, 2) + "\n");
 }

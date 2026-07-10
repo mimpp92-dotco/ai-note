@@ -46,9 +46,8 @@ describe("buildSummaryPrompt", () => {
   });
 });
 
-// Drift guard: the correction prompt is mirrored in docs and the manual skill.
-// summarizePrompts.ts is the canonical copy — assert the mirrors quote it verbatim
-// so they can never silently drift again.
+// Drift guard: summarizePrompts.ts is canonical and ARCHITECTURE mirrors it.
+// The manual command is API-only and intentionally owns no prompt text.
 describe("correction-prompt drift guard", () => {
   const read = (rel: string) => readFileSync(join(process.cwd(), rel), "utf-8");
 
@@ -58,9 +57,10 @@ describe("correction-prompt drift guard", () => {
     expect(doc).toContain(CORRECTION_RULES.outputOnly);
   });
 
-  it("the /meeting-summarize skill mirrors the canonical rules verbatim", () => {
+  it("the /meeting-summarize skill delegates to the app and contains no prompt mirror", () => {
     const doc = read(".claude/commands/meeting-summarize.md");
-    expect(doc).toContain(CORRECTION_RULES.numberNormalization);
-    expect(doc).toContain(CORRECTION_RULES.outputOnly);
+    expect(doc).toContain("scripts/meeting-summarize.mjs");
+    expect(doc).not.toContain(CORRECTION_RULES.numberNormalization);
+    expect(doc).not.toContain(CORRECTION_RULES.outputOnly);
   });
 });

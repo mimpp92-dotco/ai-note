@@ -1,27 +1,34 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { EditableTitle } from "@/components/EditableTitle";
+import { LibraryLocationPicker } from "@/components/LibraryLocationPicker";
+import { useOptionalLibrary } from "@/components/LibraryProvider";
+import { GuardedLink as Link } from "@/components/RecorderNavigation";
 import type { MeetingListItem } from "@/components/MeetingList";
 import type { MeetingStatus, StatusError } from "@/domain/meeting";
 import { formatMeetingDate, STATUS_LABELS } from "@/lib/meetingLabels";
 
-type Mode = "idle" | "menu" | "editing" | "confirming";
+type Mode = "idle" | "menu" | "editing" | "moving" | "confirming";
 
 // One meeting card + its row actions (kebab → 이름 수정 / 삭제). The kebab and its
 // menu are siblings of the card <Link> (interactive controls cannot nest inside an
 // anchor). 이름 수정 is offered only once summarized; 삭제 is always available.
 export function MeetingRow({
   meeting,
+  detailHref,
   onRenamed,
   onDeleted,
+  onMoved,
 }: {
   meeting: MeetingListItem;
+  detailHref?: string;
   onRenamed: (id: string, title: string) => void;
   onDeleted: (id: string) => void;
+  onMoved?: (id: string, actual: { workspaceId: string; folderId: string | null }) => void;
 }) {
+  const library = useOptionalLibrary();
   const [mode, setMode] = useState<Mode>("idle");
   const [deleting, setDeleting] = useState(false);
   const [delError, setDelError] = useState<string | null>(null);
@@ -30,6 +37,7 @@ export function MeetingRow({
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   const canRename = meeting.status === "summarized";
+  const canMove = library?.mode === "ready" && library.version !== null && library.library !== null;
 
   // Close the menu on an outside click (only while the menu is open, so it never
   // interferes with the edit/confirm sub-UIs).
@@ -93,7 +101,7 @@ export function MeetingRow({
   return (
     <li ref={containerRef} className={`relative min-w-0 ${mode === "menu" ? "z-30" : "z-0"}`}>
       <Link
-        href={`/meetings/${meeting.id}`}
+        href={detailHref ?? `/meetings/${meeting.id}`}
         className="flex min-w-0 flex-col items-start justify-between gap-2 rounded-[14px] border border-line bg-panel py-4 pl-5 pr-14 shadow-[0_1px_2px_rgba(42,36,32,.04)] transition-colors hover:bg-chrome sm:flex-row sm:items-center sm:gap-4"
       >
         <span className="min-w-0">
@@ -101,6 +109,13 @@ export function MeetingRow({
           <span className="mt-0.5 block font-mono text-[12px] text-inkSoft">
             {formatMeetingDate(meeting.startedAt)}
           </span>
+          {meeting.location && (
+            <span className="mt-1 block truncate text-[12px] text-inkSoft">
+              {meeting.location.breadcrumb.length > 0
+                ? meeting.location.breadcrumb.join(" / ")
+                : "미분류"}
+            </span>
+          )}
         </span>
         <StatusBadge status={meeting.status} error={meeting.error} />
       </Link>
@@ -124,6 +139,15 @@ export function MeetingRow({
 
       {mode === "menu" && (
         <div className="absolute right-3 top-12 z-40 w-32 overflow-hidden rounded-xl border border-line bg-panel py-1 shadow-[0_8px_28px_-12px_rgba(42,36,32,.18)]">
+          {canMove && (
+            <button
+              type="button"
+              onClick={() => setMode("moving")}
+              className="block w-full px-4 py-2 text-left text-[13px] text-ink hover:bg-soft"
+            >
+              이동
+            </button>
+          )}
           {canRename && (
             <button
               type="button"
@@ -141,6 +165,29 @@ export function MeetingRow({
             삭제
           </button>
         </div>
+      )}
+
+      {mode === "moving" && canMove && (
+        <LibraryLocationPicker
+          kind="meeting"
+          meetingId={meeting.id}
+          current={meeting.location
+            ? { workspaceId: meeting.location.workspaceId, folderId: meeting.location.folderId }
+            : null}
+          trigger={triggerRef.current}
+          onClose={() => setMode("idle")}
+          onMoved={(actual) => {
+            const row = containerRef.current;
+            const next = row?.nextElementSibling?.querySelector<HTMLButtonElement>("button[aria-label$='관리 메뉴']");
+            const previous = row?.previousElementSibling?.querySelector<HTMLButtonElement>("button[aria-label$='관리 메뉴']");
+            setMode("idle");
+            onMoved?.(meeting.id, actual);
+            window.setTimeout(() => {
+              if (document.contains(triggerRef.current)) triggerRef.current?.focus();
+              else (next ?? previous ?? document.querySelector<HTMLElement>("#main h1"))?.focus();
+            }, 0);
+          }}
+        />
       )}
 
       {mode === "confirming" && (

@@ -1,14 +1,24 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { CopyButton } from "@/components/CopyButton";
+import { LibraryLocationPicker } from "@/components/LibraryLocationPicker";
+import { useOptionalLibrary } from "@/components/LibraryProvider";
+import { GuardedLink as Link } from "@/components/RecorderNavigation";
+import { useOptionalRecorderSession } from "@/components/RecorderSessionProvider";
 import { type LlmReadiness, getLlmReadiness } from "@/components/healthStatus";
 import { useHealth } from "@/components/useHealth";
-import type { StatusJson } from "@/domain/meeting";
+import type {
+  ErrorAction,
+  MeetingStatus,
+  ReviewInput,
+} from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
+import { resolvePostMoveDetailSource } from "@/lib/detailSource";
+import { formatLocationBreadcrumb } from "@/lib/libraryClient";
+import type { LibraryMeetingScope } from "@/lib/libraryQuery";
 import { formatMeetingDate, STATUS_LABELS } from "@/lib/meetingLabels";
 import { formatDuration } from "@/lib/recorder";
 import { formatSummaryMarkdown } from "@/lib/summaryMarkdown";
@@ -19,9 +29,18 @@ export interface Segment {
   text: string;
 }
 
+export interface MeetingDetailStatus {
+  id: string;
+  title: string;
+  status: MeetingStatus;
+  error: { message: string; action: ErrorAction } | null;
+  startedAt: string;
+  review: ReviewInput;
+}
+
 export interface MeetingDetailData {
   id: string;
-  status: StatusJson;
+  status: MeetingDetailStatus;
   transcript: { text: string; corrected: boolean };
   segments: Segment[];
   summary: Summary | null;
@@ -30,6 +49,12 @@ export interface MeetingDetailData {
   // from isSummarizeInflight). The manual re-summarize poll uses it to detect
   // completion even when the summary content is unchanged. Optional/defaults false.
   resummarizeInflight?: boolean;
+  backHref?: string;
+  location?: { workspaceId: string; folderId: string | null } | null;
+  source?: Exclude<LibraryMeetingScope, { kind: "global" }>;
+  sourceAccepted?: boolean;
+  canonicalDetailHref?: string;
+  attentionAfter?: string | null;
 }
 
 // The server may run up to three sequential LLM calls per (re)summarize — correction,
@@ -67,16 +92,60 @@ export function MeetingDetailView({
   summary,
   hasAudio,
   resummarizeInflight = false,
+  backHref = "/",
+  location = null,
+  source,
+  sourceAccepted = true,
+  canonicalDetailHref,
+  attentionAfter = null,
 }: MeetingDetailData) {
   const router = useRouter();
+  const recorderSession = useOptionalRecorderSession();
   const [tab, setTab] = useState<"script" | "summary">("script");
   const [resummarizing, setResummarizing] = useState(false);
   const [resummarizeError, setResummarizeError] = useState<string | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveTrigger, setMoveTrigger] = useState<HTMLElement | null>(null);
+  const [currentLocation, setCurrentLocation] = useState(location);
+  const [currentSource, setCurrentSource] = useState(source);
+  const [currentBackHref, setCurrentBackHref] = useState(backHref);
+  const [moveMessage, setMoveMessage] = useState<string | null>(null);
 
   // Shared health hook lets transcribed meetings distinguish ready, missing, and
   // unavailable summarizers before promising automatic processing.
   const { llm } = useHealth();
+  const library = useOptionalLibrary();
+  const refreshSummaryWork = library?.refreshSummaryWork;
   const readiness = getLlmReadiness(llm);
+  const observedGenerationEpochRef = useRef(library?.generationEpoch ?? 0);
+
+  useEffect(() => {
+    setCurrentLocation(location);
+    setCurrentSource(source);
+    setCurrentBackHref(backHref);
+  }, [backHref, location, source]);
+
+  useEffect(() => {
+    if (sourceAccepted || !canonicalDetailHref) return;
+    router.replace(canonicalDetailHref);
+  }, [canonicalDetailHref, router, sourceAccepted]);
+
+  useEffect(() => {
+    const generationEpoch = library?.generationEpoch ?? 0;
+    if (observedGenerationEpochRef.current === generationEpoch) return;
+    observedGenerationEpochRef.current = generationEpoch;
+    setMoveOpen(false);
+    setMoveTrigger(null);
+    setMoveMessage(null);
+    // A rebuild creates a new placement generation. Refresh the RSC so the
+    // meeting's effective location and source-safe back link are resolved from
+    // the new registry instead of retaining stale workspace/folder IDs.
+    router.refresh();
+  }, [library?.generationEpoch, router]);
+
+  useEffect(() => {
+    if (attentionAfter) refreshSummaryWork?.(attentionAfter);
+  }, [attentionAfter, refreshSummaryWork]);
 
   // A (re)summarize is async: the route returns 202 and the work runs in the
   // background under an in-flight lock. `resummarizeInflight` is that lock, derived by
@@ -181,17 +250,95 @@ export function MeetingDetailView({
   return (
     <main id="main" className="max-w-5xl space-y-8 px-6 py-12">
       <div>
-        <Link href="/" className="text-[13px] text-inkSoft hover:text-accent">
+        <Link href={currentBackHref} className="inline-flex min-h-11 items-center text-[13px] text-inkSoft hover:text-accent">
           ← 목록
         </Link>
         <div className="mt-3 flex items-center justify-between gap-4">
           <h1 className="text-2xl font-bold tracking-tight text-ink">{status.title}</h1>
-          <span className="shrink-0 rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
-            {STATUS_LABELS[inProgress ? "summarizing" : status.status]}
-          </span>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {library?.mode === "ready" && library.version && library.library && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  setMoveTrigger(event.currentTarget);
+                  setMoveOpen(true);
+                  setMoveMessage(null);
+                }}
+                className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent"
+              >
+                회의 이동
+              </button>
+            )}
+            <span className="rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
+              {STATUS_LABELS[inProgress ? "summarizing" : status.status]}
+            </span>
+          </div>
         </div>
         <p className="mt-1 font-mono text-[12px] text-inkSoft">{formatMeetingDate(status.startedAt)}</p>
+        {currentLocation && library?.library && (
+          <p className="mt-2 text-[13px] text-inkSoft">
+            위치: {formatLocationBreadcrumb(
+              library.library,
+              currentLocation.workspaceId,
+              currentLocation.folderId,
+            ).join(" / ")}
+          </p>
+        )}
+        {moveMessage && <p role="status" aria-live="polite" className="mt-2 text-[13px] text-success">{moveMessage}</p>}
       </div>
+
+      {moveOpen && (
+        <LibraryLocationPicker
+          kind="meeting"
+          meetingId={id}
+          current={currentLocation}
+          trigger={moveTrigger}
+          onClose={() => setMoveOpen(false)}
+          onMoved={(actual) => {
+            const fallbackSource = currentSource ?? (actual.folderId === null
+              ? { kind: "unfiled" as const, workspaceId: actual.workspaceId }
+              : { kind: "folder" as const, workspaceId: actual.workspaceId, folderId: actual.folderId });
+            const next = resolvePostMoveDetailSource({
+              meetingId: id,
+              source: fallbackSource,
+              actual,
+              attentionAfter,
+            });
+            setCurrentLocation(actual);
+            setCurrentSource(next.source);
+            setCurrentBackHref(next.backHref);
+            setMoveMessage(next.sourceChanged
+              ? "회의를 이동해 목록 기준도 실제 저장 위치로 바꿨습니다."
+              : "회의를 이동했습니다. 현재 목록에서도 계속 볼 수 있습니다.");
+            const commit = () => router.replace(next.detailHref);
+            if (recorderSession) recorderSession.requestNavigation(next.detailHref, commit);
+            else commit();
+          }}
+        />
+      )}
+
+      {attentionAfter && library?.summaryWork && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-line bg-panel px-4 py-3">
+          {library.summaryWork.summaryWork.attention ? (
+            <Link
+              href={`/meetings/${library.summaryWork.summaryWork.attention.meetingId}?attentionAfter=${encodeURIComponent(library.summaryWork.summaryWork.attention.cursor)}`}
+              className="inline-flex min-h-11 items-center rounded-full border border-line px-4 text-[13px] font-semibold text-accent"
+            >
+              다음 확인 필요 회의
+            </Link>
+          ) : library.summaryWork.summaryWork.needsAttention > 0 ? (
+            <button
+              type="button"
+              onClick={() => library.refreshSummaryWork(null)}
+              className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent"
+            >
+              처음부터 다시 확인
+            </button>
+          ) : (
+            <span className="text-[13px] text-success">확인할 회의를 모두 살펴봤습니다.</span>
+          )}
+        </div>
+      )}
 
       <StatusCard
         status={status}
@@ -353,7 +500,7 @@ function StatusCard({
   onRetry,
   retrying,
 }: {
-  status: StatusJson;
+  status: MeetingDetailStatus;
   readiness: LlmReadiness;
   inProgress: boolean;
   onRetry: () => void;
@@ -568,7 +715,7 @@ function SummaryTab({ summary }: { summary: Summary | null }) {
   );
 }
 
-function ReviewForm({ id, review }: { id: string; review: StatusJson["review"] }) {
+function ReviewForm({ id, review }: { id: string; review: ReviewInput }) {
   const [participants, setParticipants] = useState(review.participants.join(", "));
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);

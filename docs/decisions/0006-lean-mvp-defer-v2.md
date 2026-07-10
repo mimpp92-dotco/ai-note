@@ -13,4 +13,4 @@ chunk-append 크래시복구·전체 FSM+워치독·map-reduce·auto-queue·상�
 MVP-0에 풀 견고성 — 30분 step 예산 초과·과설계.
 
 ## 영향받는 곳
-`src/components/useRecorder.ts`, `src/lib/recorder.ts`. 트레이드오프: 긴 녹음 크래시 시 유실 가능(`beforeunload`로 80% 방어), 긴 회의는 잘림 경고.
+`src/components/useRecorder.ts`, `src/lib/recorder.ts`. 트레이드오프: 긴 녹음 크래시 시 유실 가능(`beforeunload`로 80% 방어), 긴 회의는 잘림 경고. 이 결정은 recorder chunk 복구 등 전면적 v2 견고성 연기에 관한 것이며, 중앙 library registry에 필요한 제한된 queue·내구 commit은 ADR 0011로 현재 도입한다.

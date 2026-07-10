@@ -8,6 +8,7 @@ import { MeetingDetailView } from "@/components/MeetingDetailView";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
 import { Recorder } from "@/components/Recorder";
+import { RecorderSessionProvider } from "@/components/RecorderSessionProvider";
 import { SettingsForm } from "@/components/SettingsForm";
 import { Sidebar } from "@/components/Sidebar";
 import type { LlmHealthState, WhisperHealthState } from "@/components/healthStatus";
@@ -152,7 +153,7 @@ describe("splitBacklog — home banner counts", () => {
 
 describe("Recorder — responsive layout", () => {
   it("모바일에서 녹음 버튼이 본문 옆으로 밀어내지 않도록 줄바꿈 class를 가진다", () => {
-    render(<Recorder />);
+    render(<RecorderSessionProvider><Recorder /></RecorderSessionProvider>);
     const heading = screen.getByRole("heading", { name: "회의 녹음" });
     expect(heading.parentElement?.parentElement).toHaveClass("flex-col");
     expect(heading.parentElement?.parentElement).toHaveClass("sm:flex-row");

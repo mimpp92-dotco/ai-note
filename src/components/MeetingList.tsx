@@ -9,6 +9,7 @@ export interface MeetingListItem {
   status: MeetingStatus;
   startedAt: string;
   error: StatusError | null;
+  location?: { workspaceId: string; folderId: string | null; breadcrumb: string[] };
 }
 
 // Meeting cards (title · date · status label). Rendered inside the client
@@ -18,15 +19,26 @@ export function MeetingList({
   meetings,
   onRenamed,
   onDeleted,
+  onMoved,
+  detailHref,
 }: {
   meetings: MeetingListItem[];
   onRenamed: (id: string, title: string) => void;
   onDeleted: (id: string) => void;
+  onMoved?: (id: string, actual: { workspaceId: string; folderId: string | null }) => void;
+  detailHref?: (meeting: MeetingListItem) => string;
 }) {
   return (
     <ul className="min-w-0 space-y-3">
       {meetings.map((m) => (
-        <MeetingRow key={m.id} meeting={m} onRenamed={onRenamed} onDeleted={onDeleted} />
+        <MeetingRow
+          key={m.id}
+          meeting={m}
+          detailHref={detailHref?.(m)}
+          onRenamed={onRenamed}
+          onDeleted={onDeleted}
+          onMoved={onMoved}
+        />
       ))}
     </ul>
   );

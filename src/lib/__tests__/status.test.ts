@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { mkdtempSync, rmSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { StatusJson } from "@/domain/meeting";
 import { meetingPaths } from "@/lib/paths";
-import { deriveStatus, initialStatus } from "@/lib/status";
+import { deriveStatus, initialStatus, readStatus } from "@/lib/status";
 
 // deriveStatus reads artifact files under meetingsRoot() = cwd/data/meetings, so
 // isolate by chdir-ing into a temp dir (same harness as settings.test.ts).
@@ -107,6 +107,41 @@ describe("deriveStatus — titleOverride", () => {
     );
     expect(status.status).toBe("summarized"); // rank promotion not skipped by override
     expect(status.title).toBe("내가 고친 제목");
+  });
+});
+
+describe("readStatus runtime validation", () => {
+  it("normalizes legacy optional fields and preserves unknown future fields", async () => {
+    const id = "m-runtime-legacy";
+    const value = base(id) as StatusJson & { futureField?: unknown; review?: StatusJson["review"] };
+    Reflect.deleteProperty(value, "review");
+    value.futureField = { phase: "future" };
+    await mkdir(meetingPaths(id).dir, { recursive: true });
+    await writeFile(meetingPaths(id).status, JSON.stringify(value));
+
+    const parsed = await readStatus(id);
+    expect(parsed?.review).toEqual({ participants: [] });
+    expect((parsed as StatusJson & { futureField?: unknown })?.futureField).toEqual({ phase: "future" });
+  });
+
+  it("treats invalid known fields and ID mismatch as corrupt", async () => {
+    for (const [id, value] of [
+      ["m-invalid-known", { ...base("m-invalid-known"), durationMs: -1 }],
+      ["m-id-mismatch", base("different-id")],
+    ] as const) {
+      await mkdir(meetingPaths(id).dir, { recursive: true });
+      await writeFile(meetingPaths(id).status, JSON.stringify(value));
+      await expect(readStatus(id)).resolves.toBeNull();
+    }
+  });
+
+  it("does not follow a symlinked status file", async () => {
+    const id = "m-status-symlink";
+    const outside = join(workDir, "outside-status.json");
+    await writeFile(outside, JSON.stringify(base(id)));
+    await mkdir(meetingPaths(id).dir, { recursive: true });
+    await symlink(outside, meetingPaths(id).status);
+    await expect(readStatus(id)).resolves.toBeNull();
   });
 });
 

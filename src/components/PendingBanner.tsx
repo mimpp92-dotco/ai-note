@@ -1,5 +1,4 @@
-import Link from "next/link";
-
+import { GuardedLink as Link } from "@/components/RecorderNavigation";
 import type { LlmReadiness } from "@/components/healthStatus";
 
 // Home backlog banner for meetings transcribed but not yet summarized. The app
@@ -11,17 +10,19 @@ export function PendingBanner({
   count,
   needsAttention = 0,
   readiness,
+  attention = null,
 }: {
   count: number;
   needsAttention?: number;
   readiness: LlmReadiness;
+  attention?: { meetingId: string; cursor: string } | null;
 }) {
   if (count <= 0 && needsAttention <= 0) return null;
 
   if (readiness === "ready") {
     const processing = count > 0;
     return (
-      <div className="flex items-center gap-2 rounded-[14px] border border-line bg-panel px-5 py-4">
+      <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-line bg-panel px-5 py-4">
         {processing && (
           <span
             className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent motion-reduce:animate-none"
@@ -39,6 +40,14 @@ export function PendingBanner({
             <span className="font-semibold text-warn">{needsAttention}개 확인 필요</span>
           )}
         </p>
+        {needsAttention > 0 && attention && (
+          <Link
+            href={`/meetings/${attention.meetingId}?attentionAfter=${encodeURIComponent(attention.cursor)}`}
+            className="ml-auto min-h-11 shrink-0 rounded-md border border-line bg-panel px-3 py-2.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft"
+          >
+            확인할 회의 열기
+          </Link>
+        )}
       </div>
     );
   }

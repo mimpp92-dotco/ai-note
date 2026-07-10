@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 
-import { Sidebar } from "@/components/Sidebar";
+import { LibraryProvider } from "@/components/LibraryProvider";
+import { LibraryNavigation } from "@/components/LibraryNavigation";
+import { RecorderSessionProvider } from "@/components/RecorderSessionProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -20,10 +22,16 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         >
           본문으로 건너뛰기
         </a>
-        <div className="flex min-h-screen w-full flex-col overflow-x-hidden md:flex-row">
-          <Sidebar />
-          <div className="min-w-0 flex-1">{children}</div>
-        </div>
+        <LibraryProvider>
+          <RecorderSessionProvider>
+            <div className="flex min-h-screen w-full flex-col overflow-x-hidden lg:flex-row">
+              <Suspense fallback={<div className="h-16 w-full border-b border-line bg-chrome lg:h-screen lg:w-[272px] lg:border-b-0 lg:border-r" />}>
+                <LibraryNavigation />
+              </Suspense>
+              <div id="app-content" className="min-w-0 flex-1">{children}</div>
+            </div>
+          </RecorderSessionProvider>
+        </LibraryProvider>
       </body>
     </html>
   );

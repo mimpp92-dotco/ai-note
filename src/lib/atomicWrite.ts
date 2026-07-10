@@ -1,29 +1,41 @@
-import { mkdir, open, rename, rm } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-// Contract: every artifact is written temp → fsync → rename so a crash mid-write
-// never leaves a partially-written file at the real path.
+import {
+  createDirectorySyncCapability,
+  durableAtomicReplace,
+  type DurableCommitResult,
+} from "@/lib/durableFileOps";
 
-let tmpCounter = 0;
+// Compatibility wrapper: temp → file fsync → rename → parent-directory fsync.
+// Callers that need to coordinate a durability-pending result use
+// durableFileOps directly; legacy callers still receive the typed result.
+
+const capabilities = new Map<string, ReturnType<typeof createDirectorySyncCapability>>();
+
+export class AtomicWriteError extends Error {
+  readonly code = "atomic_write_not_committed";
+
+  constructor() {
+    super("atomic_write_not_committed");
+    this.name = "AtomicWriteError";
+  }
+}
 
 export async function atomicWriteFile(
   filePath: string,
   data: string | Uint8Array,
-): Promise<void> {
-  await mkdir(dirname(filePath), { recursive: true });
-  tmpCounter += 1;
-  const tmpPath = `${filePath}.${process.pid}.${tmpCounter}.tmp`;
-  try {
-    const handle = await open(tmpPath, "w");
-    try {
-      await handle.writeFile(data);
-      await handle.sync(); // fsync: flush to disk before the rename
-    } finally {
-      await handle.close();
-    }
-    await rename(tmpPath, filePath);
-  } catch (err) {
-    await rm(tmpPath, { force: true }).catch(() => {});
-    throw err;
-  }
+): Promise<DurableCommitResult> {
+  const parent = dirname(filePath);
+  await mkdir(parent, { recursive: true });
+  const capability = capabilities.get(parent) ?? createDirectorySyncCapability();
+  capabilities.set(parent, capability);
+  const result = await durableAtomicReplace({
+    rootPath: parent,
+    targetPath: filePath,
+    data,
+    capability,
+  });
+  if (result.state === "not_committed") throw new AtomicWriteError();
+  return result;
 }

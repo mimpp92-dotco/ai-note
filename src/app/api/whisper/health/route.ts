@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-
+import { guardLocalApiRequest } from "@/lib/localRequestGuard";
+import { jsonNoStore } from "@/lib/publicApi";
 import { fetchWhisperHealth } from "@/services/whisperClient";
 
 // Same-origin proxy to the local whisper service /health (127.0.0.1:8123, read
@@ -8,12 +8,14 @@ import { fetchWhisperHealth } from "@/services/whisperClient";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = guardLocalApiRequest(request);
+  if (denied) return denied;
   try {
     const health = await fetchWhisperHealth();
-    return NextResponse.json({ connected: true, ...health });
+    return jsonNoStore({ connected: true, ...health });
   } catch {
-    return NextResponse.json(
+    return jsonNoStore(
       { connected: false, ok: false, ready: false, model: null },
       { status: 200 },
     );

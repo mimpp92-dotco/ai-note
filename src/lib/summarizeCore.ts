@@ -1,10 +1,11 @@
-import { atomicWriteFile } from "@/lib/atomicWrite";
 import { actionItemSchema, summarySchema } from "@/domain/summarySchema";
 import type { ActionItem, Summary } from "@/domain/summary";
 
 // Deterministic summarize core (docs/ARCHITECTURE.md). The LLM work is done by the
 // `/meeting-summarize` command; this module only parses/validates its raw output
-// and writes the two regeneratable artifacts atomically. NO LLM calls here ($0).
+// and returns staging payloads. It deliberately has no path or filesystem write
+// capability; the private summarize publisher owns canonical publication.
+// NO LLM calls here ($0).
 //
 // Contract guarantees enforced regardless of what the model returned:
 // - `purpose` and `highlights` are always present (fallback fills purpose:"",
@@ -28,8 +29,6 @@ export interface SummarizeInput {
   correction: string;
   /** LLM summary output (a JSON object, possibly fenced or wrapped in prose). */
   summaryOutput: string;
-  transcriptPath: string;
-  summaryPath: string;
 }
 
 export interface SummarizeResult {
@@ -52,12 +51,6 @@ export async function summarizeCore(
   if (truncated && !summary.followups.includes(TRUNCATION_NOTICE)) {
     summary.followups.push(TRUNCATION_NOTICE);
   }
-
-  await atomicWriteFile(input.transcriptPath, transcript);
-  await atomicWriteFile(
-    input.summaryPath,
-    `${JSON.stringify(summary, null, 2)}\n`,
-  );
 
   return { transcript, summary, usedFallback, truncated };
 }
