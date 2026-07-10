@@ -1,4 +1,4 @@
-import { runProcess } from "@/services/llm/exec";
+import { LLM_GENERATION_TIMEOUT_MS, runProcess } from "@/services/llm/exec";
 import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services/llm/types";
 
 // Claude Code CLI backend. `claude -p` runs non-interactively and reads the
@@ -13,7 +13,10 @@ export class ClaudeCliAdapter implements LlmAdapter {
   // `opts.json` is ignored: summarizeCore extracts JSON from plain text output.
   async run(prompt: string): Promise<string> {
     const args = ["-p", ...(this.settings.model ? ["--model", this.settings.model] : [])];
-    const { stdout } = await runProcess("claude", args, { stdin: prompt });
+    const { stdout } = await runProcess("claude", args, {
+      stdin: prompt,
+      timeoutMs: LLM_GENERATION_TIMEOUT_MS,
+    });
     return stdout.trim();
   }
 

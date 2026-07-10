@@ -102,13 +102,17 @@ export async function runSummarize(
       await writeStatus(id, { ...fresh, status: "summarized", error: null, summarizeAttempts: 0 });
       return { ok: true };
     } catch (err) {
-      // Fall back to `transcribed` + a retryable error and bump the attempt count
-      // so the worker backs off instead of re-spawning the CLI every poll.
+      // Bump the attempt count so the worker backs off instead of re-spawning the
+      // CLI every poll, and attach a retryable error. A failed *re-summarize* (an
+      // existing summary.json) must keep `summarized` so the still-valid prior
+      // summary stays visible and the failure isn't silently masked by deriveStatus
+      // promoting it back; a first-time summarize (no summary.json) degrades to
+      // `transcribed` as before.
       const attempts = (status.summarizeAttempts ?? 0) + 1;
       const message = String((err instanceof Error ? err.message : err) ?? err).slice(0, 300);
       await writeStatus(id, {
         ...((await readStatus(id)) ?? status),
-        status: "transcribed",
+        status: existsSync(p.summary) ? "summarized" : "transcribed",
         summarizeAttempts: attempts,
         error: { message, action: "retry_summary" },
       });

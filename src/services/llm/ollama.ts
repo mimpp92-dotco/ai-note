@@ -1,3 +1,4 @@
+import { LLM_GENERATION_TIMEOUT_MS } from "@/services/llm/exec";
 import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services/llm/types";
 
 // Ollama backend — a local model daemon on 127.0.0.1. The daemon is frequently
@@ -21,7 +22,7 @@ export class OllamaAdapter implements LlmAdapter {
     // Bound the call so a stuck daemon can't wedge the worker (CLI adapters get
     // this from exec.ts; fetch needs an explicit AbortController).
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 180_000);
+    const timer = setTimeout(() => controller.abort(), LLM_GENERATION_TIMEOUT_MS);
     try {
       const res = await fetch(`${this.baseUrl}/api/generate`, {
         method: "POST",

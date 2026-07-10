@@ -24,17 +24,21 @@ const RAW = [
 let workDir: string;
 let originalCwd: string;
 let savedFakeLlm: string | undefined;
+let savedFakeLlmFail: string | undefined;
 
 beforeEach(() => {
   originalCwd = process.cwd();
   workDir = mkdtempSync(join(tmpdir(), "summarize-run-"));
   process.chdir(workDir);
   savedFakeLlm = process.env.FAKE_LLM;
+  savedFakeLlmFail = process.env.FAKE_LLM_FAIL;
 });
 
 afterEach(() => {
   if (savedFakeLlm === undefined) delete process.env.FAKE_LLM;
   else process.env.FAKE_LLM = savedFakeLlm;
+  if (savedFakeLlmFail === undefined) delete process.env.FAKE_LLM_FAIL;
+  else process.env.FAKE_LLM_FAIL = savedFakeLlmFail;
   process.chdir(originalCwd);
   rmSync(workDir, { recursive: true, force: true });
 });
@@ -134,6 +138,50 @@ describe("runSummarize", () => {
     await writeStatus(id, { ...st!, titleOverride: "내가 고친 제목" });
     expect(await runSummarize(id, { force: true })).toEqual({ ok: true });
     expect((await readStatus(id))?.titleOverride).toBe("내가 고친 제목");
+  });
+
+  it("a failed re-summarize keeps status summarized and preserves the old summary", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-resummarize-fail";
+    await seedTranscribed(id);
+    expect(await runSummarize(id)).toEqual({ ok: true });
+
+    const p = meetingPaths(id);
+    const priorSummary = await readFile(p.summary, "utf-8");
+
+    // Force a re-summarize that fails mid-run (FAKE_LLM_FAIL makes run() throw).
+    process.env.FAKE_LLM_FAIL = "1";
+    const result = await runSummarize(id, { force: true });
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ reason: "error" });
+
+    const status = await readStatus(id);
+    expect(status?.status).toBe("summarized"); // NOT demoted to transcribed
+    expect(status?.error?.action).toBe("retry_summary");
+    expect(status?.summarizeAttempts).toBe(1);
+    // The still-valid prior summary survives the failed regeneration.
+    expect(existsSync(p.summary)).toBe(true);
+    expect(await readFile(p.summary, "utf-8")).toBe(priorSummary);
+  });
+
+  it("a first-time summarize failure (no prior summary) degrades to transcribed", async () => {
+    process.env.FAKE_LLM = "1";
+    process.env.FAKE_LLM_FAIL = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-first-fail";
+    await seedTranscribed(id);
+
+    const result = await runSummarize(id);
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ reason: "error" });
+
+    const p = meetingPaths(id);
+    expect(existsSync(p.summary)).toBe(false);
+    const status = await readStatus(id);
+    expect(status?.status).toBe("transcribed");
+    expect(status?.error?.action).toBe("retry_summary");
+    expect(status?.summarizeAttempts).toBe(1);
   });
 
   it("refuses (in_progress) when a summarize is already in-flight, even with force", async () => {

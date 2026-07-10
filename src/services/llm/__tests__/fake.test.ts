@@ -29,6 +29,18 @@ describe("FakeAdapter", () => {
     expect(Math.abs(out.length - text.length)).toBeLessThanOrEqual(1);
   });
 
+  it("throws from run() when FAKE_LLM_FAIL=1 (failure-path seam)", async () => {
+    const saved = process.env.FAKE_LLM_FAIL;
+    process.env.FAKE_LLM_FAIL = "1";
+    try {
+      await expect(new FakeAdapter().run("아무 프롬프트")).rejects.toThrow();
+      await expect(new FakeAdapter().run("요약", { json: true })).rejects.toThrow();
+    } finally {
+      if (saved === undefined) delete process.env.FAKE_LLM_FAIL;
+      else process.env.FAKE_LLM_FAIL = saved;
+    }
+  });
+
   it("reports healthy", async () => {
     const health = await new FakeAdapter().health();
     expect(health.ok).toBe(true);

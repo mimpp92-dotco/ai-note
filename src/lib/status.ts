@@ -123,9 +123,13 @@ export function deriveStatus(id: string, persisted: StatusJson): { status: Statu
   }
 
   // Rank: summary.json existence always promotes to summarized (independent of
-  // the title branch above).
+  // the title branch above). A re-summarize failure leaves a retry_summary error
+  // that must survive this promotion — the GET route persists the derived status,
+  // so clearing it here would silently erase the failure banner. Any other stale
+  // error is cleared on promotion as before.
   if (hasSummary && rank < RANK.summarized) {
-    s = { ...s, status: "summarized", error: null };
+    const keptError = persisted.error?.action === "retry_summary" ? persisted.error : null;
+    s = { ...s, status: "summarized", error: keptError };
     rank = RANK.summarized;
     changed = true;
   }

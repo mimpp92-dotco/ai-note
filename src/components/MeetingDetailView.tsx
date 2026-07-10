@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { CopyButton } from "@/components/CopyButton";
 import { type LlmReadiness, getLlmReadiness } from "@/components/healthStatus";
@@ -26,7 +26,19 @@ export interface MeetingDetailData {
   segments: Segment[];
   summary: Summary | null;
   hasAudio: boolean;
+  // True while a summarize holds the in-flight lock for this meeting (server-derived
+  // from isSummarizeInflight). The manual re-summarize poll uses it to detect
+  // completion even when the summary content is unchanged. Optional/defaults false.
+  resummarizeInflight?: boolean;
 }
+
+// The server may run up to three sequential LLM calls per (re)summarize — correction,
+// summary, and an optional fallback summary — each capped at 600s
+// (LLM_GENERATION_TIMEOUT_MS in src/services/llm/exec.ts, kept in sync by this
+// derivation). Poll past that worst case before declaring a timeout so a slow
+// long-meeting re-summarize (the exact case the 600s cap exists for) isn't falsely
+// reported as failed. Not imported from exec.ts: that module pulls in node:child_process.
+const RESUMMARIZE_TIMEOUT_MS = 3 * 600_000 + 30_000; // ~30.5 min
 
 function Section({ title, items }: { title: string; items: string[] }) {
   if (items.length === 0) return null;
@@ -47,31 +59,118 @@ function Section({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-export function MeetingDetailView({ id, status, transcript, segments, summary, hasAudio }: MeetingDetailData) {
+export function MeetingDetailView({
+  id,
+  status,
+  transcript,
+  segments,
+  summary,
+  hasAudio,
+  resummarizeInflight = false,
+}: MeetingDetailData) {
   const router = useRouter();
   const [tab, setTab] = useState<"script" | "summary">("script");
-  const [retrying, setRetrying] = useState(false);
+  const [resummarizing, setResummarizing] = useState(false);
+  const [resummarizeError, setResummarizeError] = useState<string | null>(null);
 
   // Shared health hook lets transcribed meetings distinguish ready, missing, and
   // unavailable summarizers before promising automatic processing.
   const { llm } = useHealth();
   const readiness = getLlmReadiness(llm);
 
-  // While summarizing, refresh server data so the finished summary appears without a
-  // manual reload (status is file-derived by the server page).
+  // A manual (re)summarize is async: the route returns 202 and the work runs in the
+  // background. deriveStatus masks the transient `summarizing` as `summarized` while
+  // the previous summary.json still exists, so we can't watch status.status. Completion
+  // is detected instead from (a) the summary content changing, or (b) the server's
+  // in-flight lock clearing after we've observed it held (resummarizeInflight), with a
+  // ceiling as a last resort.
+  const baseSummarySig = useRef<string | null>(null);
+  const seenInflight = useRef(false);
+  const deadline = useRef(0);
+
+  // Auto-summary (worker-driven): the server-derived status is genuinely
+  // `summarizing` (no summary.json yet), so refresh until the summary appears.
+  // Skipped during a manual re-summarize, which drives its own poll below.
   useEffect(() => {
-    if (status.status !== "summarizing") return;
+    if (status.status !== "summarizing" || resummarizing) return;
     const timer = setInterval(() => router.refresh(), 3000);
     return () => clearInterval(timer);
-  }, [status.status, router]);
+  }, [status.status, resummarizing, router]);
 
-  const retry = async () => {
-    setRetrying(true);
-    try {
-      await fetch(`/api/meetings/${id}/summarize`, { method: "POST" });
+  // Manual re-summarize: poll for fresh server data; give up at the ceiling.
+  useEffect(() => {
+    if (!resummarizing) return;
+    const timer = setInterval(() => {
+      if (Date.now() > deadline.current) {
+        setResummarizing(false);
+        setResummarizeError("재요약이 시간 내에 끝나지 않았어요. 잠시 후 다시 시도하세요.");
+        return;
+      }
       router.refresh();
-    } finally {
-      setRetrying(false);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [resummarizing, router]);
+
+  // Detect completion of a manual re-summarize from refreshed server props.
+  useEffect(() => {
+    if (!resummarizing) return;
+
+    // (a) New summary content is an unambiguous success, independent of the lock — the
+    // baseline was captured at begin, so a change means fresh data has arrived. Checked
+    // first so it also covers a run that finishes before a poll observes the lock.
+    const sig = summary ? JSON.stringify(summary) : null;
+    if (sig !== baseSummarySig.current) {
+      setResummarizing(false);
+      setResummarizeError(null);
+      return;
+    }
+
+    // (b) The server still reports the run in flight → keep waiting, and remember we
+    // saw it hold the lock (so its later release is trustworthy).
+    if (resummarizeInflight) {
+      seenInflight.current = true;
+      return;
+    }
+
+    // Lock is clear. Only trust the terminal state once we've actually observed the run
+    // in flight from a fresh poll — otherwise stale props from before the run started
+    // (an old retry_summary error, or the pre-run unlocked state) would read as an
+    // instant completion.
+    if (!seenInflight.current) return;
+    if (status.error?.action === "retry_summary") {
+      setResummarizing(false); // failure surfaces via the StatusCard banner
+    } else {
+      setResummarizing(false); // lock released, no error, no content delta → success (identical regen)
+      setResummarizeError(null);
+    }
+  }, [resummarizing, resummarizeInflight, summary, status]);
+
+  const beginResummarize = async (force: boolean) => {
+    if (resummarizing) return;
+    baseSummarySig.current = summary ? JSON.stringify(summary) : null;
+    seenInflight.current = false;
+    deadline.current = Date.now() + RESUMMARIZE_TIMEOUT_MS;
+    setResummarizeError(null);
+    setResummarizing(true);
+    try {
+      const res = await fetch(`/api/meetings/${id}/summarize`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ resummarize: force }),
+      });
+      // 202 → accepted; the polling effects above take over. Anything else is a
+      // synchronous refusal (409 in-flight/already, 400 no-model, 404) we surface now.
+      if (!res.ok) {
+        setResummarizing(false);
+        setResummarizeError(
+          res.status === 409
+            ? "요약 중에는 다시 요약할 수 없어요. 잠시 후 다시 시도하세요."
+            : "다시 요약에 실패했어요. 잠시 후 다시 시도하세요.",
+        );
+      }
+    } catch {
+      setResummarizing(false);
+      setResummarizeError("다시 요약에 실패했어요. 잠시 후 다시 시도하세요.");
     }
   };
 
@@ -90,7 +189,12 @@ export function MeetingDetailView({ id, status, transcript, segments, summary, h
         <p className="mt-1 font-mono text-[12px] text-inkSoft">{formatMeetingDate(status.startedAt)}</p>
       </div>
 
-      <StatusCard status={status} readiness={readiness} onRetry={() => void retry()} retrying={retrying} />
+      <StatusCard
+        status={status}
+        readiness={readiness}
+        onRetry={() => void beginResummarize(summary != null)}
+        retrying={resummarizing}
+      />
 
       {status.status === "summarized" && summary && (
         <div className="space-y-3">
@@ -100,7 +204,11 @@ export function MeetingDetailView({ id, status, transcript, segments, summary, h
             transcript={transcript.text}
             participants={status.review.participants}
           />
-          <ResummarizeControl id={id} />
+          <ResummarizeControl
+            busy={resummarizing}
+            error={resummarizeError}
+            onRun={() => void beginResummarize(true)}
+          />
         </div>
       )}
 
@@ -161,48 +269,44 @@ function Spinner() {
 }
 
 // Manual single-meeting re-summarize ("다시 요약"). Only shown once summarized; it
-// overwrites transcript.md + summary.json (POST { resummarize: true }) so a glossary
+// regenerates transcript.md + summary.json (POST { resummarize: true }) so a glossary
 // change can be applied to an existing meeting. There is no bulk/auto re-summarize.
-function ResummarizeControl({ id }: { id: string }) {
-  const router = useRouter();
+// The run + async completion polling live in the parent (MeetingDetailView) so the
+// StatusCard retry and this control share one in-flight state; this component owns
+// only the confirm step. `busy` reflects that shared re-summarize; `error` carries a
+// synchronous refusal (409/no-model) or a timeout.
+function ResummarizeControl({
+  onRun,
+  busy,
+  error,
+}: {
+  onRun: () => void;
+  busy: boolean;
+  error: string | null;
+}) {
   const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const run = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/meetings/${id}/summarize`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ resummarize: true }),
-      });
-      if (res.ok) {
-        setConfirming(false);
-        router.refresh();
-        return;
-      }
-      if (res.status === 409) setError("요약 중에는 다시 요약할 수 없어요. 잠시 후 다시 시도하세요.");
-      else setError("다시 요약에 실패했어요. 잠시 후 다시 시도하세요.");
-    } catch {
-      setError("다시 요약에 실패했어요. 잠시 후 다시 시도하세요.");
-    } finally {
-      setBusy(false);
+  // Close the confirm panel once a run finishes cleanly; keep it open on error so the
+  // message and a retry stay visible.
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (busy) {
+      wasBusy.current = true;
+    } else if (wasBusy.current) {
+      wasBusy.current = false;
+      if (!error) setConfirming(false);
     }
-  };
+  }, [busy, error]);
 
   if (!confirming) {
     return (
       <button
         type="button"
-        onClick={() => {
-          setError(null);
-          setConfirming(true);
-        }}
-        className="rounded-full border border-line bg-panel px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft"
+        disabled={busy}
+        onClick={() => setConfirming(true)}
+        className="rounded-full border border-line bg-panel px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft disabled:opacity-50"
       >
-        다시 요약
+        {busy ? "요약 중…" : "다시 요약"}
       </button>
     );
   }
@@ -212,7 +316,7 @@ function ResummarizeControl({ id }: { id: string }) {
       <p className="text-[13px] text-ink">현재 요약을 새로 생성합니다(단어장 변경 반영).</p>
       <button
         type="button"
-        onClick={() => void run()}
+        onClick={onRun}
         disabled={busy}
         className="rounded-full bg-ink px-4 py-1.5 text-[13px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50"
       >
@@ -220,10 +324,7 @@ function ResummarizeControl({ id }: { id: string }) {
       </button>
       <button
         type="button"
-        onClick={() => {
-          setError(null);
-          setConfirming(false);
-        }}
+        onClick={() => setConfirming(false)}
         disabled={busy}
         className="rounded-full border border-line bg-panel px-4 py-1.5 text-[13px] font-semibold text-accent transition-colors hover:bg-soft disabled:opacity-50"
       >
@@ -252,10 +353,13 @@ function StatusCard({
   retrying: boolean;
 }) {
   if (status.error?.action === "retry_summary") {
+    // A re-summarize failure keeps `summarized` (the prior summary survives); a
+    // first-time failure sits at `transcribed`. Word the banner to match.
+    const label = status.status === "summarized" ? "재요약 실패" : "요약 실패";
     return (
       <div className="flex items-center justify-between gap-4 rounded-[12px] border border-error/40 bg-error/10 px-5 py-4">
         <p className="text-[14px] text-ink">
-          <span className="font-semibold text-error">요약 실패</span> — {status.error.message}
+          <span className="font-semibold text-error">{label}</span> — {status.error.message}
         </p>
         <button
           type="button"

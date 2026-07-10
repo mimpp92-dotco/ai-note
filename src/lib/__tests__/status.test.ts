@@ -109,3 +109,34 @@ describe("deriveStatus — titleOverride", () => {
     expect(status.title).toBe("내가 고친 제목");
   });
 });
+
+describe("deriveStatus — re-summarize failure error preservation", () => {
+  it("preserves a retry_summary error when promoting to summarized", async () => {
+    const id = "m-keep-retry-error";
+    await seedSummary(id, "AI가 만든 제목");
+    const { status, changed } = deriveStatus(
+      id,
+      base(id, {
+        status: "transcribed",
+        error: { message: "재요약에 실패했습니다", action: "retry_summary" },
+      }),
+    );
+    expect(status.status).toBe("summarized"); // rank still promoted
+    expect(status.error).toEqual({ message: "재요약에 실패했습니다", action: "retry_summary" });
+    expect(changed).toBe(true);
+  });
+
+  it("clears a non-retry_summary error on promotion (existing behavior)", async () => {
+    const id = "m-clear-other-error";
+    await seedSummary(id, "AI가 만든 제목");
+    const { status } = deriveStatus(
+      id,
+      base(id, {
+        status: "transcribed",
+        error: { message: "전사 실패", action: "retry_transcription" },
+      }),
+    );
+    expect(status.status).toBe("summarized");
+    expect(status.error).toBeNull();
+  });
+});

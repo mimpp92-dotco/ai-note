@@ -31,6 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Glossary format**: `glossary.json` is now a `{ terms, corrections }` object
   (was a flat string array); the array form is auto-migrated on read.
 
+### Fixed
+
+- **Re-summarize reliability** (ADR 0009):
+  - **Timeout**: LLM correction/summary calls now use a fixed 10-minute timeout
+    (`LLM_GENERATION_TIMEOUT_MS`) instead of the 120s subprocess default — a long
+    meeting's correction step re-emits the whole transcript and was being SIGKILLed.
+  - **Async**: "다시 요약" no longer blocks the request for minutes. The route
+    validates synchronously, fires the summarize in the background, and returns
+    `202`; the detail view polls for the new summary.
+  - **Failure visibility**: a failed re-summarize keeps the prior summary and the
+    `summarized` state (instead of demoting to `transcribed`) and surfaces a
+    "재요약 실패" banner with retry; `deriveStatus` preserves the `retry_summary`
+    error on promotion so the GET route no longer silently erases it.
+
 ## [0.1.0] - 2026-07-08
 
 Initial public release. AI NOTE is a local-first meeting recorder: everything
