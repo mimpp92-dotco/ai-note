@@ -78,30 +78,41 @@ export function MeetingDetailView({
   const { llm } = useHealth();
   const readiness = getLlmReadiness(llm);
 
-  // A manual (re)summarize is async: the route returns 202 and the work runs in the
-  // background. deriveStatus masks the transient `summarizing` as `summarized` while
-  // the previous summary.json still exists, so we can't watch status.status. Completion
-  // is detected instead from (a) the summary content changing, or (b) the server's
-  // in-flight lock clearing after we've observed it held (resummarizeInflight), with a
-  // ceiling as a last resort.
+  // A (re)summarize is async: the route returns 202 and the work runs in the
+  // background under an in-flight lock. `resummarizeInflight` is that lock, derived by
+  // the server (isSummarizeInflight) — the single source of truth for "a run is
+  // happening on this meeting", whether this tab started it or another entry did.
+  // `resummarizing` is a local optimistic flag that covers the window between the
+  // button click and the first poll observing the lock. The UI shows progress and
+  // gates the buttons on EITHER, so opening the page mid-run correctly reads as busy
+  // (deriveStatus otherwise masks the transient state as summarized).
+  const inProgress = resummarizing || resummarizeInflight;
   const baseSummarySig = useRef<string | null>(null);
   const seenInflight = useRef(false);
   const deadline = useRef(0);
+  const wasInProgress = useRef(false);
 
-  // Auto-summary (worker-driven): the server-derived status is genuinely
-  // `summarizing` (no summary.json yet), so refresh until the summary appears.
-  // Skipped during a manual re-summarize, which drives its own poll below.
+  // Capture a baseline once each time a run begins — from a local click or from
+  // entering the page while a run is already in flight. Runs before the completion
+  // effect (declared first) so its comparisons use this baseline.
   useEffect(() => {
-    if (status.status !== "summarizing" || resummarizing) return;
-    const timer = setInterval(() => router.refresh(), 3000);
-    return () => clearInterval(timer);
-  }, [status.status, resummarizing, router]);
+    if (inProgress && !wasInProgress.current) {
+      baseSummarySig.current = summary ? JSON.stringify(summary) : null;
+      seenInflight.current = resummarizeInflight; // already in flight on entry ⇒ observed
+      deadline.current = Date.now() + RESUMMARIZE_TIMEOUT_MS;
+      setResummarizeError(null);
+    }
+    wasInProgress.current = inProgress;
+  }, [inProgress, summary, resummarizeInflight]);
 
-  // Manual re-summarize: poll for fresh server data; give up at the ceiling.
+  // Poll for fresh server data while a run is in flight (manual or worker-driven). The
+  // ceiling only applies to a locally-started run — a run observed via the server lock
+  // is trusted to clear itself (each LLM call is capped, so the lock can't hang).
   useEffect(() => {
-    if (!resummarizing) return;
+    const active = inProgress || status.status === "summarizing";
+    if (!active) return;
     const timer = setInterval(() => {
-      if (Date.now() > deadline.current) {
+      if (resummarizing && Date.now() > deadline.current) {
         setResummarizing(false);
         setResummarizeError("재요약이 시간 내에 끝나지 않았어요. 잠시 후 다시 시도하세요.");
         return;
@@ -109,15 +120,14 @@ export function MeetingDetailView({
       router.refresh();
     }, 3000);
     return () => clearInterval(timer);
-  }, [resummarizing, router]);
+  }, [inProgress, status.status, resummarizing, router]);
 
-  // Detect completion of a manual re-summarize from refreshed server props.
+  // Detect completion of a run from refreshed server props.
   useEffect(() => {
-    if (!resummarizing) return;
+    if (!inProgress) return;
 
     // (a) New summary content is an unambiguous success, independent of the lock — the
-    // baseline was captured at begin, so a change means fresh data has arrived. Checked
-    // first so it also covers a run that finishes before a poll observes the lock.
+    // baseline was captured at begin, so a change means fresh data has arrived.
     const sig = summary ? JSON.stringify(summary) : null;
     if (sig !== baseSummarySig.current) {
       setResummarizing(false);
@@ -133,25 +143,19 @@ export function MeetingDetailView({
     }
 
     // Lock is clear. Only trust the terminal state once we've actually observed the run
-    // in flight from a fresh poll — otherwise stale props from before the run started
-    // (an old retry_summary error, or the pre-run unlocked state) would read as an
-    // instant completion.
+    // in flight — otherwise stale props from before the run started (an old
+    // retry_summary error, or the pre-run unlocked state) would read as instant done.
     if (!seenInflight.current) return;
-    if (status.error?.action === "retry_summary") {
-      setResummarizing(false); // failure surfaces via the StatusCard banner
-    } else {
-      setResummarizing(false); // lock released, no error, no content delta → success (identical regen)
-      setResummarizeError(null);
-    }
-  }, [resummarizing, resummarizeInflight, summary, status]);
+    setResummarizing(false);
+    // A retry_summary error means it failed (StatusCard shows the banner); otherwise
+    // the lock released cleanly → success even if the regenerated content is identical.
+    if (status.error?.action !== "retry_summary") setResummarizeError(null);
+  }, [inProgress, resummarizeInflight, summary, status]);
 
   const beginResummarize = async (force: boolean) => {
-    if (resummarizing) return;
-    baseSummarySig.current = summary ? JSON.stringify(summary) : null;
-    seenInflight.current = false;
-    deadline.current = Date.now() + RESUMMARIZE_TIMEOUT_MS;
+    if (inProgress) return;
     setResummarizeError(null);
-    setResummarizing(true);
+    setResummarizing(true); // optimistic; the entry effect captures the baseline
     try {
       const res = await fetch(`/api/meetings/${id}/summarize`, {
         method: "POST",
@@ -183,7 +187,7 @@ export function MeetingDetailView({
         <div className="mt-3 flex items-center justify-between gap-4">
           <h1 className="text-2xl font-bold tracking-tight text-ink">{status.title}</h1>
           <span className="shrink-0 rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
-            {STATUS_LABELS[status.status]}
+            {STATUS_LABELS[inProgress ? "summarizing" : status.status]}
           </span>
         </div>
         <p className="mt-1 font-mono text-[12px] text-inkSoft">{formatMeetingDate(status.startedAt)}</p>
@@ -192,8 +196,9 @@ export function MeetingDetailView({
       <StatusCard
         status={status}
         readiness={readiness}
+        inProgress={inProgress}
         onRetry={() => void beginResummarize(summary != null)}
-        retrying={resummarizing}
+        retrying={inProgress}
       />
 
       {status.status === "summarized" && summary && (
@@ -205,7 +210,7 @@ export function MeetingDetailView({
             participants={status.review.participants}
           />
           <ResummarizeControl
-            busy={resummarizing}
+            busy={inProgress}
             error={resummarizeError}
             onRun={() => void beginResummarize(true)}
           />
@@ -344,14 +349,28 @@ function ResummarizeControl({
 function StatusCard({
   status,
   readiness,
+  inProgress,
   onRetry,
   retrying,
 }: {
   status: StatusJson;
   readiness: LlmReadiness;
+  inProgress: boolean;
   onRetry: () => void;
   retrying: boolean;
 }) {
+  // A run in flight wins over everything: while summarizing/re-summarizing, show the
+  // spinner (not a stale error banner, and not the "summarized" resting state that
+  // deriveStatus reports when a prior summary.json still exists).
+  if (inProgress) {
+    return (
+      <div className="flex items-center gap-3 rounded-[12px] border border-line bg-panel px-5 py-4">
+        <Spinner />
+        <p className="text-[14px] text-ink">요약 생성 중…</p>
+      </div>
+    );
+  }
+
   if (status.error?.action === "retry_summary") {
     // A re-summarize failure keeps `summarized` (the prior summary survives); a
     // first-time failure sits at `transcribed`. Word the banner to match.
