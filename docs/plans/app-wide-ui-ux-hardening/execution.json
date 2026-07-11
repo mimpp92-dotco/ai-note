@@ -1,7 +1,7 @@
 {
   "slug": "app-wide-ui-ux-hardening",
   "model": "codex",
-  "reconciledAgainst": "b4c4bde7a7d4792e01de00ec9194a921ab5cd516",
+  "reconciledAgainst": "37f9655a31cbea6ff15ed2193f1c2168eb97fd21",
   "phases": [
     {
       "phase": 1,
@@ -23,18 +23,18 @@
     {
       "phase": 2,
       "name": "library-home-responsive-polish",
-      "state": "pending",
-      "summary": "",
+      "state": "completed",
+      "summary": "Phase 2 완료 — shared SVG icon·44px target·native workspace select inset을 통일하고 Home/meeting row/edit/delete/banner/empty state를 320px부터 reflow해 root overflow masking 없이 synthetic Chrome 5-view matrix와 5",
       "verify": {
-        "cmd": "",
-        "passed": false
+        "cmd": "set -eu\nnpm test -- \\\n  src/components/__tests__/LibraryNavigation.test.tsx \\\n  src/components/__tests__/views.test.tsx\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
       },
-      "commit": "",
-      "attempts": 0,
+      "commit": "742991b863cb5acdc12e73e968c76da2918763de",
+      "attempts": 1,
       "blockedReason": "",
       "errorMessage": "",
-      "startedAt": "",
-      "completedAt": ""
+      "startedAt": "2026-07-11T08:33:18+0900",
+      "completedAt": "2026-07-11T09:46:53+0900"
     },
     {
       "phase": 3,
