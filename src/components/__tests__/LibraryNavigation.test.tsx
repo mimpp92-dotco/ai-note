@@ -7,6 +7,7 @@ import { LibraryNavigation } from "@/components/LibraryNavigation";
 import { MeetingDetailView } from "@/components/MeetingDetailView";
 import { RecorderSessionProvider } from "@/components/RecorderSessionProvider";
 import type { LibraryProviderValue } from "@/components/LibraryProvider";
+import type { LlmHealthState, WhisperHealthState } from "@/components/healthStatus";
 import type { StatusJson } from "@/domain/meeting";
 
 const navigation = vi.hoisted(() => ({
@@ -19,6 +20,16 @@ const navigation = vi.hoisted(() => ({
 }));
 
 let libraryState: LibraryProviderValue;
+const healthState = vi.hoisted(() => ({
+  whisper: { connected: true, ready: true, model: "base" } as WhisperHealthState,
+  llm: {
+    configured: true,
+    provider: "claude-cli",
+    model: "sonnet",
+    ok: true,
+    detail: "ready",
+  } as LlmHealthState,
+}));
 
 vi.mock("next/link", () => ({
   default: ({ href, children, ...props }: {
@@ -44,8 +55,8 @@ vi.mock("@/components/LibraryProvider", async (importOriginal) => {
 
 vi.mock("@/components/useHealth", () => ({
   useHealth: () => ({
-    whisper: { connected: true, ready: true, model: "base" },
-    llm: { configured: true, provider: "claude-cli", model: "sonnet", ok: true, detail: "ready" },
+    whisper: healthState.whisper,
+    llm: healthState.llm,
   }),
 }));
 
@@ -190,6 +201,14 @@ describe("activated library navigation", () => {
     navigation.push.mockReset();
     navigation.replace.mockReset();
     navigation.refresh.mockReset();
+    healthState.whisper = { connected: true, ready: true, model: "base" };
+    healthState.llm = {
+      configured: true,
+      provider: "claude-cli",
+      model: "sonnet",
+      ok: true,
+      detail: "ready",
+    };
     libraryState = readyState();
   });
 
@@ -208,6 +227,38 @@ describe("activated library navigation", () => {
     expect(screen.getByRole("button", { name: "새 워크스페이스" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "프로젝트 폴더 편집" })).toBeInTheDocument();
     expect(screen.queryByText(/삭제|재구성/)).not.toBeInTheDocument();
+  });
+
+  it("updates polite system rows only when the visible health label actually changes", () => {
+    const view = renderShell();
+    const initialLabel = screen.getAllByText("Whisper base · 준비됨")[0];
+    const liveRow = initialLabel.closest("[aria-live]");
+    expect(liveRow).toHaveAttribute("aria-live", "polite");
+    const observer = new MutationObserver(() => {});
+    observer.observe(liveRow!, { childList: true, characterData: true, subtree: true });
+
+    view.rerender(
+      <RecorderSessionProvider>
+        <div id="app-content">
+          <LibraryNavigation />
+          <HomeClient />
+        </div>
+      </RecorderSessionProvider>,
+    );
+    expect(observer.takeRecords()).toHaveLength(0);
+
+    healthState.whisper = { connected: false, ready: false, model: "base" };
+    view.rerender(
+      <RecorderSessionProvider>
+        <div id="app-content">
+          <LibraryNavigation />
+          <HomeClient />
+        </div>
+      </RecorderSessionProvider>,
+    );
+    expect(screen.getAllByText("Whisper · 연결 안 됨").length).toBeGreaterThan(0);
+    expect(observer.takeRecords().length).toBeGreaterThan(0);
+    observer.disconnect();
   });
 
   it("keeps the native workspace combobox while reserving an aria-hidden chevron inset", () => {

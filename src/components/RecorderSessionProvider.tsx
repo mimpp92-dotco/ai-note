@@ -14,7 +14,7 @@ import {
 
 import { AppDialog } from "@/components/AppDialog";
 import { useOptionalLibrary } from "@/components/LibraryProvider";
-import { formatDuration, pickAudioMime, rms } from "@/lib/recorder";
+import { formatDuration, pickAudioMime, recorderPhaseAnnouncement, rms } from "@/lib/recorder";
 import type {
   RecorderFinalizeResultContract,
   RecorderResultLocation,
@@ -705,9 +705,13 @@ function RecorderCompactControls() {
   return (
     <aside
       aria-label="진행 중인 녹음"
-      aria-live="polite"
       className="fixed bottom-4 right-4 z-50 flex min-h-11 max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2 rounded-xl border border-line bg-panel px-4 py-3 shadow-[0_12px_36px_-14px_rgba(42,36,32,.35)]"
     >
+      {/* The visible label carries the ticking timer for sighted users, but stays out of
+          any live region. A dedicated polite status announces the phase transition only. */}
+      <span className="sr-only" role="status" aria-live="polite" data-testid="compact-recorder-announce">
+        {recorderPhaseAnnouncement(session.phase)}
+      </span>
       <span className="text-[13px] font-semibold text-ink">{label}</span>
       {session.phase === "recording" && (
         <button type="button" onClick={session.stop} className="min-h-11 rounded-full bg-ink px-4 text-[13px] font-semibold text-bg">

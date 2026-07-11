@@ -77,6 +77,7 @@
 
 ### 녹음 화면
 - 상단 우측 **다크 "실시간 기록 시작"** 버튼. 녹음 중: 펄스 red dot + "기록 중" + `mm:ss` 타이머(mono) + **레벨 미터**(입력 소리 확인). 마이크 무음 시 레벨 0 = 사용자가 문제 인지. 페이지 이탈 시 `beforeunload` 경고.
+- 시각 timer와 `role="meter"`의 빠른 값 변화는 live region 밖에 둔다. Full/compact recorder 모두 작은 전용 `role="status" aria-live="polite"`가 권한 확인·기록 시작·정리·저장·실패 같은 phase 전환만 알린다.
 - Non-idle 녹음 session은 layout 우하단 compact control(`min-height:44px`)로 모든 route에 유지한다. 상태 텍스트와 함께 기록 중지, captured 저장, ambiguous same-ID probe, 확인 후 재전송을 제공하며 full Recorder가 unmount돼도 숨기지 않는다. `녹음 버리기`는 원본과 복구 상태를 되돌릴 수 없이 지운다는 별도 확인을 거친다.
 - Unsaved capture에서 non-scope navigation을 시도하면 modal dialog를 띄운다. 초기 focus는 `계속 녹음/현재 화면에 머물기`, Escape/cancel은 trigger로 focus를 복귀한다. Recording은 `기록 중지하고 머물기`, 유일한 destructive escape는 텍스트가 명시된 `녹음 버리고 이동`이다. 색만으로 파괴성을 전달하지 않는다.
 
@@ -109,12 +110,20 @@
 ### 단어 관리(단어장)
 - **2탭**(각 탭 카운트 표기): **일반 용어** / **교정쌍**. 상단 1줄 설명(브랜드명 미포함).
 - 일반 용어: 쉼표(`,`/`，`)·개행으로 일괄 추가(**공백 분리 금지** — "프로덕트 로드맵" 같은 다어절 용어 보존), 제거 가능한 chip(`aria-label="용어 삭제: {term}"`).
-- 교정쌍: **잘못 인식된 표기(전) → 올바른 표기(후)** 두 필드(둘 다 필수, `trim` 후 비어있지 않아야 추가 활성). 중복 `from`·`from===to`는 스킵/경고.
+- 교정쌍: **잘못 인식된 표기(전) → 올바른 표기(후)** 두 필드(둘 다 필수, `trim` 후 비어있지 않아야 추가 활성). 320–375px에서는 보이는 전/후 label과 input을 세로로 쌓고 `sm` 이상에서만 한 줄로 둔다. 결과의 긴 전/후 값은 truncate하지 않고 wrap한다. 중복 `from`·`from===to`는 스킵/경고.
 - 저장 모델: **명시적 "저장" 버튼**(자동저장 아님). 두 탭은 로컬 state로 함께 편집되고 하단 단일 버튼으로 1회 저장. 변경 시 "변경됨", 저장 후 "저장됨", 실패 시 `role="status"` 인라인 에러(로컬 state 보존).
+- Initial GET은 `loading|ready|load_error`를 구분한다. Non-2xx·network·invalid body는 빈 단어장으로 낮추지 않고 editor/replace-save를 잠근 뒤 재시도를 제공한다. 저장은 `ready && dirty && !saving`에서만 가능하고 성공 body로 정규화하며 실패 시 draft를 보존한다.
 - 안내: "새 회의는 자동 반영 · 기존 회의는 상세의 '다시 요약'으로 갱신".
+
+### 요약 모델 설정
+- Initial GET은 `loading|ready|load_error`를 구분한다. `{provider:null}`만 명시적 미설정 ready이며, read 실패를 기본 Claude 설정으로 가장하지 않고 editor/save를 잠근 뒤 재시도를 제공한다.
+- Server-confirmed `savedSnapshot`과 editable draft를 분리한다. Provider/model/baseUrl을 정규화해 비교하고 저장은 `ready && dirty && valid && !saving`에서만 활성화한다. Save 실패는 draft/dirty를 보존하고 성공 body로 snapshot과 draft를 함께 맞춘다.
+- Ollama 선택 직후에는 required 표시와 neutral helper만 보인다. Model blur 또는 submit 시도 뒤에만 red error·`aria-invalid`·error relation을 연결하고 CLI provider로 바꾸면 Ollama-only error를 지운다.
+- `연결 테스트`는 화면의 미저장 draft가 아니라 디스크에 저장된 설정을 검사한다. Loading/load error, 미설정, dirty, saving/testing 동안 disabled reason을 보여 주며 결과에는 검사한 provider/model만 표시하고 `baseUrl`은 표시하지 않는다.
 
 ## 접근성
 - 상태 변화는 `aria-live="polite"`로 안내("기록 중"·"전사 완료"). `prefers-reduced-motion` 존중. 소형 텍스트에 `#9A8F84` 금지(대비).
+- Polling되는 전사·요약 system row는 같은 label 재렌더를 live text mutation으로 만들지 않고, 준비/실패처럼 화면 label이 실제로 바뀔 때만 공지한다.
 - **앱 셸**: `<nav aria-label="라이브러리">` 랜드마크 하나, 활성 항목에 `aria-current="page"`. 상시 nav 때문에 매 페이지 맨 앞에 **skip-to-content 링크**(`href="#main"`, 포커스 시에만 표시), DOM 순서 skip link → nav → main wrapper.
 - **녹음 이탈 guard**: `role="dialog" aria-modal="true"`, 제목 연결, cancel initial focus, Escape/cancel trigger focus 복귀. Compact/dialog action target은 최소 44px이며 destructive action은 아이콘/색 외에 `버리기` 문구를 반드시 포함한다.
 

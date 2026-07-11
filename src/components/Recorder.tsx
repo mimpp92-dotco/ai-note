@@ -3,7 +3,7 @@
 import { useRecorder } from "@/components/useRecorder";
 import type { RecorderRequestedLocation } from "@/components/RecorderSessionProvider";
 import { RecorderFinalizeResultView } from "@/components/RecorderFinalizeResultView";
-import { formatDuration } from "@/lib/recorder";
+import { formatDuration, recorderPhaseAnnouncement } from "@/lib/recorder";
 
 // Human labels for the server-derived lifecycle polled after upload.
 const STATUS_LABELS: Record<string, string> = {
@@ -83,7 +83,13 @@ export function Recorder({
         </button>
       </div>
 
-      <div className="mt-5" aria-live="polite">
+      {/* Phase transitions are announced once here; the ticking timer and the rapidly
+          changing meter below are deliberately kept out of any live region. */}
+      <p className="sr-only" role="status" aria-live="polite" data-testid="recorder-announce">
+        {recorderPhaseAnnouncement(phase)}
+      </p>
+
+      <div className="mt-5">
         {recording && (
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-2 text-[14px] font-medium text-ink">
@@ -134,7 +140,7 @@ export function Recorder({
         )}
 
         {(phase === "failed" || phase === "finalize_ambiguous") && error && (
-          <p className="text-[14px] text-error">{error}</p>
+          <p role="status" className="text-[14px] text-error">{error}</p>
         )}
         {blocked && (
           <div className="mt-3 space-y-3 rounded-[12px] border border-warn/40 bg-warnBg px-4 py-3">

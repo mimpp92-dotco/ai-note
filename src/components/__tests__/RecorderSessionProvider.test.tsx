@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GuardedLink, useGuardedRouter } from "@/components/RecorderNavigation";
@@ -112,6 +112,7 @@ describe("RecorderSessionProvider", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -317,6 +318,47 @@ describe("RecorderSessionProvider", () => {
     expect(finalizeCalls[1].init.body).toBeUndefined();
     expect(finalizeCalls[2].init.body).toBeInstanceOf(Blob);
     expect(finalizeCalls[2].url.split("?")[0]).toBe(finalizeCalls[0].url.split("?")[0]);
+  });
+
+  it("keeps the full-recorder timer and meter out of any live region and announces only the phase", async () => {
+    vi.useFakeTimers();
+    render(<App />);
+    const session = getRecorderSession();
+    await act(async () => session.start());
+
+    const announce = screen.getByTestId("recorder-announce");
+    expect(announce).toHaveAttribute("aria-live", "polite");
+    expect(announce).toHaveTextContent("기록 시작");
+    expect(announce.textContent).not.toMatch(/\d\d:\d\d/);
+    const announcement = announce.textContent;
+
+    const timer = screen.getByText("00:00");
+    expect(timer.closest("[aria-live]")).toBeNull();
+    const meter = screen.getByRole("meter", { name: "입력 레벨" });
+    expect(meter.closest("[aria-live]")).toBeNull();
+
+    act(() => vi.advanceTimersByTime(1_250));
+    expect(screen.getByText("00:01")).toBeInTheDocument();
+    expect(announce).toHaveTextContent(announcement!);
+  });
+
+  it("drops the compact aside live region but keeps its timer, action, and a dedicated phase status", async () => {
+    render(<App full={false} />);
+    const session = getRecorderSession();
+    await act(async () => session.start());
+    await waitFor(() => expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/));
+
+    const aside = screen.getByRole("complementary", { name: "진행 중인 녹음" });
+    expect(aside).not.toHaveAttribute("aria-live");
+
+    const announce = screen.getByTestId("compact-recorder-announce");
+    expect(announce).toHaveAttribute("aria-live", "polite");
+    expect(announce).toHaveTextContent("기록 시작");
+    expect(announce.textContent).not.toMatch(/\d\d:\d\d/);
+
+    // The ticking visible label and the stop control stay in the tree, just not live.
+    expect(within(aside).getByText(/기록 중 · \d\d:\d\d/)).toBeInTheDocument();
+    expect(within(aside).getByRole("button", { name: "기록 중지" })).toBeInTheDocument();
   });
 });
 
