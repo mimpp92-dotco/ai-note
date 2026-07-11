@@ -10,7 +10,7 @@ The summary is yours — a `summary.json` and a Markdown transcript you can copy
 
 | Home | Structured summary | Model settings | Mobile library |
 |:---:|:---:|:---:|:---:|
-| ![Home — workspace folder and meeting list](docs/media/home.png) | ![Meeting detail with structured summary and export toolbar](docs/media/detail.png) | ![Keyless model settings](docs/media/settings.png) | ![Mobile workspace folder meeting list](docs/media/mobile.png) |
+| ![Home — workspace folder and meeting list](docs/media/home.png) | ![Meeting detail with structured summary and export toolbar](docs/media/detail.png) | ![Keyless model settings](docs/media/settings.png) | ![Mobile library drawer with workspace switcher and folders](docs/media/mobile.png) |
 
 ## Why it's private
 

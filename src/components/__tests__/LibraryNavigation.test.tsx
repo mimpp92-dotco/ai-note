@@ -229,6 +229,33 @@ describe("activated library navigation", () => {
     expect(screen.queryByText(/삭제|재구성/)).not.toBeInTheDocument();
   });
 
+  it("marks the active scope and route with aria-current='page' across rail links", () => {
+    renderShell();
+    const nav = screen.getByRole("navigation", { name: "라이브러리" });
+    const allLink = within(nav).getByRole("link", { name: /모든 회의/ });
+    expect(allLink).toHaveAttribute("aria-current", "page");
+    expect(allLink).toHaveClass("bg-soft");
+    expect(within(nav).getByRole("link", { name: /미분류/ })).not.toHaveAttribute("aria-current");
+    expect(within(nav).getByRole("link", { name: "단어 관리" })).not.toHaveAttribute("aria-current");
+    expect(within(nav).getByRole("link", { name: "설정" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("marks the active folder scope with aria-current and leaves All inactive", () => {
+    libraryState = readyState({ scope: { kind: "folder", workspaceId: DEFAULT_WORKSPACE, folderId: FOLDER } });
+    renderShell();
+    const nav = screen.getByRole("navigation", { name: "라이브러리" });
+    expect(within(nav).getByRole("link", { name: /프로젝트/ })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("link", { name: /모든 회의/ })).not.toHaveAttribute("aria-current");
+  });
+
+  it("marks 단어 관리 active on the glossary route", () => {
+    navigation.pathname = "/glossary";
+    renderShell();
+    const nav = screen.getByRole("navigation", { name: "라이브러리" });
+    expect(within(nav).getByRole("link", { name: "단어 관리" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("link", { name: /모든 회의/ })).not.toHaveAttribute("aria-current");
+  });
+
   it("updates polite system rows only when the visible health label actually changes", () => {
     const view = renderShell();
     const initialLabel = screen.getAllByText("Whisper base · 준비됨")[0];

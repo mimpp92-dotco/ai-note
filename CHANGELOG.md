@@ -54,8 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Glossary management**: a **단어 관리** tab to edit domain terms and
   "misheard → correct" pairs (`{ terms, corrections }`), applied by the LLM
   correction step. A legacy string-array `glossary.json` is still read as `terms`.
-- **Left sidebar app shell**: persistent navigation (회의록 관리 / 단어 관리 /
-  설정) with the whisper/AI health pills, plus a skip-to-content link.
+- **Left navigation rail**: a persistent library rail (desktop) and accessible
+  mobile drawer expose workspace switching, meetings/glossary/settings links, and
+  whisper/AI health status rows, plus a skip-to-content link.
 - **Manual single-meeting re-summarize**: a "다시 요약" button on a summarized
   meeting regenerates just that one (applies glossary changes to existing
   meetings). No auto/bulk re-summarize — the background worker never re-runs a
@@ -63,6 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **App-wide UI/UX hardening**: modal dialogs and the mobile drawer now use the
+  browser's native top layer, so focus stays contained, background content is
+  inert, Escape/backdrop only dismiss the topmost surface, and a busy mutation
+  can't be dismissed out from under you. The meeting list, editors, forms,
+  banners, and the detail toolbar reflow cleanly from 320px up without horizontal
+  scrolling, and the meeting detail follows a fixed order (title → status/location
+  → notices → actions → audio/participants → tabs). Glossary and Settings now
+  distinguish "loading", "ready", and "failed to load" instead of showing an
+  empty form on a failed read, and only offer save/replace once current values
+  are known. Audio playback supports HTTP Range requests, so seeking and
+  re-seeking a long recording streams just the requested bytes and cancels
+  cleanly on reload/navigation.
 - **Correction step** now normalizes numbers/dates/times/amounts to Arabic
   numerals (values unchanged) and applies glossary `corrections`.
 - **Glossary format**: `glossary.json` is now a `{ terms, corrections }` object

@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 
 import type { LlmHealthState, WhisperHealthState } from "@/components/healthStatus";
 
-// Single shared health poller for the whole app. The Sidebar (always mounted),
-// HomeClient's onboarding banner, and MeetingDetailView's hint all read from here,
-// so there is exactly ONE poller regardless of how many components subscribe.
+// Single shared health poller for the whole app. The LibraryNavigation rail
+// (always mounted via the root layout), HomeClient's onboarding banner, and
+// MeetingDetailView's hint all read from here, so there is exactly ONE poller
+// regardless of how many components subscribe.
 // Module-level state persists across client navigations (stale-while-revalidate),
 // so pills never flash "확인 중" again after the first load.
 

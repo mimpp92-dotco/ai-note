@@ -11,8 +11,7 @@ import { PendingBanner } from "@/components/PendingBanner";
 import { Recorder } from "@/components/Recorder";
 import { RecorderSessionProvider } from "@/components/RecorderSessionProvider";
 import { SettingsForm } from "@/components/SettingsForm";
-import { Sidebar } from "@/components/Sidebar";
-import type { LlmHealthState, WhisperHealthState } from "@/components/healthStatus";
+import type { LlmHealthState } from "@/components/healthStatus";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
 
@@ -25,12 +24,11 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-// MeetingDetailView uses useRouter; Sidebar uses usePathname. navMock.pathname is
-// mutable so Sidebar active-state tests can control the current route.
-const navMock = vi.hoisted(() => ({ pathname: "/" }));
+// MeetingDetailView uses useRouter. usePathname is stubbed for any transitive
+// navigation consumers rendered by these views.
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
-  usePathname: () => navMock.pathname,
+  usePathname: () => "/",
 }));
 
 function makeStatus(overrides: Partial<StatusJson> = {}): StatusJson {
@@ -425,89 +423,6 @@ describe("MeetingList — 행 액션(케밥)", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("button", { name: "삭제" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
-  });
-});
-
-describe("Sidebar — 활성 항목", () => {
-  afterEach(() => {
-    navMock.pathname = "/";
-    vi.unstubAllGlobals();
-  });
-
-  const renderSidebar = (
-    health: { whisper: WhisperHealthState; llm: LlmHealthState } = {
-    whisper: { connected: true, ready: true, model: "base" },
-    llm: { configured: true, provider: "claude-cli", model: "sonnet", ok: true, detail: "ready" },
-    },
-  ) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url === "/api/whisper/health") return { ok: true, json: async () => health.whisper };
-        if (url === "/api/settings/llm/health") return { ok: true, json: async () => health.llm };
-        return { ok: false, json: async () => ({}) };
-      }),
-    );
-    render(<Sidebar />);
-  };
-
-  it("identity, section labels, system rows, settings를 렌더링한다", async () => {
-    renderSidebar();
-    expect(screen.getByRole("navigation", { name: "주요 메뉴" })).toHaveTextContent("AI NOTE");
-    expect(screen.getByText("로컬 회의록")).toBeInTheDocument();
-    expect(screen.getByText("주요 메뉴")).toBeInTheDocument();
-    expect(screen.getByText("시스템")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /설정/ })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("Whisper base · 준비됨")).toBeInTheDocument());
-    expect(screen.getByText("Claude CLI sonnet · 감지됨")).toBeInTheDocument();
-  });
-
-  it("모바일 compact 전환을 위한 responsive shell class를 가진다", () => {
-    renderSidebar();
-    const nav = screen.getByRole("navigation", { name: "주요 메뉴" });
-    expect(nav).toHaveClass("w-full");
-    expect(nav).toHaveClass("border-b");
-    expect(nav).toHaveClass("md:w-60");
-    expect(nav).toHaveClass("md:border-r");
-  });
-
-  it("홈(/)에서 회의록 관리가 활성", () => {
-    navMock.pathname = "/";
-    renderSidebar();
-    const active = screen.getByRole("link", { name: /회의록 관리/ });
-    expect(active).toHaveAttribute("aria-current", "page");
-    expect(active.querySelector("[data-active-marker]")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "단어 관리" })).not.toHaveAttribute("aria-current");
-  });
-
-  it("상세(/meetings/*)에서도 회의록 관리가 활성", () => {
-    navMock.pathname = "/meetings/abc-123";
-    renderSidebar();
-    expect(screen.getByRole("link", { name: "회의록 관리" })).toHaveAttribute("aria-current", "page");
-  });
-
-  it("/glossary에서 단어 관리가 활성", () => {
-    navMock.pathname = "/glossary";
-    renderSidebar();
-    expect(screen.getByRole("link", { name: "단어 관리" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "회의록 관리" })).not.toHaveAttribute("aria-current");
-  });
-
-  it("/settings에서 설정이 활성", () => {
-    navMock.pathname = "/settings";
-    renderSidebar();
-    const settings = screen.getByRole("link", { name: /설정/ });
-    expect(settings).toHaveAttribute("aria-current", "page");
-    expect(settings.querySelector("[data-active-marker]")).toBeInTheDocument();
-  });
-
-  it("실패/미설정 시스템 상태는 설정으로 이동 가능한 affordance를 유지한다", async () => {
-    renderSidebar({
-      whisper: { connected: true, ready: false, model: "large-v3" },
-      llm: { configured: false },
-    });
-    await waitFor(() => expect(screen.getByText("Whisper large-v3 · 준비 중")).toBeInTheDocument());
-    expect(screen.getByRole("link", { name: /요약.*요약 모델 미설정/ })).toHaveAttribute("href", "/settings");
   });
 });
 
