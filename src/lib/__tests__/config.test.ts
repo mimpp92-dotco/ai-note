@@ -43,4 +43,14 @@ describe("config defaults", () => {
     expect(localSttBaseUrl()).toBe("http://127.0.0.1:9999");
     expect(localSttLang()).toBe("en");
   });
+
+  it("fails closed on non-loopback or invalid service destinations", () => {
+    process.env.LOCAL_STT_HOST = "evil.test";
+    expect(() => localSttBaseUrl()).toThrowError("unsafe_local_endpoint");
+    process.env.LOCAL_STT_HOST = "127.0.0.1";
+    process.env.LOCAL_STT_PORT = "8123junk";
+    expect(() => localSttBaseUrl()).toThrowError("unsafe_local_endpoint");
+    process.env.LOCAL_STT_PORT = "0";
+    expect(() => localSttBaseUrl()).toThrowError("unsafe_local_endpoint");
+  });
 });

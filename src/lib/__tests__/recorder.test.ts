@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { AUDIO_MIME_CANDIDATES, formatDuration, pickAudioMime, rms } from "@/lib/recorder";
+import {
+  AUDIO_MIME_CANDIDATES,
+  formatDuration,
+  pickAudioMime,
+  recorderPhaseAnnouncement,
+  rms,
+} from "@/lib/recorder";
 
 describe("pickAudioMime", () => {
   it("prefers webm/opus when supported", () => {
@@ -59,5 +65,37 @@ describe("formatDuration", () => {
   it("clamps negatives and NaN to 00:00", () => {
     expect(formatDuration(-1000)).toBe("00:00");
     expect(formatDuration(Number.NaN)).toBe("00:00");
+  });
+});
+
+describe("recorderPhaseAnnouncement", () => {
+  it("maps each lifecycle phase to a short, phase-only label", () => {
+    expect(recorderPhaseAnnouncement("requesting_permission")).toBe("권한 확인");
+    expect(recorderPhaseAnnouncement("recording")).toBe("기록 시작");
+    expect(recorderPhaseAnnouncement("stopping")).toBe("정리");
+    expect(recorderPhaseAnnouncement("captured")).toBe("정리");
+    expect(recorderPhaseAnnouncement("uploading")).toBe("저장");
+    expect(recorderPhaseAnnouncement("saved")).toBe("저장 완료");
+    expect(recorderPhaseAnnouncement("finalize_ambiguous")).toBe("저장 상태 확인 필요");
+    expect(recorderPhaseAnnouncement("failed")).toBe("실패");
+  });
+
+  it("is empty for idle so nothing is announced at rest", () => {
+    expect(recorderPhaseAnnouncement("idle")).toBe("");
+  });
+
+  it("never carries the ticking mm:ss timer into the announcement", () => {
+    for (const phase of [
+      "requesting_permission",
+      "recording",
+      "stopping",
+      "captured",
+      "uploading",
+      "saved",
+      "finalize_ambiguous",
+      "failed",
+    ]) {
+      expect(recorderPhaseAnnouncement(phase)).not.toMatch(/\d\d:\d\d/);
+    }
   });
 });

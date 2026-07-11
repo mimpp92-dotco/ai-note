@@ -8,8 +8,8 @@
 ## 새 ADR 추가
 
 ```bash
-cp docs/decisions/0000-template.md docs/decisions/0010-내-결정.md
-$EDITOR docs/decisions/0010-내-결정.md   # 5칸 채우고 아래 목록에 추가
+cp docs/decisions/0000-template.md docs/decisions/0018-내-결정.md
+$EDITOR docs/decisions/0018-내-결정.md   # 5칸 채우고 아래 목록에 추가
 ```
 
 ## 목록
@@ -20,7 +20,14 @@ $EDITOR docs/decisions/0010-내-결정.md   # 5칸 채우고 아래 목록에 �
 | [0002](0002-claude-command-no-app-llm.md) | 교정·요약은 로컬 CLI/Ollama로 처리 (팀 모드에서 갱신) | 채택됨(갱신) |
 | [0003](0003-local-files-single-writer.md) | 로컬 파일 저장 + 단일 writer 소유권 | 채택됨 |
 | [0006](0006-lean-mvp-defer-v2.md) | 린 MVP-0 — 견고성 일부 v2 연기 | 채택됨 |
-| [0007](0007-delete-meeting-record.md) | 회의 삭제 = 폴더 전체 영구 삭제(rename-then-rm) | 채택됨 |
+| [0007](0007-delete-meeting-record.md) | 회의 삭제 = 폴더 전체 영구 삭제(rename-then-rm) | 대체됨(→0015) |
 | [0008](0008-title-override.md) | 표시 제목은 `titleOverride`로 app-api 소유(override 우선) | 채택됨 |
 | [0009](0009-async-resummarize-failure-visibility.md) | 재요약 비동기화(202) + 실패 가시성 + 생성 타임아웃 600초 | 채택됨 |
 | [0010](0010-isolated-claude-summarize-invocation.md) | claude 요약 호출 격리(cwd·MCP-off·$0 env 스크럽) — ADR 0002 정제 | 채택됨 |
+| [0011](0011-library-registry-and-durable-commits.md) | 중앙 library registry, stable meeting path, 4-state 내구 commit | 채택됨 |
+| [0012](0012-local-ingress-and-fixed-id-service-boundary.md) | local-only request/DTO 경계와 fixed-ID Whisper protocol | 채택됨 |
+| [0013](0013-durable-summarize-pair-publication.md) | Durable summarize attempt와 generation-consistent pair 발행 | 채택됨 |
+| [0014](0014-durable-transcription-dispatch.md) | Durable transcription dispatch와 raw-last completion marker | 채택됨 |
+| [0015](0015-durable-meeting-tombstone.md) | Durable meeting tombstone이 logical delete commit | 채택됨 |
+| [0016](0016-atomic-finalize-directory-publication.md) | Finalize는 receipt를 포함한 directory rename으로 publish | 채택됨 |
+| [0017](0017-corrupt-library-rebuild-and-generation-reset.md) | Corrupt library 원본 보존형 재구축과 client generation reset | 채택됨 |

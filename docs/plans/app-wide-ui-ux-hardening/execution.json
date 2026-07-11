@@ -1,0 +1,90 @@
+{
+  "slug": "app-wide-ui-ux-hardening",
+  "model": "claude",
+  "reconciledAgainst": "45c1034061cc7e97550c73443c77e88213d31adb",
+  "phases": [
+    {
+      "phase": 1,
+      "name": "native-dialog-and-modal-lifecycle",
+      "state": "completed",
+      "summary": "Phase 1 완료 — app-level native AppDialog/AppDrawer로 활성 modal surface를 통합하고 feature별 focus·busy dismissal·nested scroll lock을 보존했으며 synthetic Actual Chrome matrix와 전체 582개 테스트 및 모든 완료 게이트를 통과했다.",
+      "verify": {
+        "cmd": "set -eu\nnpm test -- \\\n  src/components/__tests__/AppDialog.test.tsx \\\n  src/components/__tests__/LibraryPrimitives.test.tsx \\\n  src/components/__tests__/LibraryNavigation.test.tsx \\\n  src/components/__tests__/LibraryLocationPicker.test.tsx \\\n  src/components/__tests__/ContainerDeleteDialog.test.tsx \\\n  src/components/__tests__/LibraryRecoveryPanel.test.tsx \\\n  src/components/__tests__/RecorderSessionProvider.test.tsx\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
+      },
+      "commit": "1d959395919f4083c1dbf8e1a7508c9df47d9ab0",
+      "attempts": 1,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-11T08:17:02+0900",
+      "completedAt": "2026-07-11T08:33:17+0900",
+      "retryCount": 3
+    },
+    {
+      "phase": 2,
+      "name": "library-home-responsive-polish",
+      "state": "completed",
+      "summary": "Phase 2 완료 — shared SVG icon·44px target·native workspace select inset을 통일하고 Home/meeting row/edit/delete/banner/empty state를 320px부터 reflow해 root overflow masking 없이 synthetic Chrome 5-view matrix와 5",
+      "verify": {
+        "cmd": "set -eu\nnpm test -- \\\n  src/components/__tests__/LibraryNavigation.test.tsx \\\n  src/components/__tests__/views.test.tsx\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
+      },
+      "commit": "742991b863cb5acdc12e73e968c76da2918763de",
+      "attempts": 1,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-11T08:33:18+0900",
+      "completedAt": "2026-07-11T09:46:53+0900"
+    },
+    {
+      "phase": 3,
+      "name": "detail-hierarchy-tabs-and-audio",
+      "state": "completed",
+      "summary": "detail-hierarchy-tabs-and-audio 완료",
+      "verify": {
+        "cmd": "set -eu\nnpm test -- \\\n  src/components/__tests__/Tabs.test.tsx \\\n  src/components/__tests__/views.test.tsx \\\n  src/app/api/__tests__/routes.integration.test.ts \\\n  src/app/api/__tests__/tombstoneFence.test.ts\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
+      },
+      "commit": "931d39f2bb0414f3e809100212531f801a4d7fd3",
+      "attempts": 1,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-11T10:19:02+0900",
+      "completedAt": "2026-07-11T10:20:12+0900",
+      "retryCount": 1
+    },
+    {
+      "phase": 4,
+      "name": "form-state-and-accessibility",
+      "state": "completed",
+      "summary": "Phase 4 완료 — Glossary/Settings를 loading|ready|load_error fail-closed 상태로 바꿔 초기 GET 실패를 빈 데이터로 오인하지 않고 replace-save를 잠갔고(server-confirmed snapshot·normalized dirty·성공 body 정규화), Glossary correction을 32",
+      "verify": {
+        "cmd": "set -eu\nnpm test -- \\\n  src/components/__tests__/views.test.tsx \\\n  src/components/__tests__/healthStatus.test.ts \\\n  src/components/__tests__/useHealth.test.tsx \\\n  src/components/__tests__/RecorderSessionProvider.test.tsx \\\n  src/lib/__tests__/recorder.test.ts\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
+      },
+      "commit": "4e200d6bed13085bf239eea1144aed9381f3fe6f",
+      "attempts": 1,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-11T11:50:31+0900",
+      "completedAt": "2026-07-11T12:04:16+0900",
+      "retryCount": 4
+    },
+    {
+      "phase": 5,
+      "name": "regression-cleanup-and-final-qa",
+      "state": "completed",
+      "summary": "Phase 5 완료 — dead UI(Sidebar·AiModelPill·WhisperPill·LibraryDrawerShell·DisclosureNavigationItem) 제거 전 active-state coverage-migration test를 LibraryNavigation.test에 추가(failure-injection RED 확인)하고 fals",
+      "verify": {
+        "cmd": "set -eu\nif rg -n '\\.(only|skip)\\s*\\(' src scripts whisper \\\n  --glob '*.test.ts' \\\n  --glob '*.test.tsx' \\\n  --glob '*.test.mjs'; then\n  echo 'focused/skipped test가 남아 있습니다.' >&2\n  exit 1\nfi\nif rg -n 'Sidebar|AiModelPill|WhisperPill|LibraryDrawerShell|DisclosureNavigationItem' src; then\n  echo '제거 대상 legacy UI 참조가 남아 있습니다.' >&2\n  exit 1\nfi\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
+      },
+      "commit": "ca8d27bcd65a684b0d8e9a906070a43720a8278d",
+      "attempts": 1,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-11T12:04:20+0900",
+      "completedAt": "2026-07-11T15:00:37+0900"
+    }
+  ]
+}

@@ -17,3 +17,4 @@
 
 ## 영향받는 곳
 - `src/domain/meeting.ts`(`StatusJson.titleOverride`), `src/lib/status.ts`(`deriveStatus` 제목 분기), `src/app/api/meetings/[id]/title/route.ts`(신규), `src/app/api/meetings/[id]/export/route.ts`(md만 effectiveTitle 반영, json은 raw 계약 유지).
+- ADR [0013](0013-durable-summarize-pair-publication.md) 후에도 override는 status queue에서 독립 보존되고, export는 generation-consistent pair read가 끝난 뒤 effective title을 overlay한다.

@@ -1,6 +1,11 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import {
+  guardLocalApiRequest,
+  parseBoundedJsonBody,
+  requestBodyErrorResponse,
+} from "@/lib/localRequestGuard";
+import { jsonNoStore, publicErrorResponse } from "@/lib/publicApi";
 import { readSettings, writeSettings } from "@/lib/settings";
 
 // GET/POST /api/settings/llm — the LLM backend choice. app-api is the single writer
@@ -12,22 +17,32 @@ const settingsSchema = z.object({
   provider: z.enum(["claude-cli", "codex-cli", "ollama"]),
   model: z.string().optional(),
   baseUrl: z.string().optional(),
-});
+}).strict();
 
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = guardLocalApiRequest(request);
+  if (denied) return denied;
   const settings = await readSettings();
-  return NextResponse.json(settings ?? { provider: null });
+  return jsonNoStore(settings ?? { provider: null });
 }
 
 export async function POST(request: Request) {
-  const parsed = settingsSchema.safeParse(await request.json().catch(() => null));
+  const denied = guardLocalApiRequest(request);
+  if (denied) return denied;
+  let body: unknown;
+  try {
+    body = await parseBoundedJsonBody(request, 32 * 1024);
+  } catch (error) {
+    return requestBodyErrorResponse(error);
+  }
+  const parsed = settingsSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "invalid settings body" }, { status: 400 });
+    return publicErrorResponse("invalid_request", 400);
   }
 
   const model = parsed.data.model?.trim();
   if (parsed.data.provider === "ollama" && !model) {
-    return NextResponse.json({ error: "ollama model required" }, { status: 400 });
+    return publicErrorResponse("invalid_request", 400, { field: "model" });
   }
 
   const settings = {
@@ -37,6 +52,10 @@ export async function POST(request: Request) {
       ? { baseUrl: parsed.data.baseUrl.trim() }
       : {}),
   };
-  await writeSettings(settings);
-  return NextResponse.json(settings);
+  try {
+    await writeSettings(settings);
+  } catch {
+    return publicErrorResponse("invalid_request", 400, { field: "baseUrl" });
+  }
+  return jsonNoStore(await readSettings());
 }

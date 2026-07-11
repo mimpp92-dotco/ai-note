@@ -1,5 +1,7 @@
 import { join } from "node:path";
 
+import { validateLoopbackHostAndPort } from "@/lib/localEndpoint";
+
 // Env/config defaults. All read process.env lazily inside functions — never at
 // module top-level — so `next build` stays green without any env/secrets.
 // whisper address (LOCAL_STT_HOST/PORT) is the contract between app-api and the
@@ -11,17 +13,25 @@ const DEFAULT_STT_MODEL = "large-v3";
 const DEFAULT_STT_LANG = "ko";
 
 export function localSttHost(): string {
-  return process.env.LOCAL_STT_HOST ?? DEFAULT_STT_HOST;
+  const host = process.env.LOCAL_STT_HOST ?? DEFAULT_STT_HOST;
+  const port = localSttPort();
+  return validateLoopbackHostAndPort(host, port).host;
 }
 
 export function localSttPort(): number {
   const raw = process.env.LOCAL_STT_PORT;
-  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(parsed) ? parsed : DEFAULT_STT_PORT;
+  if (raw === undefined) return DEFAULT_STT_PORT;
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(raw)) {
+    return validateLoopbackHostAndPort(DEFAULT_STT_HOST, Number.NaN).port;
+  }
+  return validateLoopbackHostAndPort(DEFAULT_STT_HOST, Number(raw)).port;
 }
 
 export function localSttBaseUrl(): string {
-  return `http://${localSttHost()}:${localSttPort()}`;
+  return validateLoopbackHostAndPort(
+    process.env.LOCAL_STT_HOST ?? DEFAULT_STT_HOST,
+    localSttPort(),
+  ).baseUrl;
 }
 
 export function localSttModel(): string {

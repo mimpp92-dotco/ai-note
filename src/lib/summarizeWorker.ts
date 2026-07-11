@@ -1,9 +1,12 @@
-import { existsSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 
-import { meetingPaths } from "@/lib/paths";
+import { classifyMeetingRecord } from "@/domain/library";
+import { ensureSummarizeReconciled } from "@/lib/artifactPair";
+import { scanMeetingRecordObservations } from "@/lib/library";
+import { dataRoot, meetingPaths } from "@/lib/paths";
 import { readSettings } from "@/lib/settings";
-import { listMeetingIds, readStatus } from "@/lib/status";
 import { MAX_SUMMARIZE_ATTEMPTS, runSummarize } from "@/lib/summarize";
+import { inspectTranscriptionPublication } from "@/lib/transcriptionArtifacts";
 
 // Background poller that summarizes transcribed meetings once an LLM is configured.
 // The app has no queue/DB — candidacy is derived purely from files on disk plus the
@@ -15,21 +18,48 @@ import { MAX_SUMMARIZE_ATTEMPTS, runSummarize } from "@/lib/summarize";
 export async function findSummarizeCandidates(): Promise<string[]> {
   if ((await readSettings()) === null) return [];
 
-  const candidates: string[] = [];
-  for (const id of await listMeetingIds()) {
+  const candidates: Array<{ id: string; startedAt: string }> = [];
+  const records = (await scanMeetingRecordObservations(dataRoot()))
+    .map((observation) => classifyMeetingRecord({ ...observation, hasPlacement: false }));
+  for (const record of records) {
+    if (record.kind !== "live" || record.meetingId === null || record.status === null) continue;
+    const id = record.meetingId;
     const p = meetingPaths(id);
-    if (!existsSync(p.raw) || existsSync(p.summary)) continue;
-    let status;
-    try {
-      status = await readStatus(id);
-    } catch {
-      continue; // corrupt status.json — skip this one, don't stall the whole worker
+    const status = record.status;
+    if (
+      inspectTranscriptionPublication(id, status.transcriptionDispatch?.dispatchId).state
+      !== "complete"
+    ) continue;
+    if (status.summarizeAttempt) {
+      await ensureSummarizeReconciled(id).catch(() => "ambiguous" as const);
+      // The reconciliation may have changed status and artifacts. Re-enter via
+      // a fresh classified scan on the next tick instead of following a status
+      // path that could have been swapped after this no-follow observation.
+      continue;
     }
-    if (!status) continue;
+    try {
+      const summary = await lstat(p.summary);
+      if (summary.isSymbolicLink() || !summary.isFile()) continue;
+      continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue;
+    }
+    // A durable interruption is user-visible attention, not an invitation for
+    // the poller to immediately hide the error behind another automatic retry.
+    if (
+      status.error?.code === "summary_interrupted"
+      || status.error?.code === "summarize_ambiguous"
+    ) continue;
     if ((status.summarizeAttempts ?? 0) >= MAX_SUMMARIZE_ATTEMPTS) continue;
-    candidates.push(id);
+    candidates.push({ id, startedAt: status.startedAt });
   }
-  return candidates;
+  return candidates
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id, "en"))
+    .map((candidate) => candidate.id);
+}
+
+export async function resolveLatestSummarizable(): Promise<string | null> {
+  return (await findSummarizeCandidates())[0] ?? null;
 }
 
 // Guards against overlapping ticks when a summarize outlasts the interval.

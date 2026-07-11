@@ -7,7 +7,7 @@
 
 claude 요약 생성 호출(`src/services/llm/claudeCli.ts`의 `run()`)을 "단순·자기완결 작업"에 맞게 격리한다:
 
-- **격리 cwd**: `os.tmpdir()`에서 실행(codex의 `-C tmpdir()` 패턴과 정렬). 프로젝트 디렉토리에서 돌지 않는다.
+- **격리 cwd**: invocation마다 `mkdtemp`로 별도 cwd를 만들고 종료 뒤 best-effort cleanup한다. 프로젝트 디렉토리에서 돌지 않으며 동시 호출이 cwd를 공유하지 않는다.
 - **인라인 MCP-off**: `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`(임시파일 없이 인라인 JSON).
 - **slash-off**: `--disable-slash-commands`.
 - **$0 env 스크럽**: 자식 env에서 **유료 청구를 유발하는 env**를 제거한다 — 자격증명(`ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY`)과 유료 백엔드 리다이렉트(`ANTHROPIC_BASE_URL`·`CLAUDE_CODE_USE_BEDROCK`·`CLAUDE_CODE_USE_VERTEX`). `HOME`·`PATH`는 유지(구독 OAuth·keychain·바이너리 탐색).
@@ -29,5 +29,6 @@ claude 요약 생성 호출(`src/services/llm/claudeCli.ts`의 `run()`)을 "단�
 
 ## 영향받는 곳
 
-- `src/services/llm/claudeCli.ts` — `run()` 격리(args·cwd·env).
+- `src/services/llm/claudeCli.ts` — `run()` 격리(args·invocation별 cwd·cleanup·env).
 - `src/services/llm/exec.ts` — `cwd`/`env` 배선은 이미 존재(변경 없음). 미로그인 이유 노출을 위한 stdout-꼬리 에러는 별도(honest-health 작업).
+- CLI 결과는 canonical path를 직접 쓰지 않고 ADR [0013](0013-durable-summarize-pair-publication.md)의 staging-only core/publisher로 전달한다.

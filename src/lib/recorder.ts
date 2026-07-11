@@ -46,3 +46,29 @@ export function formatDuration(ms: number): string {
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
+
+// Short, phase-only screen-reader announcement for a recorder lifecycle phase.
+// Deliberately excludes the ticking mm:ss timer and the input meter value so a
+// dedicated polite status announces once per transition — not on every tick.
+// `idle` returns "" so the resting state announces nothing.
+export function recorderPhaseAnnouncement(phase: string): string {
+  switch (phase) {
+    case "requesting_permission":
+      return "권한 확인";
+    case "recording":
+      return "기록 시작";
+    case "stopping":
+    case "captured":
+      return "정리";
+    case "uploading":
+      return "저장";
+    case "saved":
+      return "저장 완료";
+    case "finalize_ambiguous":
+      return "저장 상태 확인 필요";
+    case "failed":
+      return "실패";
+    default:
+      return "";
+  }
+}

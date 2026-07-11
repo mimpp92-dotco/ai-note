@@ -49,6 +49,18 @@ describe("ClaudeCliAdapter.run — isolated invocation", () => {
     expect(cwd).not.toBe(process.cwd()); // regression guard: no workspace context
   });
 
+  it("uses a distinct per-invocation temp directory for concurrent runs", async () => {
+    await Promise.all([
+      new ClaudeCliAdapter({ provider: "claude-cli" }).run("a"),
+      new ClaudeCliAdapter({ provider: "claude-cli" }).run("b"),
+    ]);
+    const cwdA = runProcessMock.mock.calls[0]?.[2]?.cwd;
+    const cwdB = runProcessMock.mock.calls[1]?.[2]?.cwd;
+    expect(cwdA).toBeDefined();
+    expect(cwdB).toBeDefined();
+    expect(cwdA).not.toBe(cwdB);
+  });
+
   it("scrubs paid-billing env vars from the child env but keeps HOME/PATH ($0 guard)", async () => {
     const scrubbed = {
       ANTHROPIC_API_KEY: "sk-ant-should-not-leak",

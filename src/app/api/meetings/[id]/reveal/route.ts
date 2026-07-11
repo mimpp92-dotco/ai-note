@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
-import { NextResponse } from "next/server";
-
+import { guardLocalApiRequest } from "@/lib/localRequestGuard";
+import { meetingFenceResponse } from "@/lib/meetingFence";
 import { assertSafeId } from "@/lib/meetingId";
 import { meetingPaths } from "@/lib/paths";
+import { jsonNoStore, publicErrorResponse, safeLog } from "@/lib/publicApi";
 
 // POST /api/meetings/[id]/reveal — open the meeting's data/ folder in the OS file
 // manager. Local-only convenience (server binds 127.0.0.1). Fire-and-forget: the
@@ -13,17 +14,21 @@ import { meetingPaths } from "@/lib/paths";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardLocalApiRequest(request);
+  if (denied) return denied;
   let id: string;
   try {
     id = assertSafeId((await params).id);
   } catch {
-    return NextResponse.json({ error: "invalid meeting id" }, { status: 400 });
+    return publicErrorResponse("invalid_request", 400, { field: "meetingId" });
   }
+  const fenced = await meetingFenceResponse(id);
+  if (fenced) return fenced;
 
   const dir = meetingPaths(id).dir;
   if (!existsSync(dir)) {
-    return NextResponse.json({ error: "not found" }, { status: 404 });
+    return publicErrorResponse("meeting_not_found", 404, { meetingId: id });
   }
 
   const cmd =
@@ -40,12 +45,10 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     // would be an uncaughtException and crash the server. Swallow it.
     child.on("error", () => {});
     child.unref();
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
-    );
+  } catch {
+    safeLog("warn", { code: "reveal_failed", operation: "reveal", meetingId: id });
+    return publicErrorResponse("internal_error", 500);
   }
 
-  return NextResponse.json({ ok: true });
+  return jsonNoStore({ ok: true });
 }

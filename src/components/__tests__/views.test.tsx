@@ -1,16 +1,17 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EmptyState } from "@/components/EmptyState";
+import { CopyButton } from "@/components/CopyButton";
 import { GlossaryClient } from "@/components/GlossaryClient";
 import { splitBacklog } from "@/components/HomeClient";
 import { MeetingDetailView } from "@/components/MeetingDetailView";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
 import { Recorder } from "@/components/Recorder";
+import { RecorderSessionProvider } from "@/components/RecorderSessionProvider";
 import { SettingsForm } from "@/components/SettingsForm";
-import { Sidebar } from "@/components/Sidebar";
-import type { LlmHealthState, WhisperHealthState } from "@/components/healthStatus";
+import type { LlmHealthState } from "@/components/healthStatus";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
 
@@ -23,12 +24,11 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-// MeetingDetailView uses useRouter; Sidebar uses usePathname. navMock.pathname is
-// mutable so Sidebar active-state tests can control the current route.
-const navMock = vi.hoisted(() => ({ pathname: "/" }));
+// MeetingDetailView uses useRouter. usePathname is stubbed for any transitive
+// navigation consumers rendered by these views.
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
-  usePathname: () => navMock.pathname,
+  usePathname: () => "/",
 }));
 
 function makeStatus(overrides: Partial<StatusJson> = {}): StatusJson {
@@ -62,6 +62,27 @@ const SUMMARY: Summary = {
   risks: ["일정 지연 가능성"],
   followups: ["리뷰 미팅 잡기"],
 };
+
+function stubClipboard(writeText: ReturnType<typeof vi.fn>) {
+  vi.stubGlobal(
+    "navigator",
+    Object.assign(Object.create(window.navigator), {
+      clipboard: { writeText },
+    }),
+  );
+}
+
+function healthResponse(input: string | URL | Request): Response {
+  const url = String(input);
+  if (url === "/api/settings/llm/health") {
+    return new Response(JSON.stringify({ configured: false }), {
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return new Response(JSON.stringify({ connected: true, ready: true, model: "base" }), {
+    headers: { "content-type": "application/json" },
+  });
+}
 
 describe("EmptyState", () => {
   it("renders the guide and the 3-step flow without terminal commands", () => {
@@ -121,6 +142,54 @@ describe("PendingBanner", () => {
     render(<PendingBanner count={2} needsAttention={1} readiness="unavailable" />);
     expect(screen.getByText("3개 회의가 요약 대기 중")).toBeInTheDocument();
   });
+
+  it("stacks unavailable copy and its action on mobile without shrinking the text column", () => {
+    render(<PendingBanner count={2} readiness="unavailable" />);
+    const settings = screen.getByRole("link", { name: "설정" });
+    expect(settings.parentElement).toHaveClass("flex-col", "sm:flex-row");
+    expect(settings).toHaveClass("w-full", "sm:w-auto", "min-h-11");
+    expect(screen.getByText(/요약 모델을 확인하세요/)).toHaveClass("min-w-0");
+  });
+
+  it("lets the ready attention action reflow below copy on mobile", () => {
+    render(
+      <PendingBanner
+        count={2}
+        needsAttention={1}
+        readiness="ready"
+        attention={{ meetingId: "attention", cursor: "cursor" }}
+      />,
+    );
+    const action = screen.getByRole("link", { name: "확인할 회의 열기" });
+    expect(action.parentElement).toHaveClass("flex-col", "sm:flex-row");
+    expect(action).toHaveClass("w-full", "sm:w-auto");
+  });
+});
+
+describe("CopyButton feedback", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("announces clipboard success on screen and through a live region", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    render(<CopyButton text="복사할 내용" label="요약 복사" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
+
+    await waitFor(() => expect(screen.getByText("복사됨")).toBeInTheDocument());
+    expect(screen.getByText("복사됨")).toHaveAttribute("aria-live", "polite");
+    expect(writeText).toHaveBeenCalledWith("복사할 내용");
+  });
+
+  it("does not silently swallow clipboard failure", async () => {
+    stubClipboard(vi.fn().mockRejectedValue(new Error("clipboard blocked")));
+    render(<CopyButton text="복사할 내용" label="요약 복사" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
+
+    await waitFor(() => expect(screen.getByText("복사 실패")).toBeInTheDocument());
+    expect(screen.getByText("복사 실패")).toHaveAttribute("aria-live", "polite");
+  });
 });
 
 describe("splitBacklog — home banner counts", () => {
@@ -152,12 +221,13 @@ describe("splitBacklog — home banner counts", () => {
 
 describe("Recorder — responsive layout", () => {
   it("모바일에서 녹음 버튼이 본문 옆으로 밀어내지 않도록 줄바꿈 class를 가진다", () => {
-    render(<Recorder />);
+    render(<RecorderSessionProvider><Recorder /></RecorderSessionProvider>);
     const heading = screen.getByRole("heading", { name: "회의 녹음" });
     expect(heading.parentElement?.parentElement).toHaveClass("flex-col");
     expect(heading.parentElement?.parentElement).toHaveClass("sm:flex-row");
     expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("w-full");
     expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("sm:w-auto");
+    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("min-h-11");
   });
 });
 
@@ -257,7 +327,27 @@ describe("MeetingList — 행 액션(케밥)", () => {
     fireEvent.click(screen.getByRole("button", { name: "저장" }));
     await waitFor(() => expect(screen.getByText(/이름을 바꿀 수 없어요/)).toBeInTheDocument());
     expect(onRenamed).not.toHaveBeenCalled();
-    expect(screen.getByRole("textbox", { name: /제목/ })).toBeInTheDocument(); // still in edit mode
+    expect(screen.getByRole("textbox", { name: /제목/ })).toHaveValue("새 제목");
+    expect(screen.getByRole("textbox", { name: /제목/ })).toHaveFocus();
+  });
+
+  it("한국어 IME 조합 Enter는 저장하지 않고 compositionEnd 뒤 Enter만 저장한다", async () => {
+    const onRenamed = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MeetingList meetings={[meeting()]} onRenamed={onRenamed} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "이름 수정" }));
+    const input = screen.getByRole("textbox", { name: /제목/ });
+    fireEvent.change(input, { target: { value: "새 한국어 제목" } });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229, isComposing: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(input, { data: "목" });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 13, isComposing: false });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onRenamed).toHaveBeenCalledWith("m1", "새 한국어 제목"));
   });
 
   it("빈 제목이면 저장 버튼이 비활성이다", () => {
@@ -280,9 +370,42 @@ describe("MeetingList — 행 액션(케밥)", () => {
   });
 
   it("모바일에서 제목과 상태 badge가 세로로 배치될 수 있다", () => {
+    const longTitle = "분기별제품로드맵과고객피드백을함께검토하는아주긴회의제목WithoutAnyBreakOpportunity";
+    render(<MeetingList meetings={[meeting({
+      title: longTitle,
+      location: {
+        workspaceId: "workspace",
+        folderId: "folder",
+        breadcrumb: ["아주 긴 워크스페이스", "끊김 없이 길어지는 폴더 breadcrumb"],
+      },
+    })]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    const link = screen.getByRole("link", { name: new RegExp(longTitle) });
+    expect(link).toHaveClass("w-full", "self-stretch", "flex-col", "sm:flex-row");
+    expect(screen.getByText(longTitle).parentElement).toHaveClass("w-full", "min-w-0");
+    expect(screen.getByRole("button", { name: `${longTitle} 관리 메뉴` }))
+      .toHaveClass("min-h-11", "min-w-11");
+  });
+
+  it("모바일 inline edit은 input과 44px action row를 stack할 수 있다", () => {
     render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
-    expect(screen.getByRole("link", { name: /테스트 회의/ })).toHaveClass("flex-col");
-    expect(screen.getByRole("link", { name: /테스트 회의/ })).toHaveClass("sm:flex-row");
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "이름 수정" }));
+    const input = screen.getByRole("textbox", { name: /제목/ });
+    expect(input.closest("div[class*='rounded']")).toHaveClass("flex-col", "sm:flex-row");
+    expect(input).toHaveClass("min-h-11");
+    expect(screen.getByRole("button", { name: "저장" })).toHaveClass("min-h-11");
+    expect(screen.getByRole("button", { name: "취소" })).toHaveClass("min-h-11");
+  });
+
+  it("모바일 inline delete confirmation은 copy 아래에 full-width 44px actions를 둔다", () => {
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+    const confirm = screen.getByRole("button", { name: "영구 삭제" });
+    const cancel = screen.getByRole("button", { name: "취소" });
+    expect(confirm.parentElement).toHaveClass("flex-col", "sm:flex-row");
+    expect(confirm).toHaveClass("min-h-11", "w-full", "sm:w-auto");
+    expect(cancel).toHaveClass("min-h-11", "w-full", "sm:w-auto");
   });
 
   it("outside click으로 메뉴가 닫힌다", () => {
@@ -303,100 +426,32 @@ describe("MeetingList — 행 액션(케밥)", () => {
   });
 });
 
-describe("Sidebar — 활성 항목", () => {
-  afterEach(() => {
-    navMock.pathname = "/";
-    vi.unstubAllGlobals();
-  });
-
-  const renderSidebar = (
-    health: { whisper: WhisperHealthState; llm: LlmHealthState } = {
-    whisper: { connected: true, ready: true, model: "base" },
-    llm: { configured: true, provider: "claude-cli", model: "sonnet", ok: true, detail: "ready" },
-    },
-  ) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url === "/api/whisper/health") return { ok: true, json: async () => health.whisper };
-        if (url === "/api/settings/llm/health") return { ok: true, json: async () => health.llm };
-        return { ok: false, json: async () => ({}) };
-      }),
-    );
-    render(<Sidebar />);
-  };
-
-  it("identity, section labels, system rows, settings를 렌더링한다", async () => {
-    renderSidebar();
-    expect(screen.getByRole("navigation", { name: "주요 메뉴" })).toHaveTextContent("AI NOTE");
-    expect(screen.getByText("로컬 회의록")).toBeInTheDocument();
-    expect(screen.getByText("주요 메뉴")).toBeInTheDocument();
-    expect(screen.getByText("시스템")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /설정/ })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("Whisper base · 준비됨")).toBeInTheDocument());
-    expect(screen.getByText("Claude CLI sonnet · 감지됨")).toBeInTheDocument();
-  });
-
-  it("모바일 compact 전환을 위한 responsive shell class를 가진다", () => {
-    renderSidebar();
-    const nav = screen.getByRole("navigation", { name: "주요 메뉴" });
-    expect(nav).toHaveClass("w-full");
-    expect(nav).toHaveClass("border-b");
-    expect(nav).toHaveClass("md:w-60");
-    expect(nav).toHaveClass("md:border-r");
-  });
-
-  it("홈(/)에서 회의록 관리가 활성", () => {
-    navMock.pathname = "/";
-    renderSidebar();
-    const active = screen.getByRole("link", { name: /회의록 관리/ });
-    expect(active).toHaveAttribute("aria-current", "page");
-    expect(active.querySelector("[data-active-marker]")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "단어 관리" })).not.toHaveAttribute("aria-current");
-  });
-
-  it("상세(/meetings/*)에서도 회의록 관리가 활성", () => {
-    navMock.pathname = "/meetings/abc-123";
-    renderSidebar();
-    expect(screen.getByRole("link", { name: "회의록 관리" })).toHaveAttribute("aria-current", "page");
-  });
-
-  it("/glossary에서 단어 관리가 활성", () => {
-    navMock.pathname = "/glossary";
-    renderSidebar();
-    expect(screen.getByRole("link", { name: "단어 관리" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "회의록 관리" })).not.toHaveAttribute("aria-current");
-  });
-
-  it("/settings에서 설정이 활성", () => {
-    navMock.pathname = "/settings";
-    renderSidebar();
-    const settings = screen.getByRole("link", { name: /설정/ });
-    expect(settings).toHaveAttribute("aria-current", "page");
-    expect(settings.querySelector("[data-active-marker]")).toBeInTheDocument();
-  });
-
-  it("실패/미설정 시스템 상태는 설정으로 이동 가능한 affordance를 유지한다", async () => {
-    renderSidebar({
-      whisper: { connected: true, ready: false, model: "large-v3" },
-      llm: { configured: false },
-    });
-    await waitFor(() => expect(screen.getByText("Whisper large-v3 · 준비 중")).toBeInTheDocument());
-    expect(screen.getByRole("link", { name: /요약.*요약 모델 미설정/ })).toHaveAttribute("href", "/settings");
-  });
-});
-
-describe("GlossaryClient — 추가/삭제/저장", () => {
+describe("GlossaryClient — 로드/편집/저장 (fail-closed)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  function stubFetch(initial = { terms: [] as string[], corrections: [] as { from: string; to: string }[] }) {
+  type GetMode = "ok" | "non_ok" | "throw" | "invalid";
+  type SaveMode = "ok" | "non_ok" | "throw";
+
+  function stubFetch(
+    opts: {
+      initial?: { terms: string[]; corrections: { from: string; to: string }[] };
+      getMode?: GetMode;
+      saveMode?: SaveMode;
+    } = {},
+  ) {
+    const { initial = { terms: [], corrections: [] }, getMode = "ok", saveMode = "ok" } = opts;
     const posted: unknown[] = [];
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       if (init?.method === "POST") {
         const body = JSON.parse(String(init.body));
         posted.push(body);
+        if (saveMode === "throw") throw new Error("network");
+        if (saveMode === "non_ok") return { ok: false, status: 500, json: async () => ({}) };
         return { ok: true, status: 200, json: async () => body };
       }
+      if (getMode === "throw") throw new Error("network");
+      if (getMode === "non_ok") return { ok: false, status: 500, json: async () => ({}) };
+      if (getMode === "invalid") return { ok: true, status: 200, json: async () => ({ nope: true }) };
       return { ok: true, status: 200, json: async () => initial };
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -406,17 +461,17 @@ describe("GlossaryClient — 추가/삭제/저장", () => {
   it("일반 용어를 추가하면 칩과 카운트가 늘어난다(공백 분리 안 함)", async () => {
     stubFetch();
     render(<GlossaryClient />);
-    const input = screen.getByRole("textbox", { name: "용어 추가" });
+    const input = await screen.findByRole("textbox", { name: "용어 추가" });
     fireEvent.change(input, { target: { value: "프로덕트 로드맵" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(screen.getByText("프로덕트 로드맵")).toBeInTheDocument(); // not split on the space
     expect(screen.getByRole("tab", { name: /일반 용어 \(1\)/ })).toBeInTheDocument();
   });
 
-  it("한국어 IME 조합 중 Enter는 일반 용어를 조기 추가하지 않는다", () => {
+  it("한국어 IME 조합 중 Enter는 일반 용어를 조기 추가하지 않는다", async () => {
     stubFetch();
     render(<GlossaryClient />);
-    const input = screen.getByRole("textbox", { name: "용어 추가" });
+    const input = await screen.findByRole("textbox", { name: "용어 추가" });
     fireEvent.compositionStart(input);
     fireEvent.change(input, { target: { value: "이창규" } });
     fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
@@ -427,10 +482,10 @@ describe("GlossaryClient — 추가/삭제/저장", () => {
     expect(screen.queryByText("규")).not.toBeInTheDocument();
   });
 
-  it("쉼표로 여러 용어를 한 번에 추가한다", () => {
+  it("쉼표로 여러 용어를 한 번에 추가한다", async () => {
     stubFetch();
     render(<GlossaryClient />);
-    const input = screen.getByRole("textbox", { name: "용어 추가" });
+    const input = await screen.findByRole("textbox", { name: "용어 추가" });
     fireEvent.change(input, { target: { value: "OKR, 로드맵, OKR" } }); // dup dropped
     fireEvent.keyDown(input, { key: "Enter" });
     expect(screen.getByRole("tab", { name: /일반 용어 \(2\)/ })).toBeInTheDocument();
@@ -439,31 +494,31 @@ describe("GlossaryClient — 추가/삭제/저장", () => {
   it("교정쌍을 추가하고 저장하면 POST 본문에 담긴다", async () => {
     const { posted } = stubFetch();
     render(<GlossaryClient />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "저장" })).toBeEnabled());
-
-    fireEvent.click(screen.getByRole("tab", { name: /교정쌍/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: /교정쌍/ }));
     fireEvent.change(screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" }), { target: { value: "김민중" } });
     fireEvent.change(screen.getByRole("textbox", { name: "올바른 표기(후)" }), { target: { value: "김민준" } });
     fireEvent.click(screen.getByRole("button", { name: "추가" }));
     expect(screen.getByRole("tab", { name: /교정쌍 \(1\)/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    const save = screen.getByRole("button", { name: "저장" });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0]).toEqual({ terms: [], corrections: [{ from: "김민중", to: "김민준" }] });
   });
 
-  it("교정쌍은 전·후가 모두 있어야 추가 가능하다", () => {
+  it("교정쌍은 전·후가 모두 있어야 추가 가능하다", async () => {
     stubFetch();
     render(<GlossaryClient />);
-    fireEvent.click(screen.getByRole("tab", { name: /교정쌍/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: /교정쌍/ }));
     fireEvent.change(screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" }), { target: { value: "김민중" } });
     expect(screen.getByRole("button", { name: "추가" })).toBeDisabled(); // no "to" yet
   });
 
-  it("한국어 IME 조합 중 Enter는 교정쌍을 조기 추가하지 않는다", () => {
+  it("한국어 IME 조합 중 Enter는 교정쌍을 조기 추가하지 않는다", async () => {
     stubFetch();
     render(<GlossaryClient />);
-    fireEvent.click(screen.getByRole("tab", { name: /교정쌍/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: /교정쌍/ }));
     fireEvent.change(screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" }), { target: { value: "이창규" } });
     const to = screen.getByRole("textbox", { name: "올바른 표기(후)" });
     fireEvent.compositionStart(to);
@@ -473,6 +528,158 @@ describe("GlossaryClient — 추가/삭제/저장", () => {
     fireEvent.compositionEnd(to);
     fireEvent.keyDown(to, { key: "Enter" });
     expect(screen.getByText(/이창규 PM/)).toBeInTheDocument();
+  });
+
+  it.each<GetMode>(["throw", "non_ok", "invalid"])(
+    "GET %s 실패는 빈 단어장이 아니라 load_error로 편집을 잠근다",
+    async (getMode) => {
+      stubFetch({ getMode });
+      render(<GlossaryClient />);
+      expect(await screen.findByText(/불러오지 못했어요/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
+      // No editor, no save button, and not the empty-ready copy.
+      expect(screen.queryByRole("button", { name: "저장" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: "용어 추가" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/등록된 용어가 없어요/)).not.toBeInTheDocument();
+    },
+  );
+
+  it("load 실패 뒤에는 저장으로 POST할 수 없다(덮어쓰기 방지)", async () => {
+    const { fetchMock } = stubFetch({ getMode: "non_ok" });
+    render(<GlossaryClient />);
+    await screen.findByText(/불러오지 못했어요/);
+    expect(screen.queryByRole("button", { name: "저장" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.every(([, init]) => (init as RequestInit | undefined)?.method !== "POST")).toBe(true);
+  });
+
+  it("다시 시도가 성공하면 서버 데이터로 editor가 복구되고 저장은 비활성이다", async () => {
+    let getCalls = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return { ok: true, status: 200, json: async () => ({ terms: [], corrections: [] }) };
+      getCalls += 1;
+      if (getCalls === 1) return { ok: false, status: 500, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ terms: ["복구됨"], corrections: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GlossaryClient />);
+    fireEvent.click(await screen.findByRole("button", { name: "다시 시도" }));
+    expect(await screen.findByText("복구됨")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /일반 용어 \(1\)/ })).toBeInTheDocument();
+    // Freshly loaded → not dirty → save disabled.
+    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
+  });
+
+  it("저장은 변경이 있을 때만 활성화된다", async () => {
+    stubFetch({ initial: { terms: ["기존"], corrections: [] } });
+    render(<GlossaryClient />);
+    await screen.findByText("기존");
+    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
+    const input = screen.getByRole("textbox", { name: "용어 추가" });
+    fireEvent.change(input, { target: { value: "새용어" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByText("변경됨")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "저장" })).toBeEnabled();
+  });
+
+  it.each<SaveMode>(["non_ok", "throw"])(
+    "저장 %s 실패는 로컬 편집과 변경 상태를 보존한다",
+    async (saveMode) => {
+      stubFetch({ saveMode });
+      render(<GlossaryClient />);
+      const input = await screen.findByRole("textbox", { name: "용어 추가" });
+      fireEvent.change(input, { target: { value: "보존용어" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.click(screen.getByRole("button", { name: "저장" }));
+      await waitFor(() => expect(screen.getByText(/저장하지 못했어요/)).toBeInTheDocument());
+      expect(screen.getByText("보존용어")).toBeInTheDocument();
+      expect(screen.getByText("변경됨")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "저장" })).toBeEnabled();
+    },
+  );
+
+  it("저장 성공은 서버 정규화 결과로 교체하고 저장됨을 표시한다", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ terms: ["정규화됨"], corrections: [] }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ terms: [], corrections: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GlossaryClient />);
+    const input = await screen.findByRole("textbox", { name: "용어 추가" });
+    fireEvent.change(input, { target: { value: "입력값" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(screen.getByText("저장됨")).toBeInTheDocument());
+    expect(screen.getByText("정규화됨")).toBeInTheDocument();
+    expect(screen.queryByText("입력값")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled(); // no longer dirty
+  });
+
+  it("탭은 방향키/Home/End로 이동하고 tabpanel 관계를 노출한다", async () => {
+    stubFetch();
+    render(<GlossaryClient />);
+    const termsTab = await screen.findByRole("tab", { name: /일반 용어/ });
+    const corrTab = screen.getByRole("tab", { name: /교정쌍/ });
+    expect(termsTab).toHaveAttribute("aria-selected", "true");
+    expect(termsTab).toHaveAttribute("tabindex", "0");
+    expect(corrTab).toHaveAttribute("tabindex", "-1");
+
+    termsTab.focus();
+    fireEvent.keyDown(termsTab, { key: "ArrowRight" });
+    expect(corrTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", corrTab.id);
+
+    fireEvent.keyDown(corrTab, { key: "Home" });
+    expect(termsTab).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(termsTab, { key: "End" });
+    expect(corrTab).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("탭을 전환해도 두 탭의 draft 입력이 보존된다", async () => {
+    stubFetch();
+    render(<GlossaryClient />);
+    const termInput = await screen.findByRole("textbox", { name: "용어 추가" });
+    fireEvent.change(termInput, { target: { value: "임시 용어" } });
+    fireEvent.click(screen.getByRole("tab", { name: /교정쌍/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" }), { target: { value: "임시 전" } });
+    fireEvent.click(screen.getByRole("tab", { name: /일반 용어/ }));
+    expect(screen.getByRole("textbox", { name: "용어 추가" })).toHaveValue("임시 용어");
+    fireEvent.click(screen.getByRole("tab", { name: /교정쌍/ }));
+    expect(screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" })).toHaveValue("임시 전");
+  });
+
+  it("320px 교정 입력은 보이는 전/후 라벨과 세로 stack 구조를 가진다", async () => {
+    stubFetch();
+    render(<GlossaryClient />);
+    fireEvent.click(await screen.findByRole("tab", { name: /교정쌍/ }));
+    const fromInput = screen.getByRole("textbox", { name: "잘못 인식된 표기(전)" });
+    // Labels are visible text, not just aria-labels.
+    expect(screen.getByText("잘못 인식된 표기(전)")).toBeInTheDocument();
+    expect(screen.getByText("올바른 표기(후)")).toBeInTheDocument();
+    // The input group stacks on mobile and only goes single-line at sm+.
+    expect(fromInput.closest("label")?.parentElement).toHaveClass("flex-col", "sm:flex-row");
+    expect(screen.getByRole("button", { name: "추가" })).toHaveClass("min-h-11");
+    expect(screen.getByRole("button", { name: "저장" })).toHaveClass("min-h-11");
+  });
+
+  it("긴 교정쌍 결과 행은 truncate 대신 wrap으로 전체를 보여준다", async () => {
+    const longFrom = "아주길게인식된잘못된표기".repeat(4);
+    const longTo = "정확하게교정된표기".repeat(4);
+    stubFetch({ initial: { terms: [], corrections: [{ from: longFrom, to: longTo }] } });
+    render(<GlossaryClient />);
+    fireEvent.click(await screen.findByRole("tab", { name: /교정쌍/ }));
+    expect(screen.getByText(longFrom)).toBeInTheDocument();
+    expect(screen.getByText(longTo)).toBeInTheDocument();
+    expect(screen.getByText(longFrom).closest("li")?.querySelector(".truncate")).toBeNull();
+  });
+
+  it("용어 칩 삭제 버튼은 32px embedded target·접근 이름·인라인 SVG를 가진다", async () => {
+    stubFetch({ initial: { terms: ["삭제될용어"], corrections: [] } });
+    render(<GlossaryClient />);
+    const remove = await screen.findByRole("button", { name: "용어 삭제: 삭제될용어" });
+    expect(remove).toHaveClass("h-8", "w-8");
+    expect(remove.querySelector("svg")).not.toBeNull();
   });
 });
 
@@ -620,24 +827,440 @@ describe("MeetingDetailView — 요약 상태 카드", () => {
   });
 });
 
-describe("SettingsForm — Ollama model validation", () => {
+describe("MeetingDetailView — information hierarchy and review freshness", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("Ollama는 모델명이 없으면 저장할 수 없다", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
+  it("orders metadata, notices, actions, meeting info, and tabs without putting status in the action group", () => {
+    const { container } = render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({
+          status: "summarized",
+          error: { message: "이전 요약 보존", action: "retry_summary" },
+        })}
+        transcript={{ text: "매우 긴 전사 ".repeat(500), corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio
+      />,
+    );
+
+    const order = Array.from(container.querySelectorAll("main > [data-detail-section]"))
+      .map((element) => element.getAttribute("data-detail-section"));
+    expect(order).toEqual(["heading", "notices", "actions", "meeting-info", "tabs"]);
+
+    const actions = screen.getByRole("group", { name: "회의 작업" });
+    expect(within(actions).getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "전사 복사" })).toBeInTheDocument();
+    expect(within(actions).getByRole("link", { name: "요약 다운로드(.md)" })).toBeInTheDocument();
+    expect(within(actions).getByRole("link", { name: "JSON(.json)" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "폴더 열기" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "다시 요약" })).toBeInTheDocument();
+    expect(within(actions).queryByText("요약 완료")).not.toBeInTheDocument();
+
+    const actionControls = [
+      ...within(actions).getAllByRole("button"),
+      ...within(actions).getAllByRole("link"),
+    ];
+    for (const control of actionControls) {
+      expect(control.className).toContain("min-h-11");
+      expect(control.className).toContain("rounded-md");
+    }
+
+    const info = screen.getByRole("region", { name: "회의 정보" });
+    const tabs = screen.getByRole("tablist", { name: "회의 내용" });
+    expect(info.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(info).getByText("녹음 재생")).toBeInTheDocument();
+    expect(within(info).getByRole("heading", { name: "참석자" })).toBeInTheDocument();
+  });
+
+  it("shows a review save error, preserves the typed value, and does the same for a network failure", async () => {
+    let reviewAttempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/review") {
+        reviewAttempts += 1;
+        if (reviewAttempts === 1) {
+          return new Response(JSON.stringify({ error: { code: "internal_error" } }), { status: 500 });
+        }
+        throw new Error("network unavailable");
+      }
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+    const input = screen.getByRole("textbox", { name: "참석자" });
+    fireEvent.change(input, { target: { value: "딜런, 지훈" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("저장하지 못했습니다"));
+    expect(input).toHaveValue("딜런, 지훈");
+
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(reviewAttempts).toBe(2));
+    expect(screen.getByRole("status")).toHaveTextContent("저장하지 못했습니다");
+    expect(input).toHaveValue("딜런, 지훈");
+  });
+
+  it("uses validated normalized participants for summary copy immediately after save", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/review") {
+        return new Response(JSON.stringify({ review: { participants: ["딜런", "지훈"] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "참석자" }), {
+      target: { value: " 딜런, 지훈 " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("저장됨"));
+
+    fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls.at(-1)?.[0]).toContain("**참석자:** 딜런, 지훈");
+  });
+
+  it("surfaces immediate reveal refusal and network failure instead of claiming the OS viewer opened", async () => {
+    let revealAttempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/reveal") {
+        revealAttempts += 1;
+        if (revealAttempts === 1) return new Response(null, { status: 500 });
+        throw new Error("network unavailable");
+      }
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "폴더 열기" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "열기 실패" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "열기 실패" }));
+    await waitFor(() => expect(revealAttempts).toBe(2));
+    expect(screen.getByRole("button", { name: "열기 실패" })).toBeInTheDocument();
+    expect(screen.queryByText("폴더 열림")).not.toBeInTheDocument();
+  });
+
+  it("describes a successful reveal response as a detached request, not guaranteed viewer success", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/reveal") return new Response(null, { status: 200 });
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "폴더 열기" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "열기 요청됨" })).toBeInTheDocument());
+  });
+
+  it("keeps a dirty participant edit across parent refresh but syncs a pristine field", () => {
+    const baseProps = {
+      id: "m1",
+      transcript: { text: "본문", corrected: true },
+      segments: [] as never[],
+      summary: SUMMARY,
+      hasAudio: false,
+    };
+    const { rerender } = render(
+      <MeetingDetailView {...baseProps} status={makeStatus({
+        status: "summarized",
+        review: { participants: ["기존"] },
+      })} />,
+    );
+    const input = screen.getByRole("textbox", { name: "참석자" });
+    fireEvent.change(input, { target: { value: "작성 중" } });
+    rerender(
+      <MeetingDetailView {...baseProps} status={makeStatus({
+        status: "summarized",
+        review: { participants: ["서버 갱신"] },
+      })} />,
+    );
+    expect(input).toHaveValue("작성 중");
+
+    const { rerender: rerenderPristine } = render(
+      <MeetingDetailView {...baseProps} id="m2" status={makeStatus({
+        id: "m2",
+        status: "summarized",
+        review: { participants: ["처음"] },
+      })} />,
+    );
+    const pristine = screen.getAllByRole("textbox", { name: "참석자" })[1];
+    rerenderPristine(
+      <MeetingDetailView {...baseProps} id="m2" status={makeStatus({
+        id: "m2",
+        status: "summarized",
+        review: { participants: ["새 값"] },
+      })} />,
+    );
+    expect(pristine).toHaveValue("새 값");
+  });
+});
+
+describe("SettingsForm — persisted draft/load/test state", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  type SettingsBody = {
+    provider: "claude-cli" | "codex-cli" | "ollama" | null;
+    model?: string;
+    baseUrl?: string;
+  };
+
+  function stubSettings(options: {
+    initial?: SettingsBody;
+    getMode?: "ok" | "non_ok" | "throw" | "invalid";
+    saveMode?: "ok" | "non_ok" | "throw";
+    healthMode?: "ok" | "non_ok" | "throw" | "invalid";
+    saved?: SettingsBody;
+    health?: LlmHealthState;
+  } = {}) {
+    const {
+      initial = { provider: null },
+      getMode = "ok",
+      saveMode = "ok",
+      healthMode = "ok",
+      saved,
+      health = { configured: false },
+    } = options;
+    const posted: unknown[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/settings/llm/health") {
+        if (healthMode === "throw") throw new Error("network");
+        if (healthMode === "non_ok") return { ok: false, status: 503, json: async () => ({}) };
+        if (healthMode === "invalid") return { ok: true, status: 200, json: async () => ({ configured: true }) };
+        return { ok: true, status: 200, json: async () => health };
+      }
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        posted.push(body);
+        if (saveMode === "throw") throw new Error("network");
+        if (saveMode === "non_ok") {
+          return {
+            ok: false,
+            status: 400,
+            json: async () => ({ error: { code: "invalid_request", details: { field: "model" } } }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => saved ?? body };
+      }
+      if (getMode === "throw") throw new Error("network");
+      if (getMode === "non_ok") return { ok: false, status: 500, json: async () => ({}) };
+      if (getMode === "invalid") return { ok: true, status: 200, json: async () => ({ provider: "remote-api" }) };
+      return { ok: true, status: 200, json: async () => initial };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { fetchMock, posted };
+  }
+
+  it.each(["throw", "non_ok", "invalid"] as const)(
+    "GET %s 실패는 기본 Claude 설정으로 낮추지 않고 저장을 잠근다",
+    async (getMode) => {
+      const { fetchMock } = stubSettings({ getMode });
+      render(<SettingsForm />);
+      expect(await screen.findByText(/설정을 불러오지 못했어요/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "저장" })).not.toBeInTheDocument();
+      expect(fetchMock.mock.calls.every(([, init]) => init?.method !== "POST")).toBe(true);
+    },
+  );
+
+  it("GET provider:null은 명시적 미설정 ready이며 연결 테스트는 저장 전까지 잠긴다", async () => {
+    stubSettings();
+    render(<SettingsForm />);
+    expect(await screen.findByText("저장된 요약 모델 설정이 없습니다.")).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "저장" });
+    const test = screen.getByRole("button", { name: "연결 테스트" });
+    expect(save).toBeEnabled();
+    expect(test).toBeDisabled();
+    expect(screen.getByRole("main")).toHaveClass("px-4", "py-12", "sm:px-6");
+    expect(save.closest("form")).toHaveClass("p-4", "sm:p-6");
+    expect(save.parentElement).toHaveClass("flex-wrap");
+    expect(save).toHaveClass("min-h-11");
+    expect(test).toHaveClass("min-h-11");
+    expect(screen.getByText(/먼저 설정을 저장한 뒤 연결을 테스트하세요/)).toBeInTheDocument();
+  });
+
+  it("GET 실패 뒤 다시 시도 성공은 서버 snapshot으로 editor를 복구한다", async () => {
+    let getCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      getCalls += 1;
+      if (getCalls === 1) return { ok: false, status: 500, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ provider: "codex-cli", model: "gpt-5" }) };
+    }));
+    render(<SettingsForm />);
+    fireEvent.click(await screen.findByRole("button", { name: "다시 시도" }));
+    expect(await screen.findByRole("textbox", { name: /모델/ })).toHaveValue("gpt-5");
+    expect(screen.getByLabelText(/Codex CLI/)).toBeChecked();
+    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "연결 테스트" })).toBeEnabled();
+  });
+
+  it("saved snapshot과 같은 draft는 저장이 잠기고 변경하면 저장만 활성화된다", async () => {
+    stubSettings({ initial: { provider: "claude-cli", model: "sonnet" } });
+    render(<SettingsForm />);
+    const model = await screen.findByRole("textbox", { name: /모델/ });
+    expect(model).toHaveValue("sonnet");
+    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "연결 테스트" })).toBeEnabled();
+
+    fireEvent.change(model, { target: { value: "opus" } });
+    expect(screen.getByRole("button", { name: "저장" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "연결 테스트" })).toBeDisabled();
+    expect(screen.getByText(/변경 사항을 먼저 저장하세요/)).toBeInTheDocument();
+  });
+
+  it("save success는 서버 정규화 snapshot으로 draft를 맞추고 연결 테스트를 연다", async () => {
+    const { posted } = stubSettings({
+      saved: { provider: "ollama", model: "llama3.1", baseUrl: "http://127.0.0.1:11434" },
+    });
+    render(<SettingsForm />);
+    await screen.findByText("저장된 요약 모델 설정이 없습니다.");
+    fireEvent.click(screen.getByLabelText(/Ollama/));
+    fireEvent.change(screen.getByRole("textbox", { name: /모델/ }), { target: { value: " llama3.1 " } });
+    fireEvent.change(screen.getByRole("textbox", { name: /Base URL/ }), {
+      target: { value: " http://127.0.0.1:11434 " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    await waitFor(() => expect(screen.getByText("저장됨")).toBeInTheDocument());
+    expect(posted[0]).toEqual({
+      provider: "ollama",
+      model: "llama3.1",
+      baseUrl: "http://127.0.0.1:11434",
+    });
+    expect(screen.getByRole("textbox", { name: /모델/ })).toHaveValue("llama3.1");
+    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "연결 테스트" })).toBeEnabled();
+  });
+
+  it("save 진행 중에는 persisted test를 잠그고 저장 완료를 기다리라는 이유를 표시한다", async () => {
+    let finishSave: ((value: { ok: boolean; status: number; json(): Promise<SettingsBody> }) => void) | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return new Promise<{ ok: boolean; status: number; json(): Promise<SettingsBody> }>((resolve) => {
+          finishSave = resolve;
+        });
+      }
+      return {
         ok: true,
         status: 200,
-        json: async () => ({ provider: null }),
-      })),
-    );
+        json: async () => ({ provider: "claude-cli", model: "sonnet" } as SettingsBody),
+      };
+    }));
     render(<SettingsForm />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "저장" })).toBeEnabled());
-    fireEvent.click(screen.getByLabelText(/Ollama/));
-    expect(screen.getByText("Ollama 모델명을 입력하세요.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
+    const model = await screen.findByRole("textbox", { name: /모델/ });
+    fireEvent.change(model, { target: { value: "opus" } });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(screen.getByRole("button", { name: "저장 중…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "연결 테스트" })).toBeDisabled();
+    expect(screen.getByText("설정 저장이 끝난 뒤 연결을 테스트할 수 있습니다.")).toBeInTheDocument();
+
+    await act(async () => finishSave?.({
+      ok: true,
+      status: 200,
+      json: async () => ({ provider: "claude-cli", model: "opus" }),
+    }));
+    expect(await screen.findByText("저장됨")).toBeInTheDocument();
   });
+
+  it.each(["non_ok", "throw"] as const)("save %s 실패는 draft와 dirty를 보존한다", async (saveMode) => {
+    stubSettings({ initial: { provider: "claude-cli", model: "sonnet" }, saveMode });
+    render(<SettingsForm />);
+    const model = await screen.findByRole("textbox", { name: /모델/ });
+    fireEvent.change(model, { target: { value: "draft-model" } });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/저장하지 못했어요/));
+    expect(model).toHaveValue("draft-model");
+    expect(screen.getByRole("button", { name: "저장" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "연결 테스트" })).toBeDisabled();
+  });
+
+  it("Ollama 선택 직후에는 neutral helper만 보이고 blur 뒤 field error를 연결한다", async () => {
+    stubSettings();
+    render(<SettingsForm />);
+    await screen.findByText("저장된 요약 모델 설정이 없습니다.");
+    fireEvent.click(screen.getByLabelText(/Ollama/));
+    const model = screen.getByRole("textbox", { name: /모델/ });
+    expect(screen.getByText("모델명이 필요합니다.")).toBeInTheDocument();
+    expect(screen.queryByText("Ollama 모델명을 입력하세요.")).not.toBeInTheDocument();
+    expect(model).not.toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.blur(model);
+    expect(screen.getByText("Ollama 모델명을 입력하세요.")).toBeInTheDocument();
+    expect(model).toHaveAttribute("aria-invalid", "true");
+    expect(model).toHaveAttribute("aria-describedby", "settings-model-error");
+
+    fireEvent.click(screen.getByLabelText(/Claude CLI/));
+    expect(screen.queryByText("Ollama 모델명을 입력하세요.")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /모델/ })).not.toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("connection test는 persisted provider/model snapshot을 표시하고 baseUrl은 노출하지 않는다", async () => {
+    stubSettings({
+      initial: { provider: "ollama", model: "llama3.1", baseUrl: "http://127.0.0.1:11434" },
+      health: { configured: true, provider: "ollama", model: "llama3.1", ok: true, detail: "connected" },
+    });
+    render(<SettingsForm />);
+    const test = await screen.findByRole("button", { name: "연결 테스트" });
+    fireEvent.click(test);
+    expect(await screen.findByText("검사한 저장 설정: Ollama · llama3.1")).toBeInTheDocument();
+    expect(screen.getByText(/Ollama llama3.1 · 연결됨/)).toBeInTheDocument();
+    expect(screen.queryByText(/11434/)).not.toBeInTheDocument();
+  });
+
+  it.each(["non_ok", "throw", "invalid"] as const)(
+    "connection test %s 실패는 저장 snapshot을 기준으로 안전한 오류를 표시한다",
+    async (healthMode) => {
+      stubSettings({
+        initial: { provider: "codex-cli", model: "gpt-5" },
+        healthMode,
+      });
+      render(<SettingsForm />);
+      fireEvent.click(await screen.findByRole("button", { name: "연결 테스트" }));
+      expect(await screen.findByText(/연결 테스트 요청에 실패했습니다/)).toBeInTheDocument();
+      expect(screen.getByText("검사한 저장 설정: Codex CLI · gpt-5")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "연결 테스트" })).toBeEnabled();
+    },
+  );
 });
 
 describe("MeetingDetailView — 다시 요약", () => {

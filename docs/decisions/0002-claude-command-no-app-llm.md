@@ -17,3 +17,5 @@
 
 ## 갱신 (팀 모드)
 원래는 "앱이 LLM을 직접 호출하지 않고, 별도 수동 커맨드가 요약한다"였다. 이제 앱이 백그라운드 워커로 사용자의 로컬 CLI(`claude`/`codex`)나 로컬 Ollama를 통해 직접 요약한다. 핵심 불변식은 유지된다: 여전히 $0(구독/로컬 모델)이며 **API 키를 저장하지 않는다**.
+
+Phase 7 갱신: API-only command·워커는 트리거이자 LLM producer일 뿐 canonical artifact writer가 아니다. 검증된 payload를 app summarize publisher에 넘겨 durable pair로 발행한다(ADR [0013](0013-durable-summarize-pair-publication.md)).

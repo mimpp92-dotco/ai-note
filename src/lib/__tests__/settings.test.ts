@@ -31,12 +31,21 @@ describe("settings", () => {
   });
 
   it("round-trips provider, model, and baseUrl", async () => {
-    await writeSettings({ provider: "ollama", model: "llama3", baseUrl: "http://x" });
+    await writeSettings({ provider: "ollama", model: "llama3", baseUrl: "http://localhost:11434/" });
     expect(await readSettings()).toEqual({
       provider: "ollama",
       model: "llama3",
-      baseUrl: "http://x",
+      baseUrl: "http://localhost:11434",
     });
+  });
+
+  it("rejects unsafe Ollama endpoints before persistence", async () => {
+    await expect(writeSettings({
+      provider: "ollama",
+      model: "llama3",
+      baseUrl: "http://evil.test:11434",
+    })).rejects.toThrowError("unsafe_local_endpoint");
+    expect(await readSettings()).toBeNull();
   });
 
   it("returns null when the file has an unknown provider", async () => {

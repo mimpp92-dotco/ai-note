@@ -13,9 +13,9 @@
   },
   "scripts": {
     "setup": "node scripts/setup.mjs",
-    "dev": "concurrently \"next dev --turbopack\" \"uv run --project whisper python whisper/server.py\"",
+    "dev": "concurrently \"next dev --turbopack --hostname 127.0.0.1\" \"uv run --project whisper python whisper/server.py\"",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",

@@ -1,124 +1,278 @@
-import { existsSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
+import type { StatusJson, SummarizeAttempt } from "@/domain/meeting";
+import { acquireArtifactReadLease } from "@/lib/artifactLease";
 import { readGlossary } from "@/lib/glossary";
+import {
+  isMeetingOperationActive,
+  tryAcquireMeetingOperation,
+  type MeetingOperationLease,
+} from "@/lib/meetingLifecycle";
 import { meetingPaths } from "@/lib/paths";
-import { readStatus, writeStatus } from "@/lib/status";
+import { classifyLlmFailure } from "@/lib/publicApi";
+import { readStatus, updateStatus } from "@/lib/status";
 import { resolveTranscript, summarizeCore } from "@/lib/summarizeCore";
+import {
+  discardSummarizeAttempt,
+  publishSummarizeAttempt,
+  reconcileSummarizeAttempt,
+  SummarizePublishError,
+} from "@/lib/summarizePublisher";
+import { inspectTranscriptionPublication } from "@/lib/transcriptionArtifacts";
 import { buildCorrectionPrompt, buildSummaryPrompt } from "@/lib/summarizePrompts";
 import { getConfiguredAdapter } from "@/services/llm";
-
-// Orchestrates one meeting summarize: correction → summary → summarizeCore (which
-// writes transcript.md + summary.json). The app never calls an LLM SDK — the
-// configured adapter shells out to the user's own CLI/local model. Both the
-// background worker and the manual retry route enter through runSummarize, so the
-// in-process lock below is the only guard against concurrent runs on one id.
+import type { LlmAdapter } from "@/services/llm/types";
 
 export const MAX_SUMMARIZE_ATTEMPTS = 3;
 
+export type SummarizeFailureReason =
+  | "not_found"
+  | "already_summarized"
+  | "no_model"
+  | "in_progress"
+  | "error";
+
 export type SummarizeResult =
   | { ok: true }
-  | {
-      ok: false;
-      reason: "not_found" | "already_summarized" | "no_model" | "in_progress" | "error";
-      message?: string;
-    };
+  | { ok: false; reason: SummarizeFailureReason; message?: string };
 
-// Anchored on globalThis: a module-level Set isn't reliably shared across Next's
-// separate server bundles, so worker and route could otherwise both run the same id.
-const inflight: Set<string> = ((
-  globalThis as typeof globalThis & { __aiNoteSummarizeInflight?: Set<string> }
-).__aiNoteSummarizeInflight ??= new Set<string>());
+type SummarizePreparationFailure = Extract<SummarizeResult, { ok: false }>;
 
-// True while a summarize (worker or manual) holds the lock for this id. Read-only
-// view of the same globalThis-anchored Set — the DELETE route uses it to refuse
-// removing a meeting whose summarizer could re-create status.json underneath it.
+export type SummarizeAcceptance =
+  | { accepted: true; durability: "durable" | "best_effort" }
+  | { accepted: false; reason: SummarizeFailureReason };
+
+interface PreparedSummarize {
+  lease: MeetingOperationLease;
+  adapter: LlmAdapter;
+  attempt: SummarizeAttempt;
+  acceptanceDurability: "durable" | "best_effort";
+}
+
 export function isSummarizeInflight(id: string): boolean {
-  return inflight.has(id);
+  return isMeetingOperationActive(id, "summarize");
+}
+
+async function prepareSummarize(
+  id: string,
+  force: boolean,
+  resetAttempts: boolean,
+): Promise<PreparedSummarize | SummarizePreparationFailure> {
+  const lease = await tryAcquireMeetingOperation(id, "summarize");
+  if (!lease) return { ok: false, reason: "in_progress" };
+  try {
+    const status = await readStatus(id);
+    if (!status) {
+      lease.release();
+      return { ok: false, reason: "not_found" };
+    }
+    if (
+      inspectTranscriptionPublication(id, status.transcriptionDispatch?.dispatchId).state
+      !== "complete"
+    ) {
+      lease.release();
+      return { ok: false, reason: "in_progress" };
+    }
+    const adapter = await getConfiguredAdapter();
+    if (!adapter) {
+      lease.release();
+      return { ok: false, reason: "no_model" };
+    }
+    const paths = meetingPaths(id);
+    const artifactLease = await acquireArtifactReadLease(id);
+    let prepared;
+    let attempt: SummarizeAttempt;
+    try {
+      const preTranscriptHash = await hashFileOrNull(paths.transcript);
+      const preSummaryHash = await hashFileOrNull(paths.summary);
+      if (!force && preSummaryHash !== null) {
+        lease.release();
+        return { ok: false, reason: "already_summarized" };
+      }
+      attempt = {
+        attemptId: randomUUID(),
+        kind: preSummaryHash === null ? "initial" : "resummarize",
+        startedAt: new Date().toISOString(),
+        ...(preTranscriptHash === null ? {} : { preTranscriptHash }),
+        ...(preSummaryHash === null ? {} : { preSummaryHash }),
+      };
+      prepared = await updateStatus(id, lease.ownerToken, (latest) => ({
+        ...latest,
+        status: "summarizing",
+        error: null,
+        summarizeAttempt: attempt,
+        ...(resetAttempts ? { summarizeAttempts: 0 } : {}),
+      }));
+    } finally {
+      artifactLease.release();
+    }
+    if (prepared.commit.durability === "pending") {
+      lease.release();
+      return { ok: false, reason: "error", message: "status_durability_pending" };
+    }
+    if (prepared.commit.durability === "none") {
+      lease.release();
+      return { ok: false, reason: "error", message: "status_not_committed" };
+    }
+    return { lease, adapter, attempt, acceptanceDurability: prepared.commit.durability };
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
+}
+
+async function hashFileOrNull(path: string): Promise<string | null> {
+  try {
+    return createHash("sha256").update(await readFile(path)).digest("hex");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function clearAttempt(latest: StatusJson): StatusJson {
+  return { ...latest, summarizeAttempt: undefined };
+}
+
+async function failMatchingAttempt(
+  id: string,
+  ownerToken: string,
+  attempt: SummarizeAttempt,
+  error: StatusJson["error"],
+): Promise<"durable" | "best_effort" | "pending" | "mismatch"> {
+  let matched = false;
+  const result = await updateStatus(id, ownerToken, (latest) => {
+    if (latest.summarizeAttempt?.attemptId !== attempt.attemptId) return latest;
+    matched = true;
+    return {
+      ...clearAttempt(latest),
+      status: attempt.preSummaryHash ? "summarized" : "transcribed",
+      summarizeAttempts: (latest.summarizeAttempts ?? 0) + 1,
+      error,
+    };
+  });
+  if (!matched) return "mismatch";
+  return result.commit.durability === "none" ? "pending" : result.commit.durability;
+}
+
+async function markAmbiguousAttempt(
+  id: string,
+  ownerToken: string,
+  attemptId: string,
+): Promise<void> {
+  await updateStatus(id, ownerToken, (latest) => latest.summarizeAttempt?.attemptId === attemptId
+    ? {
+        ...latest,
+        error: {
+          code: "summarize_ambiguous",
+          message: "요약 산출물 상태를 안전하게 판정할 수 없습니다",
+          action: "retry_summary",
+        },
+      }
+    : latest);
+}
+
+async function executePreparedSummarize(
+  id: string,
+  prepared: PreparedSummarize,
+): Promise<SummarizeResult> {
+  const { lease, adapter, attempt } = prepared;
+  const paths = meetingPaths(id);
+  try {
+    const status = await readStatus(id);
+    if (!status) return { ok: false, reason: "not_found" };
+    const raw = await readFile(paths.raw, "utf-8");
+    const glossary = await readGlossary();
+    const title = status.title;
+    const correction = await adapter.run(buildCorrectionPrompt(raw, glossary));
+    const transcript = resolveTranscript(raw, correction);
+    let summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), { json: true });
+
+    let result = await summarizeCore({
+      title,
+      raw,
+      correction,
+      summaryOutput,
+    });
+    if (result.usedFallback) {
+      try {
+        summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), { json: true });
+        result = await summarizeCore({
+          title,
+          raw,
+          correction,
+          summaryOutput,
+        });
+      } catch {
+        // The first pass already produced a schema-valid fallback payload.
+      }
+    }
+
+    await publishSummarizeAttempt({
+      id,
+      ownerToken: lease.ownerToken,
+      attempt,
+      transcript: result.transcript,
+      summary: `${JSON.stringify(result.summary, null, 2)}\n`,
+    });
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof SummarizePublishError && !error.restored) {
+      try {
+        const reconciled = await reconcileSummarizeAttempt(id, lease.ownerToken);
+        if (reconciled.state === "completed") return { ok: true };
+        if (reconciled.state === "ambiguous") {
+          await markAmbiguousAttempt(id, lease.ownerToken, attempt.attemptId);
+          return { ok: false, reason: "error", message: "summarize_ambiguous" };
+        }
+      } catch {
+        await markAmbiguousAttempt(id, lease.ownerToken, attempt.attemptId).catch(() => {});
+        return { ok: false, reason: "error", message: "summarize_ambiguous" };
+      }
+    }
+    const failure = error instanceof SummarizePublishError
+      ? {
+          code: "summary_failed",
+          message: "요약 산출물을 안전하게 저장하지 못했습니다",
+          action: "retry_summary" as const,
+        }
+      : classifyLlmFailure(error, adapter.provider);
+    try {
+      const durability = await failMatchingAttempt(id, lease.ownerToken, attempt, failure);
+      if (durability === "durable" || durability === "best_effort") {
+        await discardSummarizeAttempt(id, lease.ownerToken, attempt.attemptId).catch(() => {});
+      }
+    } catch {
+      // A delete/fence or durability failure may make status unavailable. The
+      // safe result still never contains provider output.
+    }
+    return { ok: false, reason: "error", message: failure.message };
+  } finally {
+    lease.release();
+  }
 }
 
 export async function runSummarize(
   id: string,
-  opts: { force?: boolean } = {},
+  options: { force?: boolean } = {},
 ): Promise<SummarizeResult> {
-  if (inflight.has(id)) return { ok: false, reason: "in_progress" };
-  inflight.add(id);
-  try {
-    const status = await readStatus(id);
-    if (!status) return { ok: false, reason: "not_found" };
+  const prepared = await prepareSummarize(id, options.force === true, false);
+  if (!("lease" in prepared)) return prepared;
+  return executePreparedSummarize(id, prepared);
+}
 
-    const p = meetingPaths(id);
-    // force = manual "다시 요약": regenerate transcript.md + summary.json (both
-    // regeneratable, summarize-worker-owned) over an existing summary. The worker
-    // never passes force, so all-meetings re-summarize is structurally impossible.
-    if (!opts.force && existsSync(p.summary)) return { ok: false, reason: "already_summarized" };
-
-    const adapter = await getConfiguredAdapter();
-    if (!adapter) return { ok: false, reason: "no_model" };
-
-    try {
-      await writeStatus(id, { ...status, status: "summarizing", error: null });
-
-      const raw = await readFile(p.raw, "utf-8");
-      const glossary = await readGlossary();
-      const title = status.title;
-
-      const correction = await adapter.run(buildCorrectionPrompt(raw, glossary));
-      // Summarize from the SAME transcript summarizeCore will persist as
-      // transcript.md — the over-edit guard may keep `raw` when the correction
-      // collapsed, so the summary is never built from a badly-truncated correction.
-      const transcript = resolveTranscript(raw, correction);
-      let summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), { json: true });
-
-      const result = await summarizeCore({
-        title,
-        raw,
-        correction,
-        summaryOutput,
-        transcriptPath: p.transcript,
-        summaryPath: p.summary,
-      });
-
-      // A fallback summary means the model's JSON was unusable — retry the summary
-      // step once. If the retry itself throws, keep the fallback already on disk
-      // (a degraded result beats masking it as an error and looping).
-      if (result.usedFallback) {
-        try {
-          summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), { json: true });
-          await summarizeCore({
-            title,
-            raw,
-            correction,
-            summaryOutput,
-            transcriptPath: p.transcript,
-            summaryPath: p.summary,
-          });
-        } catch {
-          // keep the pass-1 fallback summary.json and proceed to success.
-        }
-      }
-
-      const fresh = (await readStatus(id)) ?? status;
-      await writeStatus(id, { ...fresh, status: "summarized", error: null, summarizeAttempts: 0 });
-      return { ok: true };
-    } catch (err) {
-      // Bump the attempt count so the worker backs off instead of re-spawning the
-      // CLI every poll, and attach a retryable error. A failed *re-summarize* (an
-      // existing summary.json) must keep `summarized` so the still-valid prior
-      // summary stays visible and the failure isn't silently masked by deriveStatus
-      // promoting it back; a first-time summarize (no summary.json) degrades to
-      // `transcribed` as before.
-      const attempts = (status.summarizeAttempts ?? 0) + 1;
-      const message = String((err instanceof Error ? err.message : err) ?? err).slice(0, 300);
-      await writeStatus(id, {
-        ...((await readStatus(id)) ?? status),
-        status: existsSync(p.summary) ? "summarized" : "transcribed",
-        summarizeAttempts: attempts,
-        error: { message, action: "retry_summary" },
-      });
-      return { ok: false, reason: "error", message };
-    }
-  } finally {
-    inflight.delete(id);
+export async function acceptSummarize(
+  id: string,
+  options: { force?: boolean } = {},
+): Promise<SummarizeAcceptance> {
+  const prepared = await prepareSummarize(id, options.force === true, true);
+  if (!("lease" in prepared)) {
+    return { accepted: false, reason: prepared.reason };
   }
+  void executePreparedSummarize(id, prepared).catch(() => {});
+  return {
+    accepted: true,
+    durability: prepared.acceptanceDurability,
+  };
 }

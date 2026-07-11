@@ -27,8 +27,24 @@ export interface MeetingPaths {
   segments: string;
 }
 
+export interface FinalizeStagingPaths {
+  dir: string;
+  intent: string;
+  audio: string;
+  status: string;
+  receipt: string;
+}
+
+export function dataRoot(): string {
+  return join(process.cwd(), "data");
+}
+
+export function libraryPath(root = dataRoot()): string {
+  return join(root, "library.json");
+}
+
 export function meetingsRoot(): string {
-  return join(process.cwd(), "data", "meetings");
+  return join(dataRoot(), "meetings");
 }
 
 export function meetingDir(id: string): string {
@@ -47,4 +63,20 @@ export function meetingPaths(id: string): MeetingPaths {
     summary: join(dir, FILE_NAMES.summary),
     segments: join(dir, FILE_NAMES.segments),
   };
+}
+
+export function finalizeStagingPaths(id: string): FinalizeStagingPaths {
+  const safeId = assertSafeId(id);
+  const dir = join(meetingsRoot(), `.finalize-${safeId}`);
+  return {
+    dir,
+    intent: join(dir, ".finalize-intent.json"),
+    audio: join(dir, FILE_NAMES.audio),
+    status: join(dir, FILE_NAMES.status),
+    receipt: join(dir, ".finalize-receipt.json"),
+  };
+}
+
+export function finalizeReceiptPath(id: string): string {
+  return join(meetingDir(id), ".finalize-receipt.json");
 }

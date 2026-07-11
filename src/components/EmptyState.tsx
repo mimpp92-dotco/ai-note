@@ -9,7 +9,7 @@ const STEPS = [
 
 export function EmptyState() {
   return (
-    <div className="rounded-[16px] border border-line bg-panel px-6 py-8">
+    <section className="rounded-[16px] border border-line bg-panel p-4 py-8 sm:px-6">
       <h2 className="text-[18px] font-bold text-ink">아직 회의록이 없습니다</h2>
       <p className="mt-2 text-[14px] leading-relaxed text-inkSoft">
         첫 회의를 녹음해보세요. 아래 3단계로 회의록이 만들어집니다.
@@ -24,6 +24,6 @@ export function EmptyState() {
           </li>
         ))}
       </ol>
-    </div>
+    </section>
   );
 }

@@ -1,11 +1,9 @@
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-
-import { NextResponse } from "next/server";
-
 import { summarySchema } from "@/domain/summarySchema";
+import { readArtifactPair } from "@/lib/artifactPair";
+import { guardLocalApiRequest } from "@/lib/localRequestGuard";
+import { meetingFenceResponse } from "@/lib/meetingFence";
 import { assertSafeId } from "@/lib/meetingId";
-import { meetingPaths } from "@/lib/paths";
+import { publicErrorResponse } from "@/lib/publicApi";
 import { readStatus } from "@/lib/status";
 import { formatMeetingMarkdown } from "@/lib/summaryMarkdown";
 
@@ -17,18 +15,27 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = guardLocalApiRequest(request);
+  if (denied) return denied;
   let id: string;
   try {
     id = assertSafeId((await params).id);
   } catch {
-    return NextResponse.json({ error: "invalid meeting id" }, { status: 400 });
+    return publicErrorResponse("invalid_request", 400, { field: "meetingId" });
   }
+  const fenced = await meetingFenceResponse(id);
+  if (fenced) return fenced;
 
-  const p = meetingPaths(id);
-  if (!existsSync(p.summary)) {
-    return NextResponse.json({ error: "not summarized" }, { status: 404 });
+  const pair = await readArtifactPair(id);
+  const refenced = await meetingFenceResponse(id);
+  if (refenced) return refenced;
+  if (pair.state === "ambiguous") {
+    return publicErrorResponse("summary_failed", 409, { meetingId: id, action: "reveal" });
   }
-  const summary = summarySchema.parse(JSON.parse(await readFile(p.summary, "utf-8")));
+  if (pair.summary === null) {
+    return publicErrorResponse("meeting_not_found", 404, { meetingId: id });
+  }
+  const summary = summarySchema.parse(JSON.parse(pair.summary));
 
   const fmt = new URL(request.url).searchParams.get("fmt") ?? "md";
 
@@ -45,7 +52,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     });
   }
 
-  const transcript = existsSync(p.transcript) ? await readFile(p.transcript, "utf-8") : "";
+  const transcript = pair.transcript ?? "";
   const status = await readStatus(id);
   // md is the human hand-off doc, so its H1 reflects the effective title, matching
   // deriveStatus display semantics: a user override wins, else the summarizer's

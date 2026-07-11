@@ -25,6 +25,10 @@ const CANNED_SUMMARY = JSON.stringify({
 
 const RAW_MARKER = "[원문]";
 
+declare global {
+  var __aiNoteFakeLlmRunHook: (() => void | Promise<void>) | undefined;
+}
+
 export class FakeAdapter implements LlmAdapter {
   readonly provider: LlmProvider;
 
@@ -33,6 +37,7 @@ export class FakeAdapter implements LlmAdapter {
   }
 
   async run(prompt: string, opts?: { json?: boolean }): Promise<string> {
+    await globalThis.__aiNoteFakeLlmRunHook?.();
     if (process.env.FAKE_LLM_FAIL === "1") throw new Error("FAKE_LLM_FAIL");
     if (opts?.json || prompt.includes("JSON 스키마")) return CANNED_SUMMARY;
     const idx = prompt.indexOf(RAW_MARKER);

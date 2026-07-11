@@ -54,7 +54,12 @@ npm run typecheck && npm run lint && npm test && npm run check:links && npm run 
 3. Ensure the gate command above passes.
 4. Open a **pull request** and fill in the
    [PR template](.github/pull_request_template.md). Add screenshots for UI
-   changes.
+   changes. The README screenshots in `docs/media/` are captured from
+   **synthetic seed data only** (a throwaway workspace/folder and one demo
+   meeting) — never real recordings, transcripts, participant names, or local
+   paths. When regenerating them, seed a temp `data/` (library.json + one
+   summarized meeting) and a temp `glossary.json`, run the app on `127.0.0.1`,
+   and crop out any dev overlay.
 5. Wait for **CI to go green** and address review feedback.
 6. PRs are merged via **squash merge**, so the PR title becomes the commit — make
    it a good one (see below).

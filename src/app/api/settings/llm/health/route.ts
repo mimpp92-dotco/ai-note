@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-
+import { guardLocalApiRequest } from "@/lib/localRequestGuard";
+import { jsonNoStore } from "@/lib/publicApi";
 import { readSettings } from "@/lib/settings";
 import { getAdapter } from "@/services/llm";
 
@@ -8,13 +8,15 @@ import { getAdapter } from "@/services/llm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = guardLocalApiRequest(request);
+  if (denied) return denied;
   const s = await readSettings();
-  if (!s) return NextResponse.json({ configured: false });
+  if (!s) return jsonNoStore({ configured: false });
   const model = s.model?.trim();
 
   if (s.provider === "ollama" && !model) {
-    return NextResponse.json({
+    return jsonNoStore({
       configured: true,
       provider: s.provider,
       ok: false,
@@ -25,19 +27,19 @@ export async function GET() {
   try {
     const adapter = getAdapter(s);
     const health = await adapter.health();
-    return NextResponse.json({
+    return jsonNoStore({
       configured: true,
       provider: s.provider,
       ...(model ? { model } : {}),
       ...health,
     });
-  } catch (err) {
-    return NextResponse.json({
+  } catch {
+    return jsonNoStore({
       configured: true,
       provider: s.provider,
       ...(model ? { model } : {}),
       ok: false,
-      detail: String((err instanceof Error ? err.message : err) ?? err),
+      detail: "설정한 로컬 요약 서비스를 확인할 수 없습니다",
     });
   }
 }
