@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { GET as glossaryGET, POST as glossaryPOST } from "@/app/api/glossary/route";
+import { GET as audioGET } from "@/app/api/meetings/[id]/audio/route";
 import { GET as exportGET } from "@/app/api/meetings/[id]/export/route";
 import { POST as finalizePOST } from "@/app/api/meetings/[id]/finalize/route";
 import { DELETE as deleteMeeting, GET as getMeeting } from "@/app/api/meetings/[id]/route";
@@ -19,6 +20,7 @@ import { POST as llmSettingsPOST } from "@/app/api/settings/llm/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
 import { meetingPaths } from "@/lib/paths";
+import { acquireArtifactWriteLease } from "@/lib/artifactLease";
 import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
 import { settingsPath, writeSettings } from "@/lib/settings";
 import { initialStatus, writeStatus } from "@/lib/status";
@@ -119,6 +121,22 @@ function finalizeReq(id: string, bytes: Uint8Array) {
     body: bytes,
     duplex: "half",
   } as RequestInit);
+}
+
+function seedAudio(id: string, bytes: Uint8Array, target: "play" | "audio" = "play") {
+  const paths = meetingPaths(id);
+  mkdirSync(paths.dir, { recursive: true });
+  writeFileSync(paths[target], bytes);
+}
+
+async function expectAudioLeaseReleased(id: string) {
+  const operation = await acquireMeetingOperation(id, "delete");
+  try {
+    const lease = await acquireArtifactWriteLease(id, operation.ownerToken);
+    lease.release();
+  } finally {
+    operation.release();
+  }
 }
 
 describe("app-api routes", () => {
@@ -282,6 +300,76 @@ describe("app-api routes", () => {
     );
     expect(response.status).toBe(403);
     expect(paramsObserved).toBe(false);
+  });
+});
+
+describe("meeting audio byte-range transport", () => {
+  const bytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+  it("returns the complete file with exact length and byte-range capability when Range is absent", async () => {
+    const id = "audio-full";
+    seedAudio(id, bytes);
+
+    const response = await audioGET(appRequest(`/api/meetings/${id}/audio`), ctx(id));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect(response.headers.get("content-length")).toBe(String(bytes.byteLength));
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+    await expectAudioLeaseReleased(id);
+  });
+
+  it.each([
+    ["closed", "bytes=2-5", [2, 3, 4, 5], "bytes 2-5/10"],
+    ["open-ended", "bytes=6-", [6, 7, 8, 9], "bytes 6-9/10"],
+    ["suffix", "bytes=-3", [7, 8, 9], "bytes 7-9/10"],
+  ])("normalizes a valid %s range and streams only the selected bytes", async (name, range, expected, contentRange) => {
+    const id = `audio-${name}`;
+    seedAudio(id, bytes);
+
+    const response = await audioGET(
+      appRequest(`/api/meetings/${id}/audio`, { headers: { range } }),
+      ctx(id),
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect(response.headers.get("content-range")).toBe(contentRange);
+    expect(response.headers.get("content-length")).toBe(String(expected.length));
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual(expected);
+    await expectAudioLeaseReleased(id);
+  });
+
+  it.each([
+    ["multiple", "bytes=0-1,4-5"],
+    ["malformed", "bytes=oops"],
+    ["past-eof", "bytes=99-"],
+  ])("returns a safe 416 for an invalid %s range without leaking the read lease", async (name, range) => {
+    const id = `audio-invalid-${name}`;
+    seedAudio(id, bytes);
+
+    const response = await audioGET(
+      appRequest(`/api/meetings/${id}/audio`, { headers: { range } }),
+      ctx(id),
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("content-range")).toBe("bytes */10");
+    expect(body).not.toContain(range);
+    expect(body).not.toContain(workDir);
+    await expectAudioLeaseReleased(id);
+  });
+
+  it("returns 416 for a zero-length selected file and never creates a body stream lease", async () => {
+    const id = "audio-empty";
+    seedAudio(id, new Uint8Array());
+
+    const response = await audioGET(appRequest(`/api/meetings/${id}/audio`), ctx(id));
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("content-range")).toBe("bytes */0");
+    await expectAudioLeaseReleased(id);
   });
 });
 

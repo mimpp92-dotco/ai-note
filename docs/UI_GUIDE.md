@@ -99,10 +99,12 @@
 - **Finalize 결과 카드**: `원본 저장`·`회의 위치`·`재생 준비`·`전사`를 분리한다. Durable/best-effort/pending published 결과에는 재업로드 CTA를 두지 않는다. Fallback은 requested/actual breadcrumb와 이유를, non-null unavailable은 위치 재확인·대기 목록·reveal을, null unavailable은 actual 새로고침·reveal만 제공한다. Actual 위치 링크 이동 뒤 scope heading에 focus한다.
 
 ### 상세 (2탭)
+- **정보 순서**: 목록으로 → 제목 → 날짜·상태 chip·위치 metadata → 이동/attention/lifecycle notice → utility action bar → `회의 정보`(audio·참석자) → tabs → 선택 panel 순서다. 제목은 action과 같은 flex row에서 폭을 경쟁하지 않고, metadata와 notice action은 mobile에서 wrap/stack한다.
+- **Action bar**: Ready library의 회의 이동과 요약 복사·전사 복사·Markdown/JSON 다운로드·폴더 열기·다시 요약을 한 `회의 작업` group으로 묶는다. 모든 visible sibling은 rectangular radius, 최소 44px 높이, 같은 gap/alignment를 사용한다. 재요약 확인/error panel은 group 바로 아래에 열리고 busy 중 confirm/cancel을 막는다. 복사와 폴더 열기는 immediate success/failure를 `aria-live`로 알리며 detached OS viewer는 `열기 요청됨`까지만 표현한다.
+- **회의 정보**: audio와 참석자 form은 긴 transcript 뒤가 아니라 action bar와 tabs 사이에 둔다. Mobile은 stack하고, 넓은 화면에서만 두 column `items-start`로 배치해 억지 equal-height 빈 공간을 만들지 않는다. 참석자 저장 실패는 입력을 보존한 inline status로 보이고, 성공 response의 검증된 participants를 reload 없이 copy/export에 즉시 반영한다. Parent refresh는 pristine field만 동기화하고 dirty draft를 덮지 않는다.
+- **Tabs keyboard/ARIA**: 공유 horizontal controlled Tabs가 stable `tab`/`tabpanel` id, `aria-controls`/`aria-labelledby`, selected-only `tabIndex=0`과 panel 렌더를 소유한다. Left/Right는 wrap하며 automatic activation, Home/End는 first/last로 이동한다. Click도 선택+focus를 맞추고 Tab key는 가로 탐색 handler가 가로막지 않는다.
 - **전체 스크립트** 탭: 교정본(`transcript.md`). 아직 교정 전이면 raw를 "교정 전 원문 · 자동 전사"로 표시(전사 후 빈 탭 금지). 세그먼트 타임스탬프 표시.
 - **회의록 요약** 탭: `summary.json` 렌더(요약/목적/논의/결정/액션아이템/리스크/후속) + **내보내기(export) 버튼**.
-- **다음-단계 카드**: mac-창 스타일 코드블록에 정확한 커맨드 + 복사 버튼.
-- 참석자·프로젝트 텍스트 입력(→ `status.review`). 오디오 재생(`play.webm`).
 
 ### 단어 관리(단어장)
 - **2탭**(각 탭 카운트 표기): **일반 용어** / **교정쌍**. 상단 1줄 설명(브랜드명 미포함).

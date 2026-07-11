@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EmptyState } from "@/components/EmptyState";
+import { CopyButton } from "@/components/CopyButton";
 import { GlossaryClient } from "@/components/GlossaryClient";
 import { splitBacklog } from "@/components/HomeClient";
 import { MeetingDetailView } from "@/components/MeetingDetailView";
@@ -63,6 +64,27 @@ const SUMMARY: Summary = {
   risks: ["일정 지연 가능성"],
   followups: ["리뷰 미팅 잡기"],
 };
+
+function stubClipboard(writeText: ReturnType<typeof vi.fn>) {
+  vi.stubGlobal(
+    "navigator",
+    Object.assign(Object.create(window.navigator), {
+      clipboard: { writeText },
+    }),
+  );
+}
+
+function healthResponse(input: string | URL | Request): Response {
+  const url = String(input);
+  if (url === "/api/settings/llm/health") {
+    return new Response(JSON.stringify({ configured: false }), {
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return new Response(JSON.stringify({ connected: true, ready: true, model: "base" }), {
+    headers: { "content-type": "application/json" },
+  });
+}
 
 describe("EmptyState", () => {
   it("renders the guide and the 3-step flow without terminal commands", () => {
@@ -143,6 +165,32 @@ describe("PendingBanner", () => {
     const action = screen.getByRole("link", { name: "확인할 회의 열기" });
     expect(action.parentElement).toHaveClass("flex-col", "sm:flex-row");
     expect(action).toHaveClass("w-full", "sm:w-auto");
+  });
+});
+
+describe("CopyButton feedback", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("announces clipboard success on screen and through a live region", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    render(<CopyButton text="복사할 내용" label="요약 복사" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
+
+    await waitFor(() => expect(screen.getByText("복사됨")).toBeInTheDocument());
+    expect(screen.getByText("복사됨")).toHaveAttribute("aria-live", "polite");
+    expect(writeText).toHaveBeenCalledWith("복사할 내용");
+  });
+
+  it("does not silently swallow clipboard failure", async () => {
+    stubClipboard(vi.fn().mockRejectedValue(new Error("clipboard blocked")));
+    render(<CopyButton text="복사할 내용" label="요약 복사" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
+
+    await waitFor(() => expect(screen.getByText("복사 실패")).toBeInTheDocument());
+    expect(screen.getByText("복사 실패")).toHaveAttribute("aria-live", "polite");
   });
 });
 
@@ -694,6 +742,213 @@ describe("MeetingDetailView — 요약 상태 카드", () => {
     );
     await waitFor(() => expect(screen.getByText(/요약 모델을 확인하세요/)).toBeInTheDocument());
     expect(screen.queryByText(/요약 대기 · 자동 생성 중/)).not.toBeInTheDocument();
+  });
+});
+
+describe("MeetingDetailView — information hierarchy and review freshness", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("orders metadata, notices, actions, meeting info, and tabs without putting status in the action group", () => {
+    const { container } = render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({
+          status: "summarized",
+          error: { message: "이전 요약 보존", action: "retry_summary" },
+        })}
+        transcript={{ text: "매우 긴 전사 ".repeat(500), corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio
+      />,
+    );
+
+    const order = Array.from(container.querySelectorAll("main > [data-detail-section]"))
+      .map((element) => element.getAttribute("data-detail-section"));
+    expect(order).toEqual(["heading", "notices", "actions", "meeting-info", "tabs"]);
+
+    const actions = screen.getByRole("group", { name: "회의 작업" });
+    expect(within(actions).getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "전사 복사" })).toBeInTheDocument();
+    expect(within(actions).getByRole("link", { name: "요약 다운로드(.md)" })).toBeInTheDocument();
+    expect(within(actions).getByRole("link", { name: "JSON(.json)" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "폴더 열기" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "다시 요약" })).toBeInTheDocument();
+    expect(within(actions).queryByText("요약 완료")).not.toBeInTheDocument();
+
+    const actionControls = [
+      ...within(actions).getAllByRole("button"),
+      ...within(actions).getAllByRole("link"),
+    ];
+    for (const control of actionControls) {
+      expect(control.className).toContain("min-h-11");
+      expect(control.className).toContain("rounded-md");
+    }
+
+    const info = screen.getByRole("region", { name: "회의 정보" });
+    const tabs = screen.getByRole("tablist", { name: "회의 내용" });
+    expect(info.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(info).getByText("녹음 재생")).toBeInTheDocument();
+    expect(within(info).getByRole("heading", { name: "참석자" })).toBeInTheDocument();
+  });
+
+  it("shows a review save error, preserves the typed value, and does the same for a network failure", async () => {
+    let reviewAttempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/review") {
+        reviewAttempts += 1;
+        if (reviewAttempts === 1) {
+          return new Response(JSON.stringify({ error: { code: "internal_error" } }), { status: 500 });
+        }
+        throw new Error("network unavailable");
+      }
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+    const input = screen.getByRole("textbox", { name: "참석자" });
+    fireEvent.change(input, { target: { value: "딜런, 지훈" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("저장하지 못했습니다"));
+    expect(input).toHaveValue("딜런, 지훈");
+
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(reviewAttempts).toBe(2));
+    expect(screen.getByRole("status")).toHaveTextContent("저장하지 못했습니다");
+    expect(input).toHaveValue("딜런, 지훈");
+  });
+
+  it("uses validated normalized participants for summary copy immediately after save", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/review") {
+        return new Response(JSON.stringify({ review: { participants: ["딜런", "지훈"] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "참석자" }), {
+      target: { value: " 딜런, 지훈 " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("저장됨"));
+
+    fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls.at(-1)?.[0]).toContain("**참석자:** 딜런, 지훈");
+  });
+
+  it("surfaces immediate reveal refusal and network failure instead of claiming the OS viewer opened", async () => {
+    let revealAttempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/reveal") {
+        revealAttempts += 1;
+        if (revealAttempts === 1) return new Response(null, { status: 500 });
+        throw new Error("network unavailable");
+      }
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "폴더 열기" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "열기 실패" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "열기 실패" }));
+    await waitFor(() => expect(revealAttempts).toBe(2));
+    expect(screen.getByRole("button", { name: "열기 실패" })).toBeInTheDocument();
+    expect(screen.queryByText("폴더 열림")).not.toBeInTheDocument();
+  });
+
+  it("describes a successful reveal response as a detached request, not guaranteed viewer success", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/reveal") return new Response(null, { status: 200 });
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "폴더 열기" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "열기 요청됨" })).toBeInTheDocument());
+  });
+
+  it("keeps a dirty participant edit across parent refresh but syncs a pristine field", () => {
+    const baseProps = {
+      id: "m1",
+      transcript: { text: "본문", corrected: true },
+      segments: [] as never[],
+      summary: SUMMARY,
+      hasAudio: false,
+    };
+    const { rerender } = render(
+      <MeetingDetailView {...baseProps} status={makeStatus({
+        status: "summarized",
+        review: { participants: ["기존"] },
+      })} />,
+    );
+    const input = screen.getByRole("textbox", { name: "참석자" });
+    fireEvent.change(input, { target: { value: "작성 중" } });
+    rerender(
+      <MeetingDetailView {...baseProps} status={makeStatus({
+        status: "summarized",
+        review: { participants: ["서버 갱신"] },
+      })} />,
+    );
+    expect(input).toHaveValue("작성 중");
+
+    const { rerender: rerenderPristine } = render(
+      <MeetingDetailView {...baseProps} id="m2" status={makeStatus({
+        id: "m2",
+        status: "summarized",
+        review: { participants: ["처음"] },
+      })} />,
+    );
+    const pristine = screen.getAllByRole("textbox", { name: "참석자" })[1];
+    rerenderPristine(
+      <MeetingDetailView {...baseProps} id="m2" status={makeStatus({
+        id: "m2",
+        status: "summarized",
+        review: { participants: ["새 값"] },
+      })} />,
+    );
+    expect(pristine).toHaveValue("새 값");
   });
 });
 

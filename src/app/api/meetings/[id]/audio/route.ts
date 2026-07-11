@@ -1,7 +1,8 @@
 import { createReadStream, existsSync } from "node:fs";
-import { Readable } from "node:stream";
+import { stat } from "node:fs/promises";
 
 import { acquireArtifactReadLease } from "@/lib/artifactLease";
+import { createLeasedWebStream, resolveByteRange } from "@/lib/audioStream";
 import { guardLocalApiRequest } from "@/lib/localRequestGuard";
 import { meetingFenceResponse } from "@/lib/meetingFence";
 import { assertSafeId } from "@/lib/meetingId";
@@ -13,6 +14,15 @@ import { publicErrorResponse } from "@/lib/publicApi";
 // route. Prefers play.webm (seekable remux), falls back to the original audio.webm.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function rangeNotSatisfiable(total?: number): Response {
+  const response = publicErrorResponse("invalid_request", 416);
+  response.headers.set("accept-ranges", "bytes");
+  if (total !== undefined && Number.isSafeInteger(total) && total >= 0) {
+    response.headers.set("content-range", `bytes */${total}`);
+  }
+  return response;
+}
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const denied = guardLocalApiRequest(request);
@@ -27,24 +37,61 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (fenced) return fenced;
 
   const artifactLease = await acquireArtifactReadLease(id);
+  let leaseReleased = false;
+  const releaseLease = () => {
+    if (leaseReleased) return;
+    leaseReleased = true;
+    artifactLease.release();
+  };
   const refenced = await meetingFenceResponse(id);
   if (refenced) {
-    artifactLease.release();
+    releaseLease();
     return refenced;
   }
   const p = meetingPaths(id);
   const path = existsSync(p.play) ? p.play : existsSync(p.audio) ? p.audio : null;
   if (!path) {
-    artifactLease.release();
+    releaseLease();
     return publicErrorResponse("meeting_not_found", 404, { meetingId: id });
   }
 
-  const nodeStream = createReadStream(path);
-  const release = () => { artifactLease.release(); };
-  nodeStream.once("close", release);
-  nodeStream.once("error", release);
-  const stream = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
-  return new Response(stream, {
-    headers: { "content-type": "audio/webm", "cache-control": "no-store" },
-  });
+  let metadata;
+  try {
+    metadata = await stat(path);
+  } catch {
+    releaseLease();
+    return publicErrorResponse("internal_error", 500);
+  }
+  const total = metadata.size;
+  if (!metadata.isFile() || !Number.isSafeInteger(total) || total <= 0) {
+    releaseLease();
+    return rangeNotSatisfiable(Number.isSafeInteger(total) && total >= 0 ? total : undefined);
+  }
+
+  const selected = resolveByteRange(request.headers.get("range"), total);
+  if (selected.kind === "unsatisfiable") {
+    releaseLease();
+    return rangeNotSatisfiable(total);
+  }
+
+  try {
+    const nodeStream = createReadStream(path, { start: selected.start, end: selected.end });
+    const stream = createLeasedWebStream(nodeStream, releaseLease, request.signal);
+    const headers = new Headers({
+      "accept-ranges": "bytes",
+      "cache-control": "no-store",
+      "content-length": String(selected.length),
+      "content-type": "audio/webm",
+    });
+    if (selected.kind === "partial") {
+      headers.set("content-range", `bytes ${selected.start}-${selected.end}/${total}`);
+    }
+    return new Response(stream, {
+      status: selected.kind === "partial" ? 206 : 200,
+      headers,
+    });
+  } catch {
+    releaseLease();
+    return publicErrorResponse("internal_error", 500);
+  }
 }

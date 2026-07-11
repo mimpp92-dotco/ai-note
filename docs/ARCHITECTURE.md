@@ -61,6 +61,12 @@ flowchart LR
 
 모든 쓰기는 **temp→file fsync→rename→parent-directory fsync** 순서다. `rename`이 논리적 commit 지점이며 generic FileOps는 `not_committed`, `committed_durable`, `committed_best_effort`(directory sync가 알려진 미지원), `committed_durability_pending`(지원 환경의 일시 sync 실패)을 구분한다. Post-rename 실패는 canonical을 rollback하거나 blind replay하지 않는다. Central registry mutation은 absolute `library.json` path process queue와 `libraryId+revision` 낙관적 token을 함께 사용한다(ADR 0011).
 
+## Meeting detail review·audio transport
+
+- `POST /api/meetings/{id}/review`만 app-api single writer로 `status.review.participants`를 갱신한다. Detail client는 2xx body의 `review.participants` string array를 검증·정규화한 뒤 current participants state에 올려 summary copy와 후속 export request가 즉시 최신 저장값을 사용하게 한다. Non-2xx/network/invalid success body는 입력을 보존한 inline failure다. Parent RSC refresh는 pristine draft만 동기화하며 dirty local edit를 덮지 않는다.
+- `GET /api/meetings/{id}/audio`는 local guard → safe ID → tombstone fence → artifact read lease → fence 재확인 → `play.webm` 우선 선택 → lease 안 stat 순서를 고정한다. Range 없음은 `200` + `Accept-Ranges: bytes` + exact `Content-Length`, valid single closed/open-ended/suffix byte range는 normalize한 `206` + exact `Content-Range`/length다. Malformed/multiple/EOF 밖 range와 zero/invalid selected file은 known total의 `Content-Range: bytes */total`을 포함한 safe `416`이며 raw Range/path/fs error를 응답이나 log에 복제하지 않는다.
+- Audio body는 선택한 `[start,end]`만 Node file stream으로 읽고 `Readable.toWeb()` backpressure를 유지한다. Request abort, Web reader cancel, Node end/close/error는 settle-once cleanup으로 수렴해 stream destroy/close와 artifact lease release를 각각 한 번만 수행한다. Adapter가 Web controller를 직접 enqueue/close/error하지 않아 cancel/terminal race 뒤 `Controller is already closed`를 만들지 않는다.
+
 ## library.json v1 계약
 
 ```jsonc
