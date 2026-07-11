@@ -24,7 +24,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         </a>
         <LibraryProvider>
           <RecorderSessionProvider>
-            <div className="flex min-h-screen w-full flex-col overflow-x-hidden lg:flex-row">
+            <div className="flex min-h-screen w-full flex-col lg:flex-row">
               <Suspense fallback={<div className="h-16 w-full border-b border-line bg-chrome lg:h-screen lg:w-[272px] lg:border-b-0 lg:border-r" />}>
                 <LibraryNavigation />
               </Suspense>

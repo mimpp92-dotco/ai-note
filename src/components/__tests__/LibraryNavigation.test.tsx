@@ -210,6 +210,94 @@ describe("activated library navigation", () => {
     expect(screen.queryByText(/삭제|재구성/)).not.toBeInTheDocument();
   });
 
+  it("keeps the native workspace combobox while reserving an aria-hidden chevron inset", () => {
+    const base = readyState();
+    libraryState = readyState({
+      library: {
+        ...base.library!,
+        workspaces: base.library!.workspaces.map((workspace) => (
+          workspace.id === DEFAULT_WORKSPACE
+            ? { ...workspace, name: "매우 긴 워크스페이스 이름이 선택 화살표 아래로 들어가지 않아야 함" }
+            : workspace
+        )),
+      },
+    });
+
+    renderShell();
+
+    const select = screen.getByRole("combobox", { name: "워크스페이스 선택" });
+    expect(select.tagName).toBe("SELECT");
+    expect(select).toHaveClass("appearance-none", "pr-12");
+    expect(select.parentElement).toHaveClass("relative");
+    const chevron = select.parentElement?.querySelector("svg");
+    expect(chevron).toHaveAttribute("aria-hidden", "true");
+    expect(chevron?.parentElement).toHaveClass("pointer-events-none", "right-4");
+  });
+
+  it("uses shared SVG folder/menu controls with independent 44px targets and no interactive glyph text", () => {
+    const childId = "30000000-0000-4000-8000-000000000004";
+    const leafId = "30000000-0000-4000-8000-000000000005";
+    const base = readyState();
+    const timestamp = "2026-07-10T00:00:00.000Z";
+    libraryState = readyState({
+      library: {
+        ...base.library!,
+        folders: [
+          ...base.library!.folders.map((folder) => ({
+            ...folder,
+            name: "1단계 아주 긴 프로젝트 폴더 이름",
+          })),
+          {
+            id: childId,
+            workspaceId: DEFAULT_WORKSPACE,
+            parentFolderId: FOLDER,
+            name: "2단계 아주 긴 하위 폴더 이름",
+            color: "amber",
+            order: 0,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          },
+          {
+            id: leafId,
+            workspaceId: DEFAULT_WORKSPACE,
+            parentFolderId: childId,
+            name: "3단계 아주 긴 마지막 폴더 이름",
+            color: "olive",
+            order: 0,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          },
+        ],
+        counts: {
+          ...base.library!.counts,
+          folders: [
+            { folderId: FOLDER, direct: 123 },
+            { folderId: childId, direct: 45 },
+            { folderId: leafId, direct: 6 },
+          ],
+        },
+      },
+      expandedFolderIds: new Set([FOLDER, childId]),
+    });
+
+    renderShell();
+
+    const controls = [
+      screen.getByRole("button", { name: "새 폴더" }),
+      screen.getByRole("button", { name: "1단계 아주 긴 프로젝트 폴더 이름 하위 폴더 접기" }),
+      screen.getByRole("button", { name: "1단계 아주 긴 프로젝트 폴더 이름 폴더 편집" }),
+      screen.getByRole("button", { name: "1단계 아주 긴 프로젝트 폴더 이름에 새 하위 폴더" }),
+    ];
+    for (const control of controls) {
+      expect(control).toHaveClass("min-h-11", "min-w-11");
+      expect(control.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    }
+    expect(screen.getByRole("link", { name: /3단계 아주 긴 마지막 폴더 이름/ }))
+      .toHaveAttribute("title", "3단계 아주 긴 마지막 폴더 이름");
+    expect(screen.getByRole("navigation", { name: "라이브러리" }))
+      .not.toHaveTextContent(/•••|＋|⌄|›|☰|×/);
+  });
+
   it("uses global summary work, source-safe row links, pending provisional rows, and default-All recorder", () => {
     renderShell();
     expect(screen.getByText("2개 확인 필요")).toBeInTheDocument();
@@ -221,12 +309,94 @@ describe("activated library navigation", () => {
     expect(screen.getByText("조직 정보 없이 발견된 회의")).toBeInTheDocument();
     expect(screen.getByText("위치 저장 안 됨")).toBeInTheDocument();
     expect(screen.getByText(/요청 위치: 기본 · 미분류/)).toBeInTheDocument();
+    const pendingRow = screen.getByRole("link", { name: /위치 대기 회의/ });
+    expect(pendingRow).toHaveClass("flex-col", "sm:flex-row");
+    expect(screen.getByText("위치 대기 회의")).toHaveClass("min-w-0", "break-words");
     expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toBeInTheDocument();
     expect(screen.getByText(/이 워크스페이스의 미분류에 저장/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "위치 선택" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "제품 회의 관리 메뉴" }));
     expect(screen.getByRole("button", { name: "이동" })).toBeInTheDocument();
+  });
+
+  it("lets the Home move-success copy and actions stack without competing for mobile width", async () => {
+    const payload = {
+      mode: "ready" as const,
+      version: { ...VERSION, revision: VERSION.revision + 1 },
+      library: readyState().library,
+      location: { workspaceId: OTHER_WORKSPACE, folderId: null, breadcrumb: [] },
+    };
+    libraryState = readyState({
+      runLibraryMutation: vi.fn(async () => ({
+        response: new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        payload,
+        accepted: true,
+      })),
+    });
+    renderShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "제품 회의 관리 메뉴" }));
+    fireEvent.click(screen.getByRole("button", { name: "이동" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "이동할 워크스페이스" }), {
+      target: { value: OTHER_WORKSPACE },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: /업무 \/ 미분류/ }));
+    fireEvent.click(screen.getByRole("button", { name: "이 위치로 이동" }));
+
+    const movedLink = await screen.findByRole("link", { name: "이동한 위치 열기" });
+    expect(movedLink.closest("section")).toHaveClass("flex-col", "sm:flex-row");
+    expect(movedLink.parentElement).toHaveClass("flex-col", "min-[360px]:flex-row");
+    expect(movedLink).toHaveClass("w-full", "sm:w-auto");
+  });
+
+  it("renders the default-All onboarding as one empty surface and one heading", () => {
+    const base = readyState();
+    libraryState = readyState({
+      library: {
+        ...base.library!,
+        counts: {
+          ...base.library!.counts,
+          visibleMeetingCount: 0,
+          organizationPendingCount: 0,
+          workspaces: base.library!.counts.workspaces.map((count) => ({
+            ...count,
+            total: 0,
+            unfiled: 0,
+          })),
+          folders: base.library!.counts.folders.map((count) => ({ ...count, direct: 0 })),
+        },
+      },
+      pages: {
+        ...base.pages,
+        pages: new Map([[0, {
+          position: 0,
+          cursor: null,
+          nextCursor: null,
+          ids: [],
+          loadedAt: Date.now(),
+        }]]),
+        entities: new Map(),
+      },
+      summaryWork: null,
+      organizationPending: {
+        ...base.organizationPending!,
+        count: 0,
+        rows: [],
+      },
+    });
+
+    renderShell();
+
+    const headings = screen.getAllByRole("heading", { name: "아직 회의록이 없습니다" });
+    expect(headings).toHaveLength(1);
+    const surface = headings[0].closest("section");
+    expect(surface).not.toBeNull();
+    expect(surface?.querySelectorAll("section")).toHaveLength(0);
+    expect(surface).toHaveTextContent("아래 3단계로 회의록이 만들어집니다");
   });
 
   it("opens the shared same-workspace folder move picker", () => {

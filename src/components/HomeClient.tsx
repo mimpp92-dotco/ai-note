@@ -157,7 +157,7 @@ export function HomeClient() {
 
   if (libraryState.mode === "loading") {
     return (
-      <main id="main" className="w-full max-w-5xl px-6 py-12" aria-busy="true">
+      <main id="main" className="w-full max-w-5xl px-4 py-12 sm:px-6" aria-busy="true">
         <div className="h-8 w-48 animate-pulse rounded bg-soft motion-reduce:animate-none" />
         <div className="mt-8 h-36 rounded-2xl bg-soft" />
       </main>
@@ -166,7 +166,7 @@ export function HomeClient() {
 
   if (libraryState.mode === "degraded_fallback" || !libraryState.library) {
     return (
-      <main id="main" className="w-full max-w-5xl space-y-8 px-6 py-12">
+      <main id="main" className="w-full max-w-5xl space-y-8 px-4 py-12 sm:px-6">
         <header>
           <h1 className="text-2xl font-bold tracking-tight text-ink">모든 회의</h1>
           <p className="mt-2 text-[15px] text-inkSoft">조직 위치 없이 저장하고 전체 회의를 표시합니다.</p>
@@ -177,7 +177,7 @@ export function HomeClient() {
           recovery={libraryState.recovery}
           onRetry={libraryState.refreshLibrary}
         />
-        <div className="rounded-[14px] border border-warn/40 bg-warnBg px-5 py-4 text-[14px] text-ink">
+        <div className="rounded-[14px] border border-warn/40 bg-warnBg p-4 text-[14px] text-ink sm:px-6">
           새 녹음은 <span className="font-semibold">조직 위치 없이 저장</span>되며 조직 정보 없이 발견된 회의로 표시됩니다.
         </div>
         <Recorder />
@@ -227,7 +227,7 @@ export function HomeClient() {
 
   if (!scope || resolution?.replace) {
     return (
-      <main id="main" className="w-full max-w-5xl px-6 py-12" aria-busy="true">
+      <main id="main" className="w-full max-w-5xl px-4 py-12 sm:px-6" aria-busy="true">
         <p className="text-[14px] text-inkSoft">회의 위치를 확인하는 중…</p>
         <span className="sr-only" aria-live="polite">{canonicalMessage}</span>
       </main>
@@ -272,7 +272,7 @@ export function HomeClient() {
   };
 
   return (
-    <main id="main" className="w-full max-w-5xl space-y-8 px-6 py-12">
+    <main id="main" className="w-full max-w-5xl space-y-8 px-4 py-12 sm:px-6">
       <header>
         <h1 ref={headingRef} tabIndex={-1} className="text-2xl font-bold tracking-tight text-ink">
           {scopeTitle(scope, library)}
@@ -283,7 +283,7 @@ export function HomeClient() {
 
       {libraryState.generationResult && (
         <section
-          className="rounded-[14px] border border-success/40 bg-panel px-5 py-4"
+          className="rounded-[14px] border border-success/40 bg-panel p-4 sm:px-6"
           role="status"
           aria-live="polite"
         >
@@ -296,19 +296,19 @@ export function HomeClient() {
       )}
 
       {moveNotice && movedHref && (
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-success/40 bg-panel px-5 py-4" role="status" aria-live="polite">
-          <p className="text-[13px] text-ink">
+        <section className="flex flex-col items-stretch gap-3 rounded-[14px] border border-success/40 bg-panel p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6" role="status" aria-live="polite">
+          <p className="min-w-0 break-words text-[13px] text-ink">
             <span className="font-semibold">{moveNotice.title}</span>을(를) {movedLabel || "선택한 위치"}(으)로 이동했습니다.
           </p>
-          <div className="flex gap-2">
+          <div className="flex w-full flex-col gap-2 min-[360px]:flex-row sm:w-auto">
             <GuardedLink
               href={movedHref}
               onClick={() => window.sessionStorage.setItem("ai-note-focus-scope", "1")}
-              className="inline-flex min-h-11 items-center rounded-full border border-line px-4 text-[13px] font-semibold text-accent"
+              className="inline-flex min-h-11 w-full items-center justify-center rounded-full border border-line px-4 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:w-auto"
             >
               이동한 위치 열기
             </GuardedLink>
-            <button type="button" onClick={() => setMoveNotice(null)} className="min-h-11 rounded-full px-3 text-[13px] text-inkSoft">닫기</button>
+            <button type="button" onClick={() => setMoveNotice(null)} className="min-h-11 w-full rounded-full px-3 text-[13px] text-inkSoft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:w-auto">닫기</button>
           </div>
         </section>
       )}
@@ -335,7 +335,7 @@ export function HomeClient() {
         </section>
       ) : (
         <section className="space-y-3">
-          <p className="rounded-[14px] border border-warn/40 bg-warnBg px-5 py-4 text-[14px] text-ink">
+          <p className="rounded-[14px] border border-warn/40 bg-warnBg p-4 text-[14px] text-ink sm:px-6">
             마지막으로 확인된 위치를 요청합니다. 조직 정보가 아직 읽기 전용이므로 실제 위치는 저장 뒤 unavailable 또는 fallback이 될 수 있습니다.
           </p>
           <Recorder requestedLocation={requestedRecorderLocation} />
@@ -352,16 +352,19 @@ export function HomeClient() {
       )}
 
       {library.counts.organizationPendingCount > 0 && !defaultAll && (
-        <GuardedLink href={`/?workspace=${library.defaultWorkspaceId}#organization-pending`} className="flex min-h-11 items-center justify-between rounded-[14px] border border-warn/40 bg-warnBg px-5 text-[13px] font-semibold text-warn">
-          <span>위치 저장 대기 회의 보기</span><span>{library.counts.organizationPendingCount}</span>
+        <GuardedLink href={`/?workspace=${library.defaultWorkspaceId}#organization-pending`} className="flex min-h-11 min-w-0 flex-col items-stretch gap-1 rounded-[14px] border border-warn/40 bg-warnBg p-4 text-[13px] font-semibold text-warn focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/50 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+          <span className="min-w-0 break-words">위치 저장 대기 회의 보기</span><span className="shrink-0">{library.counts.organizationPendingCount}</span>
         </GuardedLink>
       )}
 
       {rows.length === 0 ? (
-        <section className="rounded-[16px] border border-line bg-panel px-6 py-10 text-center">
-          <h2 className="text-[16px] font-bold text-ink">{emptyCopy(scope)}</h2>
-          {defaultAll && <div className="mt-4"><EmptyState /></div>}
-        </section>
+        defaultAll ? (
+          <EmptyState />
+        ) : (
+          <section className="rounded-[16px] border border-line bg-panel p-4 py-10 text-center sm:px-6">
+            <h2 className="text-[16px] font-bold text-ink">{emptyCopy(scope)}</h2>
+          </section>
+        )
       ) : (
         <section className="space-y-4">
           <h2 className="text-[16px] font-bold text-ink">회의 목록</h2>
@@ -406,19 +409,19 @@ export function HomeClient() {
       )}
 
       {defaultAll && libraryState.organizationPending && libraryState.organizationPending.count > 0 && (
-        <section id="organization-pending" className="space-y-3 rounded-[16px] border border-warn/40 bg-warnBg p-5">
+        <section id="organization-pending" className="min-w-0 space-y-3 rounded-[16px] border border-warn/40 bg-warnBg p-4 sm:p-6">
           <div>
             <h2 className="text-[16px] font-bold text-ink">조직 정보 없이 발견된 회의</h2>
             <p className="mt-1 text-[13px] text-inkSoft">위치 저장이 끝나지 않은 회의입니다. 회의 상세에서 저장 상태를 다시 확인할 수 있습니다.</p>
           </div>
           <ul className="space-y-2">
             {libraryState.organizationPending.rows.map((row) => (
-              <li key={row.id} className="rounded-xl border border-warn/40 bg-panel px-4 py-3">
-                <GuardedLink href={`/meetings/${row.id}`} className="flex min-h-11 flex-wrap items-center justify-between gap-2">
-                  <span className="font-semibold text-ink">{row.title}</span>
-                  <span className="rounded-full bg-warnBg px-3 py-1 text-[12px] font-semibold text-warn">위치 저장 안 됨</span>
+              <li key={row.id} className="min-w-0 rounded-xl border border-warn/40 bg-panel p-4">
+                <GuardedLink href={`/meetings/${row.id}`} className="flex min-h-11 min-w-0 flex-col items-start gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:flex-row sm:items-center sm:justify-between">
+                  <span className="min-w-0 break-words font-semibold text-ink">{row.title}</span>
+                  <span className="shrink-0 rounded-full bg-warnBg px-3 py-1 text-[12px] font-semibold text-warn">위치 저장 안 됨</span>
                 </GuardedLink>
-                <p className="mt-1 text-[12px] text-inkSoft">
+                <p className="mt-1 break-words text-[12px] text-inkSoft">
                   {row.requested
                     ? `요청 위치: ${requestedWorkspaceName(row.requested.workspaceId)} · ${requestedFolderName(row.requested.folderId)}`
                     : "요청 위치 없음 · 조직 정보 없이 저장됨"}
@@ -430,7 +433,7 @@ export function HomeClient() {
                     title: row.title,
                     trigger: event.currentTarget,
                   })}
-                  className="mt-2 min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent"
+                  className="mt-2 min-h-11 w-full rounded-full border border-line px-4 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:w-auto"
                 >
                   위치 선택
                 </button>

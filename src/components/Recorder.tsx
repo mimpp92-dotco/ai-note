@@ -47,7 +47,7 @@ export function Recorder({
     : null;
 
   return (
-    <section className="w-full min-w-0 rounded-[16px] border border-line bg-panel p-6 shadow-[0_1px_2px_rgba(42,36,32,.04),0_8px_28px_-12px_rgba(42,36,32,.18)]">
+    <section className="w-full min-w-0 rounded-[16px] border border-line bg-panel p-4 shadow-[0_1px_2px_rgba(42,36,32,.04),0_8px_28px_-12px_rgba(42,36,32,.18)] sm:p-6">
       <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
         <div className="min-w-0">
           <h2 className="text-[18px] font-bold text-ink">회의 녹음</h2>
@@ -65,7 +65,7 @@ export function Recorder({
                 ? () => void retry()
                 : () => void start({ requestedLocation })}
           disabled={busy || blocked}
-          className="w-full shrink-0 rounded-full bg-ink px-5 py-2.5 text-[14px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50 sm:w-auto"
+          className="min-h-11 w-full shrink-0 rounded-full bg-ink px-5 text-[14px] font-semibold text-bg transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-50 sm:w-auto"
         >
           {recording
             ? "기록 중지"

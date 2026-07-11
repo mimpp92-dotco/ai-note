@@ -22,28 +22,30 @@ export function PendingBanner({
   if (readiness === "ready") {
     const processing = count > 0;
     return (
-      <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-line bg-panel px-5 py-4">
-        {processing && (
-          <span
-            className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent motion-reduce:animate-none"
-            aria-hidden="true"
-          />
-        )}
-        <p className="text-[14px] text-ink">
+      <div className="flex flex-col items-stretch gap-3 rounded-[14px] border border-line bg-panel p-4 sm:flex-row sm:items-center sm:px-6">
+        <div className="flex min-w-0 items-start gap-2 sm:items-center">
           {processing && (
-            <>
-              <span className="font-semibold">{count}개 회의</span> 요약 자동 처리 중…
-            </>
+            <span
+              className="mt-1.5 inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-accent motion-reduce:animate-none sm:mt-0"
+              aria-hidden="true"
+            />
           )}
-          {processing && needsAttention > 0 && " · "}
-          {needsAttention > 0 && (
-            <span className="font-semibold text-warn">{needsAttention}개 확인 필요</span>
-          )}
-        </p>
+          <p className="min-w-0 break-words text-[14px] text-ink">
+            {processing && (
+              <>
+                <span className="font-semibold">{count}개 회의</span> 요약 자동 처리 중…
+              </>
+            )}
+            {processing && needsAttention > 0 && " · "}
+            {needsAttention > 0 && (
+              <span className="font-semibold text-warn">{needsAttention}개 확인 필요</span>
+            )}
+          </p>
+        </div>
         {needsAttention > 0 && attention && (
           <Link
             href={`/meetings/${attention.meetingId}?attentionAfter=${encodeURIComponent(attention.cursor)}`}
-            className="ml-auto min-h-11 shrink-0 rounded-md border border-line bg-panel px-3 py-2.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft"
+            className="inline-flex min-h-11 w-full shrink-0 items-center justify-center rounded-lg border border-line bg-panel px-3 text-[13px] font-medium text-accent transition-colors hover:bg-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:ml-auto sm:w-auto"
           >
             확인할 회의 열기
           </Link>
@@ -55,15 +57,15 @@ export function PendingBanner({
   const total = count + needsAttention;
   const unavailable = readiness === "unavailable";
   return (
-    <div className={`rounded-[14px] border px-5 py-4 ${unavailable ? "border-error/40 bg-error/5" : "border-warn/40 bg-warnBg"}`}>
-      <div className="flex items-center justify-between gap-4">
-        <p className="text-[14px] text-ink">
+    <div className={`rounded-[14px] border p-4 sm:px-6 ${unavailable ? "border-error/40 bg-error/5" : "border-warn/40 bg-warnBg"}`}>
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="min-w-0 break-words text-[14px] text-ink">
           <span className="font-semibold">{total}개 회의가 요약 대기 중</span> —{" "}
           {unavailable ? "요약 모델을 확인하세요." : "모델을 설정하면 자동 생성됩니다."}
         </p>
         <Link
           href="/settings"
-          className="shrink-0 rounded-md border border-line bg-panel px-3 py-1.5 text-[13px] font-medium text-accent transition-colors hover:bg-soft"
+          className="inline-flex min-h-11 w-full shrink-0 items-center justify-center rounded-lg border border-line bg-panel px-3 text-[13px] font-medium text-accent transition-colors hover:bg-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:w-auto"
         >
           설정
         </Link>

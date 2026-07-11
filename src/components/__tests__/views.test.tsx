@@ -122,6 +122,28 @@ describe("PendingBanner", () => {
     render(<PendingBanner count={2} needsAttention={1} readiness="unavailable" />);
     expect(screen.getByText("3개 회의가 요약 대기 중")).toBeInTheDocument();
   });
+
+  it("stacks unavailable copy and its action on mobile without shrinking the text column", () => {
+    render(<PendingBanner count={2} readiness="unavailable" />);
+    const settings = screen.getByRole("link", { name: "설정" });
+    expect(settings.parentElement).toHaveClass("flex-col", "sm:flex-row");
+    expect(settings).toHaveClass("w-full", "sm:w-auto", "min-h-11");
+    expect(screen.getByText(/요약 모델을 확인하세요/)).toHaveClass("min-w-0");
+  });
+
+  it("lets the ready attention action reflow below copy on mobile", () => {
+    render(
+      <PendingBanner
+        count={2}
+        needsAttention={1}
+        readiness="ready"
+        attention={{ meetingId: "attention", cursor: "cursor" }}
+      />,
+    );
+    const action = screen.getByRole("link", { name: "확인할 회의 열기" });
+    expect(action.parentElement).toHaveClass("flex-col", "sm:flex-row");
+    expect(action).toHaveClass("w-full", "sm:w-auto");
+  });
 });
 
 describe("splitBacklog — home banner counts", () => {
@@ -159,6 +181,7 @@ describe("Recorder — responsive layout", () => {
     expect(heading.parentElement?.parentElement).toHaveClass("sm:flex-row");
     expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("w-full");
     expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("sm:w-auto");
+    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("min-h-11");
   });
 });
 
@@ -258,7 +281,27 @@ describe("MeetingList — 행 액션(케밥)", () => {
     fireEvent.click(screen.getByRole("button", { name: "저장" }));
     await waitFor(() => expect(screen.getByText(/이름을 바꿀 수 없어요/)).toBeInTheDocument());
     expect(onRenamed).not.toHaveBeenCalled();
-    expect(screen.getByRole("textbox", { name: /제목/ })).toBeInTheDocument(); // still in edit mode
+    expect(screen.getByRole("textbox", { name: /제목/ })).toHaveValue("새 제목");
+    expect(screen.getByRole("textbox", { name: /제목/ })).toHaveFocus();
+  });
+
+  it("한국어 IME 조합 Enter는 저장하지 않고 compositionEnd 뒤 Enter만 저장한다", async () => {
+    const onRenamed = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MeetingList meetings={[meeting()]} onRenamed={onRenamed} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "이름 수정" }));
+    const input = screen.getByRole("textbox", { name: /제목/ });
+    fireEvent.change(input, { target: { value: "새 한국어 제목" } });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229, isComposing: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(input, { data: "목" });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 13, isComposing: false });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onRenamed).toHaveBeenCalledWith("m1", "새 한국어 제목"));
   });
 
   it("빈 제목이면 저장 버튼이 비활성이다", () => {
@@ -281,9 +324,42 @@ describe("MeetingList — 행 액션(케밥)", () => {
   });
 
   it("모바일에서 제목과 상태 badge가 세로로 배치될 수 있다", () => {
+    const longTitle = "분기별제품로드맵과고객피드백을함께검토하는아주긴회의제목WithoutAnyBreakOpportunity";
+    render(<MeetingList meetings={[meeting({
+      title: longTitle,
+      location: {
+        workspaceId: "workspace",
+        folderId: "folder",
+        breadcrumb: ["아주 긴 워크스페이스", "끊김 없이 길어지는 폴더 breadcrumb"],
+      },
+    })]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    const link = screen.getByRole("link", { name: new RegExp(longTitle) });
+    expect(link).toHaveClass("w-full", "self-stretch", "flex-col", "sm:flex-row");
+    expect(screen.getByText(longTitle).parentElement).toHaveClass("w-full", "min-w-0");
+    expect(screen.getByRole("button", { name: `${longTitle} 관리 메뉴` }))
+      .toHaveClass("min-h-11", "min-w-11");
+  });
+
+  it("모바일 inline edit은 input과 44px action row를 stack할 수 있다", () => {
     render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
-    expect(screen.getByRole("link", { name: /테스트 회의/ })).toHaveClass("flex-col");
-    expect(screen.getByRole("link", { name: /테스트 회의/ })).toHaveClass("sm:flex-row");
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "이름 수정" }));
+    const input = screen.getByRole("textbox", { name: /제목/ });
+    expect(input.closest("div[class*='rounded']")).toHaveClass("flex-col", "sm:flex-row");
+    expect(input).toHaveClass("min-h-11");
+    expect(screen.getByRole("button", { name: "저장" })).toHaveClass("min-h-11");
+    expect(screen.getByRole("button", { name: "취소" })).toHaveClass("min-h-11");
+  });
+
+  it("모바일 inline delete confirmation은 copy 아래에 full-width 44px actions를 둔다", () => {
+    render(<MeetingList meetings={[meeting()]} onRenamed={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /관리/ }));
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+    const confirm = screen.getByRole("button", { name: "영구 삭제" });
+    const cancel = screen.getByRole("button", { name: "취소" });
+    expect(confirm.parentElement).toHaveClass("flex-col", "sm:flex-row");
+    expect(confirm).toHaveClass("min-h-11", "w-full", "sm:w-auto");
+    expect(cancel).toHaveClass("min-h-11", "w-full", "sm:w-auto");
   });
 
   it("outside click으로 메뉴가 닫힌다", () => {

@@ -29,7 +29,7 @@ export function MeetingList({
   detailHref?: (meeting: MeetingListItem) => string;
 }) {
   return (
-    <ul className="min-w-0 space-y-3">
+    <ul className="w-full min-w-0 space-y-3">
       {meetings.map((m) => (
         <MeetingRow
           key={m.id}

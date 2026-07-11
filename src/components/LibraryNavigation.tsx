@@ -12,6 +12,14 @@ import {
 import { GuardedLink, useGuardedRouter } from "@/components/RecorderNavigation";
 import { AppDrawer } from "@/components/AppDialog";
 import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CloseIcon,
+  KebabVerticalIcon,
+  MenuIcon,
+  PlusIcon,
+} from "@/components/InlineIcons";
+import {
   ContainerDeleteDialog,
   type ContainerDeleteCommitResult,
 } from "@/components/ContainerDeleteDialog";
@@ -186,16 +194,16 @@ export function LibraryNavigation() {
       className="relative w-full shrink-0 border-b border-line bg-chrome lg:min-h-screen lg:w-[272px] lg:border-b-0 lg:border-r"
     >
       <div className="flex min-h-16 items-center justify-between gap-3 px-4 lg:hidden">
-        <GuardedLink href="/" className="text-[15px] font-bold text-ink">AI NOTE</GuardedLink>
+        <GuardedLink href="/" className="flex min-h-11 items-center text-[15px] font-bold text-ink">AI NOTE</GuardedLink>
         <button
           ref={menuButtonRef}
           type="button"
           aria-label="라이브러리 메뉴 열기"
           aria-expanded={drawerOpen}
           onClick={() => setDrawerOpen(true)}
-          className="min-h-11 min-w-11 rounded-full border border-line bg-panel text-[18px] text-ink"
+          className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-line bg-panel text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
-          ☰
+          <MenuIcon />
         </button>
       </div>
 
@@ -220,9 +228,9 @@ export function LibraryNavigation() {
                   type="button"
                   aria-label="라이브러리 메뉴 닫기"
                   onClick={() => dismiss("explicit_cancel")}
-                  className="min-h-11 min-w-11 rounded-full border border-line bg-panel text-ink"
+                  className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-line bg-panel text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                 >
-                  ×
+                  <CloseIcon />
                 </button>
               </div>
               {navigation}
@@ -317,16 +325,21 @@ function NavigationContents({
         </GuardedLink>
         <label className="block">
           <span className="sr-only">워크스페이스 선택</span>
-          <select
-            aria-label="워크스페이스 선택"
-            value={workspace.id}
-            onChange={(event) => {
-              router.push(`/?workspace=${event.currentTarget.value}`, event.currentTarget);
-            }}
-            className="min-h-11 w-full rounded-lg border border-line bg-panel px-3 text-[14px] font-semibold text-ink"
-          >
-            {library.workspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
+          <span className="relative block">
+            <select
+              aria-label="워크스페이스 선택"
+              value={workspace.id}
+              onChange={(event) => {
+                router.push(`/?workspace=${event.currentTarget.value}`, event.currentTarget);
+              }}
+              className="min-h-11 w-full appearance-none truncate rounded-lg border border-line bg-panel pl-3 pr-12 text-[14px] font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              {library.workspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+            <span className="pointer-events-none absolute right-4 top-1/2 flex -translate-y-1/2 text-inkSoft" aria-hidden="true">
+              <ChevronDownIcon className="h-4 w-4" />
+            </span>
+          </span>
         </label>
         {canMutate && (
           <div className="flex gap-2">
@@ -361,7 +374,9 @@ function NavigationContents({
         <div className="flex min-h-11 items-center justify-between px-2">
           <p className="text-[12px] font-semibold text-inkSoft">폴더</p>
           {canMutate && (
-            <button type="button" aria-label="새 폴더" onClick={(event) => onEdit({ kind: "folder-create", workspaceId: workspace.id, parent: null, trigger: event.currentTarget })} className="min-h-11 min-w-11 rounded-full text-[20px] text-accent">＋</button>
+            <button type="button" aria-label="새 폴더" onClick={(event) => onEdit({ kind: "folder-create", workspaceId: workspace.id, parent: null, trigger: event.currentTarget })} className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-accent hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+              <PlusIcon />
+            </button>
           )}
         </div>
         <div className="max-h-[calc(100vh-28rem)] overflow-y-auto overscroll-contain">
@@ -477,27 +492,33 @@ function FolderList({
     .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id, "en"));
   if (children.length === 0) return null;
   return (
-    <ul className={depth > 1 ? "ml-4 border-l border-line pl-2" : "space-y-1"}>
+    <ul className={depth > 1 ? "ml-2 border-l border-line pl-1 sm:ml-3 sm:pl-1.5" : "space-y-1"}>
       {children.map((folder) => {
         const nested = folders.some((candidate) => candidate.parentFolderId === folder.id);
         const isExpanded = expanded.has(folder.id) || activeFolderId === folder.id;
         const count = folderCounts.get(folder.id) ?? 0;
         return (
           <li key={folder.id}>
-            <div className="flex min-h-11 items-center gap-1">
+            <div className="flex min-h-11 min-w-0 items-center gap-0.5">
               {nested ? (
-                <button type="button" aria-label={`${folder.name} 하위 폴더 ${isExpanded ? "접기" : "펼치기"}`} aria-expanded={isExpanded} onClick={() => toggleFolder(folder.id)} className="min-h-11 min-w-11 rounded-md text-inkSoft">{isExpanded ? "⌄" : "›"}</button>
-              ) : <span className="inline-block w-11" />}
-              <GuardedLink href={`/?workspace=${folder.workspaceId}&folder=${folder.id}`} onNavigationCommitted={onNavigationCommitted} aria-current={activeFolderId === folder.id ? "page" : undefined} className={`flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-[13px] ${activeFolderId === folder.id ? "bg-soft font-semibold text-ink" : "text-inkSoft hover:bg-panel"}`}>
+                <button type="button" aria-label={`${folder.name} 하위 폴더 ${isExpanded ? "접기" : "펼치기"}`} aria-expanded={isExpanded} onClick={() => toggleFolder(folder.id)} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-inkSoft hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                  {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+                </button>
+              ) : <span className="inline-block w-11 shrink-0" />}
+              <GuardedLink title={folder.name} href={`/?workspace=${folder.workspaceId}&folder=${folder.id}`} onNavigationCommitted={onNavigationCommitted} aria-current={activeFolderId === folder.id ? "page" : undefined} className={`flex min-h-11 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-[13px] ${activeFolderId === folder.id ? "bg-soft font-semibold text-ink" : "text-inkSoft hover:bg-panel"}`}>
                 <ColorDot color={folder.color} />
-                <span className="truncate">{folder.name}</span>
-                {count > 0 && <span>{count}</span>}
+                <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                {count > 0 && <span className="shrink-0 text-[11px] tabular-nums">{count}</span>}
               </GuardedLink>
               {canMutate && (
-                <button type="button" aria-label={`${folder.name} 폴더 편집`} onClick={(event) => onEdit({ kind: "folder-edit", folder, trigger: event.currentTarget })} className="min-h-11 min-w-11 rounded-md text-inkSoft">•••</button>
+                <button type="button" aria-label={`${folder.name} 폴더 편집`} onClick={(event) => onEdit({ kind: "folder-edit", folder, trigger: event.currentTarget })} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-inkSoft hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                  <KebabVerticalIcon />
+                </button>
               )}
               {canMutate && depth < 3 && (
-                <button type="button" aria-label={`${folder.name}에 새 하위 폴더`} onClick={(event) => onEdit({ kind: "folder-create", workspaceId: folder.workspaceId, parent: folder, trigger: event.currentTarget })} className="min-h-11 min-w-11 rounded-md text-accent">＋</button>
+                <button type="button" aria-label={`${folder.name}에 새 하위 폴더`} onClick={(event) => onEdit({ kind: "folder-create", workspaceId: folder.workspaceId, parent: folder, trigger: event.currentTarget })} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-accent hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                  <PlusIcon />
+                </button>
               )}
             </div>
             {depth === 3 && canMutate && (

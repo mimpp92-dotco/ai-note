@@ -58,13 +58,19 @@
 - **Library rail 구조**: identity → workspace switcher/create/rename → `모든 회의`/`미분류` → 독립 scroll folder section → 위치 저장 대기/단어 관리/설정 → shared 전사·요약 health. 프로필/팀/권한/템플릿/사용량 위젯은 없다.
 - **Folder tree**: nested `ul/li`를 쓰고 disclosure, scope link, edit/create-child trigger를 분리한다. 구현하지 않은 full ARIA tree role은 선언하지 않는다. Active ancestor는 자동 expand하며 depth 3에서는 child create를 노출하지 않고 최대 깊이 이유를 제공한다. 색상은 dot만 쓰지 않고 브라운/샌드/앰버/올리브/세이지 label과 selected shape/text를 함께 쓴다.
 - **Navigation active state**: 활성 scope/link는 `aria-current="page"`, `bg-soft`, `text-ink`, 더 선명한 weight를 함께 사용한다. Canonicalization은 old list 대신 skeleton과 한 번의 `aria-live` reason을 보인다.
-- 각 페이지는 자체 `<main id="main">`을 **좌측 정렬**로 소유(`mx-auto` 없이 `max-w-5xl`/`max-w-2xl` + `px-6 py-12`).
+- 각 페이지는 자체 `<main id="main">`을 **좌측 정렬**로 소유(`mx-auto` 없이 `max-w-5xl`/`max-w-2xl` + mobile `px-4`, `sm` 이상 `px-6`, 기본 `py-12`). Root의 `overflow-x-hidden`으로 오류를 가리지 않고 각 content owner가 `min-w-0`, wrap/truncate와 element-level boundary를 책임진다.
 - 전체 너비: `max-w-5xl` 좌측 정렬 기본.
-- 카드: `#FFFFFF` + `1px solid #E8E1D7` + radius 14–18px + 은은한 shadow(`0 1px 2px rgba(42,36,32,.04), 0 8px 28px -12px rgba(42,36,32,.18)`).
+- 카드: `#FFFFFF` + `1px solid #E8E1D7` + radius 14–18px + 은은한 shadow(`0 1px 2px rgba(42,36,32,.04), 0 8px 28px -12px rgba(42,36,32,.18)`). 내부 padding은 mobile 16px, `sm` 이상 24px이 기본이며 long title/breadcrumb/banner copy는 action과 폭을 경쟁하지 않고 먼저 reflow한다.
 - 간격: 요소 gap 3~4, 섹션 간 space-y-8.
 
+### Control shape·target grammar
+
+- 독립 text/icon control은 최소 44×44px target과 hover와 독립된 `focus-visible` ring을 가진다. Chip 내부 remove처럼 조밀한 종속 control만 32×32px 예외다.
+- 같은 local action group은 height·radius·간격을 맞춘다. Workspace create/rename과 meeting inline action은 rectangular group을 유지하고, Recorder CTA·pagination의 기존 pill과 status/tag/chip pill은 보존한다.
+- Workspace select는 native `<select>` semantics를 유지하면서 `appearance-none`과 충분한 우측 padding을 사용한다. 우측 16px inset의 `pointer-events:none`, `aria-hidden` SVG chevron이 text 영역과 겹치지 않아야 하며 desktop rail/mobile drawer가 같은 markup을 쓴다.
+
 ## 아이콘/애니메이션
-- SVG 인라인, strokeWidth 1.5. 아이콘을 둥근 배경 박스로 감싸지 않는다.
+- SVG 인라인, strokeWidth 1.5. Library의 kebab/chevron/plus/menu/close는 shared `currentColor` icon을 쓰고 accessible name은 button의 `aria-label`이 소유한다. 아이콘을 둥근 배경 박스로 감싸지 않는다.
 - 허용 애니메이션: fade-in(~0.3s), 녹음 중 red dot pulse. 그 외 금지. `prefers-reduced-motion` 존중(pulse 정지).
 
 ## 화면 스펙 (상태별)
@@ -76,9 +82,9 @@
 
 ### 홈(목록)
 - 회의 카드 목록(제목·날짜·상태 라벨). **처리 대기 배너**: `transcribed`(교정 대기) 회의가 있으면 상단에 "N개 회의 교정 대기 — 터미널에서 `/meeting-summarize` 실행" + 복사 버튼.
-- 빈 상태: "아직 회의록이 없습니다 — 첫 회의를 녹음해보세요" + 큰 녹음 버튼 + 3단계 안내(녹음 → 전사 → 요약 확인).
+- 빈 상태: "아직 회의록이 없습니다 — 첫 회의를 녹음해보세요" + 큰 녹음 버튼 + 3단계 안내(녹음 → 전사 → 요약 확인). Default All은 heading·border surface를 한 번만 렌더하고 onboarding을 같은 surface에 통합하며, folder/unfiled는 해당 scope copy만 한 번 표시한다.
 - **상태 표시**: 색만으로 전달하지 않는다. whisper는 `Whisper {model} · 준비됨/준비 중/연결 안 됨`, 요약 모델은 `{Provider} {model?} · 연결됨/감지됨/미설정/실패`처럼 dot + 텍스트를 함께 표시한다. CLI provider(claude·codex)는 바이너리 감지라 “감지됨”, Ollama는 검증된 “연결됨”으로 라벨을 구분한다. 긴 모델명/오류는 truncate하고 full detail은 `title` 또는 설정 화면에서 확인한다. `baseUrl`은 사이드바에 노출하지 않는다.
-- **행 액션(케밥 ⋯ 메뉴)**: 각 회의 행 우측의 "⋯" 버튼(카드 링크 바깥 형제) → ready library에서는 **이동**, 요약 완료 회의는 **이름 수정**, 모든 회의는 **삭제**. 이름 수정은 행을 인라인 편집으로 전환(Enter=저장, Esc=취소, `[저장][취소]` 버튼). 삭제는 인라인 확인("‘{제목}’ 회의록을 영구 삭제할까요? 되돌릴 수 없어요.") + 포커스는 취소에(엔터 오삭제 방지), 삭제 버튼은 파괴적 색(에러). 저장/삭제 완료·실패는 `aria-live="polite"`로 공지.
+- **행 액션(케밥 ⋯ 메뉴)**: 각 회의 행 우측의 44px kebab 버튼(카드 링크 바깥 형제) → ready library에서는 **이동**, 요약 완료 회의는 **이름 수정**, 모든 회의는 **삭제**. Mobile row는 title/date/breadcrumb와 status를 세로로 reflow하고 content owner는 `w-full min-w-0`을 가진다. 이름 수정은 320px에서 full-width input + action row로 stack하고(Enter=저장, Esc=취소, Korean IME 조합 Enter 무시), 실패 시 값·입력 focus를 유지한다. 삭제 확인도 copy 아래 action row로 stack하며 취소에 initial focus를 둔다. 삭제 버튼은 파괴적 색뿐 아니라 `영구 삭제` text를 유지하고 저장/삭제 완료·실패는 `aria-live="polite"`로 공지한다.
 - **Scoped list**: Workspace All row는 effective folder breadcrumb를 표시하고, 미분류/folder는 direct meeting만 표시한다. 이전/다음 cursor page를 제공하고 client는 current±2/max 5 pages만 유지한다. Empty copy는 All/미분류/folder를 구분한다.
 - **Organization pending**: default workspace All의 별도 경고 section에 actual 위치 없는 pending/unavailable row, safe requested hint, detail-probe action을 표시한다. Canonical folder counts/list에 섞지 않고 모든 scope에서 persistent count link로 접근한다.
 - **위치 선택기**: Meeting은 workspace 선택 뒤 미분류/folder를 검색하며 cross-workspace를 허용한다. Duplicate folder leaf는 workspace와 ancestor breadcrumb를 모두 표시한다. Folder 이동은 현재 workspace만 보이고 cross-workspace가 v1 비목표임을 설명하며 current/self/descendant/depth/name-conflict option을 이유와 함께 비활성화한다. Confirm 영역은 현재→목적지를 ID로 확정하며 409 뒤 selection을 지우고 최신 tree에서 다시 고르게 한다.

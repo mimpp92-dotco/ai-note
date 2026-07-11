@@ -28,4 +28,16 @@ describe("RootLayout responsive shell", () => {
     expect(shell?.classList.contains("lg:flex-row")).toBe(true);
     expect(shell?.classList.contains("md:flex-row")).toBe(false);
   });
+
+  it("does not hide horizontal layout regressions at the root shell", () => {
+    const markup = renderToStaticMarkup(
+      <RootLayout>
+        <main>본문</main>
+      </RootLayout>,
+    );
+    const document = new DOMParser().parseFromString(markup, "text/html");
+    const shell = document.getElementById("app-content")?.parentElement;
+
+    expect(shell?.classList.contains("overflow-x-hidden")).toBe(false);
+  });
 });
