@@ -1,7 +1,7 @@
 {
   "slug": "app-wide-ui-ux-hardening",
   "model": "codex",
-  "reconciledAgainst": "37f9655a31cbea6ff15ed2193f1c2168eb97fd21",
+  "reconciledAgainst": "674e85123d03ab1fd970c33794829d3828893f38",
   "phases": [
     {
       "phase": 1,
@@ -39,18 +39,19 @@
     {
       "phase": 3,
       "name": "detail-hierarchy-tabs-and-audio",
-      "state": "pending",
-      "summary": "",
+      "state": "completed",
+      "summary": "detail-hierarchy-tabs-and-audio 완료",
       "verify": {
-        "cmd": "",
-        "passed": false
+        "cmd": "set -eu\nnpm test -- \\\n  src/components/__tests__/Tabs.test.tsx \\\n  src/components/__tests__/views.test.tsx \\\n  src/app/api/__tests__/routes.integration.test.ts \\\n  src/app/api/__tests__/tombstoneFence.test.ts\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
       },
-      "commit": "",
-      "attempts": 0,
+      "commit": "931d39f2bb0414f3e809100212531f801a4d7fd3",
+      "attempts": 1,
       "blockedReason": "",
       "errorMessage": "",
-      "startedAt": "",
-      "completedAt": ""
+      "startedAt": "2026-07-11T10:19:02+0900",
+      "completedAt": "2026-07-11T10:20:12+0900",
+      "retryCount": 1
     },
     {
       "phase": 4,
