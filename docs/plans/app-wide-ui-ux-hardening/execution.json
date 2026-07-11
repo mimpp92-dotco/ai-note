@@ -1,7 +1,7 @@
 {
   "slug": "app-wide-ui-ux-hardening",
   "model": "claude",
-  "reconciledAgainst": "441545052c68044f31566685910b2570692a8fdf",
+  "reconciledAgainst": "45c1034061cc7e97550c73443c77e88213d31adb",
   "phases": [
     {
       "phase": 1,
@@ -73,18 +73,18 @@
     {
       "phase": 5,
       "name": "regression-cleanup-and-final-qa",
-      "state": "pending",
-      "summary": "",
+      "state": "completed",
+      "summary": "Phase 5 완료 — dead UI(Sidebar·AiModelPill·WhisperPill·LibraryDrawerShell·DisclosureNavigationItem) 제거 전 active-state coverage-migration test를 LibraryNavigation.test에 추가(failure-injection RED 확인)하고 fals",
       "verify": {
-        "cmd": "",
-        "passed": false
+        "cmd": "set -eu\nif rg -n '\\.(only|skip)\\s*\\(' src scripts whisper \\\n  --glob '*.test.ts' \\\n  --glob '*.test.tsx' \\\n  --glob '*.test.mjs'; then\n  echo 'focused/skipped test가 남아 있습니다.' >&2\n  exit 1\nfi\nif rg -n 'Sidebar|AiModelPill|WhisperPill|LibraryDrawerShell|DisclosureNavigationItem' src; then\n  echo '제거 대상 legacy UI 참조가 남아 있습니다.' >&2\n  exit 1\nfi\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
       },
-      "commit": "",
-      "attempts": 0,
+      "commit": "ca8d27bcd65a684b0d8e9a906070a43720a8278d",
+      "attempts": 1,
       "blockedReason": "",
       "errorMessage": "",
-      "startedAt": "",
-      "completedAt": ""
+      "startedAt": "2026-07-11T12:04:20+0900",
+      "completedAt": "2026-07-11T15:00:37+0900"
     }
   ]
 }
