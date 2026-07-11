@@ -1,7 +1,7 @@
 {
   "slug": "app-wide-ui-ux-hardening",
-  "model": "codex",
-  "reconciledAgainst": "674e85123d03ab1fd970c33794829d3828893f38",
+  "model": "claude",
+  "reconciledAgainst": "441545052c68044f31566685910b2570692a8fdf",
   "phases": [
     {
       "phase": 1,
@@ -56,18 +56,19 @@
     {
       "phase": 4,
       "name": "form-state-and-accessibility",
-      "state": "pending",
-      "summary": "",
+      "state": "completed",
+      "summary": "Phase 4 완료 — Glossary/Settings를 loading|ready|load_error fail-closed 상태로 바꿔 초기 GET 실패를 빈 데이터로 오인하지 않고 replace-save를 잠갔고(server-confirmed snapshot·normalized dirty·성공 body 정규화), Glossary correction을 32",
       "verify": {
-        "cmd": "",
-        "passed": false
+        "cmd": "set -eu\nnpm test -- \\\n  src/components/__tests__/views.test.tsx \\\n  src/components/__tests__/healthStatus.test.ts \\\n  src/components/__tests__/useHealth.test.tsx \\\n  src/components/__tests__/RecorderSessionProvider.test.tsx \\\n  src/lib/__tests__/recorder.test.ts\nnpm test\nnpm run typecheck\nnpm run lint\nnpm run build\nnpm run check:links\ngit diff --check",
+        "passed": true
       },
-      "commit": "",
-      "attempts": 0,
+      "commit": "4e200d6bed13085bf239eea1144aed9381f3fe6f",
+      "attempts": 1,
       "blockedReason": "",
       "errorMessage": "",
-      "startedAt": "",
-      "completedAt": ""
+      "startedAt": "2026-07-11T11:50:31+0900",
+      "completedAt": "2026-07-11T12:04:16+0900",
+      "retryCount": 4
     },
     {
       "phase": 5,
