@@ -445,7 +445,9 @@ describe("ChatClient", () => {
   });
 
   it("copies inline markers and safe references, then replays a server-built search in the Search tab", async () => {
-    const writeText = vi.fn(async (_text: string) => {});
+    const writeText = vi.fn(async (text: string) => {
+      void text;
+    });
     Object.defineProperty(window.navigator, "clipboard", {
       configurable: true,
       value: { writeText },

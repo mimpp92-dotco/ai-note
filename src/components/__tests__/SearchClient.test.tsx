@@ -133,7 +133,7 @@ function stubFetch(options: {
   reindexStatus?: number;
 } = {}) {
   const payload = options.payload ?? resultPayload();
-  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: string | URL | Request) => {
     const url = String(input);
     if (url === "/api/knowledge/reindex") {
       return response(options.reindexStatus && options.reindexStatus !== 200
