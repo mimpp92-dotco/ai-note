@@ -258,6 +258,24 @@
       "startSha": "6958cffe006d9dcd284ac5db42a223df1ddab3ea",
       "exitCode": 0,
       "blockedReason": "Phase 8 blocked: npm run lint fails on unused variables in src/components/__tests__/ChatClient.test.tsx:448 and src/components/__tests__/SearchClient.test.tsx:136; fixing them requires forbidden src/** changes outside this phase's allowedPaths."
+    },
+    {
+      "phase": 8,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T14:16:50+0900",
+      "startSha": "156aa87c3b9de75ceb3567c1694ba37576895387",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T14:26:11+0900",
+      "state": "completed",
+      "changedFiles": [
+        "README.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PRD.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "docs/decisions/README.md"
+      ]
     }
   ],
   "phases": [
@@ -864,9 +882,9 @@
     {
       "phase": 8,
       "name": "docs-final-qa",
-      "state": "blocked",
-      "summary": "",
-      "commit": "",
+      "state": "completed",
+      "summary": "Phase 8 finalized user-facing and contract documentation for optional profiles, derived search data, deterministic search, evidence-validated chat, UI recovery, and provider boundaries; all five full QA gates passed.",
+      "commit": "66bd8c410da81daa68bef01fde4c6d252ba5b859",
       "verify": {
         "commands": [
           "npm test",
@@ -875,17 +893,70 @@
           "npm run build",
           "npm run check:links"
         ],
-        "passed": false,
-        "results": []
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  89 passed (89)\n      Tests  834 passed (834)\n   Start at  14:25:27\n   Duration  9.35s (transform 4.69s, setup 5.23s, import 10.21s, tests 28.40s, environment 27.20s)\n\nNot implemented: navigation to another Document\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          },
+          {
+            "command": "npm run lint",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 lint\n> eslint .\n\n"
+          },
+          {
+            "command": "npm run build",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "brary/reveal                    214 B         103 kB\n├ ƒ /api/meetings                          214 B         103 kB\n├ ƒ /api/meetings/[id]                     214 B         103 kB\n├ ƒ /api/meetings/[id]/audio               214 B         103 kB\n├ ƒ /api/meetings/[id]/export              214 B         103 kB\n├ ƒ /api/meetings/[id]/finalize            214 B         103 kB\n├ ƒ /api/meetings/[id]/location            214 B         103 kB\n├ ƒ /api/meetings/[id]/reveal              214 B         103 kB\n├ ƒ /api/meetings/[id]/review              214 B         103 kB\n├ ƒ /api/meetings/[id]/summarize           214 B         103 kB\n├ ƒ /api/meetings/[id]/title               214 B         103 kB\n├ ƒ /api/organization-pending              214 B         103 kB\n├ ƒ /api/search                            214 B         103 kB\n├ ƒ /api/settings/llm                      214 B         103 kB\n├ ƒ /api/settings/llm/health               214 B         103 kB\n├ ƒ /api/settings/profile                  214 B         103 kB\n├ ƒ /api/summarize                         214 B         103 kB\n├ ƒ /api/summary-work                      214 B         103 kB\n├ ƒ /api/transcribe                        214 B         103 kB\n├ ƒ /api/whisper/health                    214 B         103 kB\n├ ƒ /api/workspaces                        214 B         103 kB\n├ ƒ /api/workspaces/[id]                   214 B         103 kB\n├ ƒ /api/workspaces/[id]/delete-preview    214 B         103 kB\n├ ○ /glossary                            4.03 kB         106 kB\n├ ƒ /meetings/[id]                       7.12 kB         148 kB\n├ ○ /search                              12.2 kB         148 kB\n└ ○ /settings                             6.8 kB         127 kB\n+ First Load JS shared by all             102 kB\n  ├ chunks/1255-d90f22433f14e976.js      46.2 kB\n  ├ chunks/4bd1b696-f785427dddbba9fb.js  54.2 kB\n  └ other shared chunks (total)          1.93 kB\n\n\n○  (Static)   prerendered as static content\nƒ  (Dynamic)  server-rendered on demand\n\n"
+          },
+          {
+            "command": "npm run check:links",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 check:links\n> node scripts/check-links.mjs\n\n✓ 링크 무결성 OK — 276개 상대 링크 전부 실재.\n"
+          }
+        ]
       },
-      "evidence": {},
-      "changedFiles": [],
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "README.md",
+            "docs/ARCHITECTURE.md",
+            "docs/PRD.md",
+            "docs/UI_GUIDE.md",
+            "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+            "docs/decisions/README.md"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        }
+      },
+      "changedFiles": [
+        "README.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PRD.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "docs/decisions/README.md"
+      ],
       "attempts": 1,
-      "retryCount": 0,
-      "blockedReason": "Phase 8 blocked: npm run lint fails on unused variables in src/components/__tests__/ChatClient.test.tsx:448 and src/components/__tests__/SearchClient.test.tsx:136; fixing them requires forbidden src/** changes outside this phase's allowedPaths.",
+      "retryCount": 1,
+      "blockedReason": "",
       "errorMessage": "",
-      "startedAt": "2026-07-12T14:07:57+0900",
-      "completedAt": ""
+      "startedAt": "2026-07-12T14:16:50+0900",
+      "completedAt": "2026-07-12T14:26:11+0900"
     }
   ]
 }
