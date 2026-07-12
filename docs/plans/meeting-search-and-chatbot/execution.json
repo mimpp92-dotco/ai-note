@@ -192,6 +192,31 @@
         "src/lib/localRequestGuard.ts",
         "src/lib/meetingSearch.ts"
       ]
+    },
+    {
+      "phase": 6,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T12:34:35+0900",
+      "startSha": "35ba6e3a3f77948e21846322e264d93a79dd8f23",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T13:00:16+0900",
+      "state": "completed",
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "src/app/api/__tests__/chatRoutes.test.ts",
+        "src/app/api/chat/route.ts",
+        "src/domain/__tests__/chat.test.ts",
+        "src/domain/chat.ts",
+        "src/lib/__tests__/chatOrchestrator.test.ts",
+        "src/lib/__tests__/chatTools.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/publicApi.test.ts",
+        "src/lib/chatOrchestrator.ts",
+        "src/lib/chatTools.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/publicApi.ts"
+      ]
     }
   ],
   "phases": [
@@ -598,25 +623,92 @@
     {
       "phase": 6,
       "name": "chatbot-tool-backend",
-      "state": "pending",
-      "summary": "",
-      "commit": "",
+      "state": "completed",
+      "summary": "Phase 6 added bounded local chat tools, evidence-ledger orchestration, a guarded no-store API, typed failures, and architecture contracts with 106 targeted tests green.",
+      "commit": "cfd5d005ccfaf243b5a131c4bbf0ad46f3550158",
       "verify": {
         "commands": [
           "npm test -- src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts",
           "npm run typecheck"
         ],
-        "passed": false,
-        "results": []
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  6 passed (6)\n      Tests  106 passed (106)\n   Start at  13:00:13\n   Duration  773ms (transform 583ms, setup 479ms, import 850ms, tests 147ms, environment 1.17s)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
       },
-      "evidence": {},
-      "changedFiles": [],
-      "attempts": 0,
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "docs/ARCHITECTURE.md",
+            "src/app/api/__tests__/chatRoutes.test.ts",
+            "src/app/api/chat/route.ts",
+            "src/domain/__tests__/chat.test.ts",
+            "src/domain/chat.ts",
+            "src/lib/__tests__/chatOrchestrator.test.ts",
+            "src/lib/__tests__/chatTools.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/lib/__tests__/publicApi.test.ts",
+            "src/lib/chatOrchestrator.ts",
+            "src/lib/chatTools.ts",
+            "src/lib/localRequestGuard.ts",
+            "src/lib/publicApi.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/domain/__tests__/chat.test.ts",
+            "src/lib/__tests__/chatTools.test.ts",
+            "src/lib/__tests__/chatOrchestrator.test.ts",
+            "src/app/api/__tests__/chatRoutes.test.ts",
+            "src/lib/__tests__/publicApi.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts"
+          ],
+          "red": {
+            "command": "npm test -- src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 0
+          }
+        }
+      },
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "src/app/api/__tests__/chatRoutes.test.ts",
+        "src/app/api/chat/route.ts",
+        "src/domain/__tests__/chat.test.ts",
+        "src/domain/chat.ts",
+        "src/lib/__tests__/chatOrchestrator.test.ts",
+        "src/lib/__tests__/chatTools.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/publicApi.test.ts",
+        "src/lib/chatOrchestrator.ts",
+        "src/lib/chatTools.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/publicApi.ts"
+      ],
+      "attempts": 1,
       "retryCount": 0,
       "blockedReason": "",
       "errorMessage": "",
-      "startedAt": "",
-      "completedAt": ""
+      "startedAt": "2026-07-12T12:34:35+0900",
+      "completedAt": "2026-07-12T13:00:16+0900"
     },
     {
       "phase": 7,
