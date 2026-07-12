@@ -57,7 +57,7 @@ export type KnowledgeCard = z.infer<typeof knowledgeCardSchema>;
 export type CorpusMap = z.infer<typeof corpusMapSchema>;
 export type KnowledgeIndexStatus = z.infer<typeof knowledgeIndexStatusSchema>;
 
-const OWNER_PLACEHOLDERS = new Set(["todo", "미정", "담당자", "없음", "n/a"]);
+const OWNER_PLACEHOLDERS = new Set(["todo", "tbd", "-", "미정", "담당자", "없음", "n/a"]);
 
 export function deriveMentionedPeople(items: Array<{ owner: string; task: string; due: string; searchText?: string }>): string[] {
   return [...new Set(items.map(({ owner }) => owner.trim()).filter((owner) => owner !== "" && !OWNER_PLACEHOLDERS.has(owner.toLocaleLowerCase())) )];

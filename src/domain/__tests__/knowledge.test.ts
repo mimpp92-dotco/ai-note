@@ -38,6 +38,8 @@ describe("knowledge index contracts", () => {
   it("excludes empty and placeholder action item owners from mentionedPeople", () => {
     expect(deriveMentionedPeople([
       { owner: "TODO", task: "a", due: "미정" },
+      { owner: " TBD ", task: "a-2", due: "미정" },
+      { owner: "-", task: "a-3", due: "미정" },
       { owner: "", task: "b", due: "미정" },
       { owner: "미정", task: "c", due: "미정" },
       { owner: " 민수 ", task: "d", due: "내일" },
