@@ -89,6 +89,41 @@
         "src/domain/__tests__/knowledge.test.ts",
         "src/domain/knowledge.ts"
       ]
+    },
+    {
+      "phase": 2,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:23:20+0900",
+      "startSha": "01e87534d8dbe14bacd6fd72505f444a8be8c583",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:35:49+0900",
+      "state": "error",
+      "error": "phase 2 user-profile-settings modified paths outside allowedPaths: src/app/api/settings/profile/"
+    },
+    {
+      "phase": 2,
+      "attempt": 2,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:35:49+0900",
+      "startSha": "01e87534d8dbe14bacd6fd72505f444a8be8c583",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:40:16+0900",
+      "state": "completed",
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/profileRoutes.test.ts",
+        "src/app/api/settings/profile/route.ts",
+        "src/app/settings/page.tsx",
+        "src/components/SettingsForm.tsx",
+        "src/components/UserProfileForm.tsx",
+        "src/components/__tests__/UserProfileForm.test.tsx",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/userProfile.test.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/userProfile.ts"
+      ]
     }
   ],
   "phases": [
@@ -159,25 +194,88 @@
     {
       "phase": 2,
       "name": "user-profile-settings",
-      "state": "pending",
-      "summary": "",
-      "commit": "",
+      "state": "completed",
+      "summary": "Phase 2 added a separate durable user-profile repository, guarded profile API, independent Settings UI, and verified R1/R7 behavior.",
+      "commit": "9824b0510c698277c66d095f7cbfcf385624a595",
       "verify": {
         "commands": [
           "npm test -- src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx",
           "npm run typecheck"
         ],
-        "passed": false,
-        "results": []
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  4 passed (4)\n      Tests  59 passed (59)\n   Start at  11:40:14\n   Duration  1.04s (transform 180ms, setup 273ms, import 349ms, tests 399ms, environment 541ms)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
       },
-      "evidence": {},
-      "changedFiles": [],
-      "attempts": 0,
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "docs/ARCHITECTURE.md",
+            "docs/UI_GUIDE.md",
+            "src/app/api/__tests__/profileRoutes.test.ts",
+            "src/app/api/settings/profile/route.ts",
+            "src/app/settings/page.tsx",
+            "src/components/SettingsForm.tsx",
+            "src/components/UserProfileForm.tsx",
+            "src/components/__tests__/UserProfileForm.test.tsx",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/lib/__tests__/userProfile.test.ts",
+            "src/lib/localRequestGuard.ts",
+            "src/lib/userProfile.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/lib/__tests__/userProfile.test.ts",
+            "src/app/api/__tests__/profileRoutes.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/components/__tests__/UserProfileForm.test.tsx"
+          ],
+          "red": {
+            "command": "npm test -- src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx",
+            "exitCode": 0
+          }
+        }
+      },
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/profileRoutes.test.ts",
+        "src/app/api/settings/profile/route.ts",
+        "src/app/settings/page.tsx",
+        "src/components/SettingsForm.tsx",
+        "src/components/UserProfileForm.tsx",
+        "src/components/__tests__/UserProfileForm.test.tsx",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/userProfile.test.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/userProfile.ts"
+      ],
+      "attempts": 2,
       "retryCount": 0,
       "blockedReason": "",
       "errorMessage": "",
-      "startedAt": "",
-      "completedAt": ""
+      "startedAt": "2026-07-12T11:23:20+0900",
+      "completedAt": "2026-07-12T11:40:16+0900"
     },
     {
       "phase": 3,
