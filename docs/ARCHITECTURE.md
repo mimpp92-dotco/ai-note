@@ -14,9 +14,11 @@ whisper/               # 로컬 Python whisper 서비스(uv 3.11/3.12 핀 venv)
 scripts/               # check-links.mjs (링크 무결성 체커)
 .claude/commands/      # meeting-summarize.md
 data/meetings/{id}/    # 런타임 산출물(gitignore, fixtures 제외)
+data/meetings/{id}/knowledge-card.json # meeting별 재생성 가능한 검색 파생물
 data/meeting-tombstones/{id}.json # 영구 ID delete fence(app lifecycle writer)
 data/library.json      # workspace/folder/placement 중앙 registry(app-api 단일 writer)
 data/user-profile.json # optional 개인화 프로필(app-api 단일 writer, LLM settings와 분리)
+data/knowledge/corpus-map.json # bounded 전체 검색 후보 projection
 fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fallback
 ```
 
@@ -53,14 +55,18 @@ flowchart LR
 | `data/user-profile.json` | **profile settings app-api만** | optional 표시 이름/별칭/시간 기준. `data/settings.json` LLM provider 설정과 분리 |
 | `.whisper-dispatch.json` | **whisper만** | audio identity + durable dispatch publication phase |
 | `meeting-tombstones/{id}.json` | **app lifecycle만** | 영구 logical-delete fence. 물리 cleanup 후에도 보존 |
-| `knowledge-card.json` | knowledge index repository | meeting별 검색 파생물. source summary/transcript SHA-256 포함, 삭제 후 재생성 가능 |
-| `corpus-map.json` | knowledge index repository | card의 bounded summary projection만 모은 전체 검색 파생물, 삭제 후 재생성 가능 |
+| `data/meetings/{id}/knowledge-card.json` | knowledge index repository | meeting별 검색 파생물. source summary/transcript SHA-256 포함, 삭제 후 재생성 가능 |
+| `data/knowledge/corpus-map.json` | knowledge index repository | card의 bounded summary projection만 모은 전체 검색 파생물, 삭제 후 재생성 가능 |
 
 ## 회의 지식 인덱스 계약
 
-`knowledge-card.json` v1은 `meetingId`, `sourceHashes.summary/transcript`, summary content, action-item search metadata, `reviewParticipants`, `mentionedPeople`을 가진다. `reviewParticipants`는 `status.review`만 authoritative이며 v1 `mentionedPeople`은 placeholder가 아닌 action item owner 같은 deterministic source만 사용한다. `corpus-map.json` v1은 card의 summary projection만 포함한다. 내부 read mode는 `missing|ready|stale|corrupt|io_error`, public aggregate는 `ready|partial|unavailable`과 safe reason `missing|stale|corrupt|io_error`만 노출한다.
+`knowledge-card.json` v1은 `meetingId`, `sourceHashes.summary/transcript`, summary content, action-item search metadata, `reviewParticipants`, `mentionedPeople`을 가진다. `reviewParticipants`는 생성 당시 `status.review` snapshot일 뿐이며 v1 `mentionedPeople`은 placeholder가 아닌 action item owner 같은 deterministic source만 사용한다. transcript/summary SHA-256은 한 artifact lease 안에서 한 번 읽은 in-memory byte pair로 계산한다. `corpus-map.json` v1은 card의 bounded `meetingId`/one-line/purpose/highlights/mentioned-people projection만 포함하고 전체 transcript, absolute path, title/status/location/review snapshot을 포함하지 않는다. 내부 read mode는 `missing|ready|stale|corrupt|io_error`, public aggregate는 `ready|partial|unavailable`과 safe reason `missing|stale|corrupt|io_error`만 노출한다.
 
-인덱스의 title/status/location/reviewParticipants 같은 mutable metadata snapshot은 public current truth가 아니다. Query-time에 live status/library를 join하고 응답 직전 tombstone을 재검증한다. 챗봇은 검색·회의 조회 도구를 호출하며 서버 evidence ledger가 claim-level citation provenance를 검증한다. 모델은 번호/title/link를 만들지 않고 서버가 실제 인용된 validated meeting ID에 첫 등장 순서 stable 번호와 app-relative link를 부여한다. 상세 결정은 ADR [0018](decisions/0018-meeting-knowledge-index-and-chatbot.md)을 따른다.
+Card write는 caller의 meeting operation owner 아래 `safe meeting ID → tombstone fence → artifact write lease → tombstone 재확인 → status와 source pair read → atomic replace` 순서를 따른다. Corrupt/unreadable status, deleted/ambiguous tombstone, unsafe record, missing/malformed/ambiguous pair는 live card로 복구하지 않고 fail-closed한다. Rename이 card/corpus의 logical commit이며 parent sync가 일시 실패한 `pending`도 committed 결과로 유지하고 rollback이나 blind rewrite를 하지 않는다.
+
+`data/knowledge/` 최초 생성은 data root와 새 entry가 실제 non-symlink directory인지 확인하고 `data/` namespace를 sync한다. 알려진 directory-sync 미지원은 `best_effort`, 지원 환경의 일시 실패는 `pending`으로 구분한다. Corpus write는 absolute canonical `corpus-map.json` path process queue에서 직렬화한다. Rebuild는 common meeting classifier의 `live` record만 대상으로 library/classification snapshot과 meeting별 tombstone/artifact-read-lease card snapshot을 queue 밖에서 수집한다. 모든 per-meeting lease를 놓은 뒤에만 corpus queue를 잡아 latest bounded map을 atomic replace하므로 artifact/library lease와 corpus queue를 중첩하지 않는다.
+
+인덱스의 title/status/location/reviewParticipants 같은 mutable metadata snapshot은 public current truth가 아니다. Public projection은 persisted semantic fields만 선택하고 title/status/location/reviewParticipants를 query-time live status/library 입력에서 별도로 결합하며, 응답 직전 tombstone을 재검증한다. Title/review/move/delete lifecycle route에는 corpus fan-out hook을 추가하지 않는다. 챗봇은 검색·회의 조회 도구를 호출하며 서버 evidence ledger가 claim-level citation provenance를 검증한다. 모델은 번호/title/link를 만들지 않고 서버가 실제 인용된 validated meeting ID에 첫 등장 순서 stable 번호와 app-relative link를 부여한다. 상세 결정은 ADR [0018](decisions/0018-meeting-knowledge-index-and-chatbot.md)을 따른다.
 
 ## Local-only ingress·public boundary
 
