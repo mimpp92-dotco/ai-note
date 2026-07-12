@@ -108,6 +108,43 @@ Date/workspace/folder/status/action-item filter는 score 계산 전에 적용한
 }
 ```
 
+### 전체 회의 챗봇 tool protocol
+
+`POST /api/chat`는 Node dynamic·non-streaming route다. Local request guard를 body read, 설정 조회, filesystem, adapter 실행보다 먼저 적용하고 exact JSON을 128 KiB에서 제한한다. 요청은 strict `{message,mode:"normal"|"deep",history?}`이며 message는 4,000자, history는 완결된 `user → assistant` pair 최대 4개(8 item), item당 8,000자·합계 24,000자다. Assistant history의 optional `referenceMap`은 turn-local unique `{number:1..20,meetingId}`만 보존하고 title/href/path를 받지 않는다. History는 현재 요청 prompt 문맥에만 사용하며 서버 파일이나 별도 대화 저장소에 영구 저장하지 않는다.
+
+챗봇은 기존 configured `LlmAdapter.run(prompt,{json:true})`를 model turn마다 한 번 호출하는 stateless JSON loop다. Streaming, background job, 새 provider/API-key surface를 만들지 않는다. 허용 envelope는 bounded `tool_calls | final`뿐이고 허용 도구는 다음 여섯 개다.
+
+- `get_user_profile({})`
+- `search_meetings({query,filters?,limit?})`
+- `read_knowledge_cards({meetingIds})`
+- `read_summaries({meetingIds})`
+- `read_transcript_chunks({meetingId,query,cursor?,limit?})`
+- `read_full_transcript({meetingId})`
+
+모델은 absolute/arbitrary path, filename, URL, command를 도구 인자로 넘길 수 없다. 회의 artifact 도구는 safe meeting ID → tombstone fence → artifact read lease → tombstone 재확인 → bounded pair/card read 순서를 지킨다. Card는 ready content만 내보내고 persisted title/status/location/review snapshot을 사용하지 않으며 마지막 live status/library projection으로 현재 metadata를 다시 결합한다. Transcript chunk cursor는 요청 범위에서만 유효한 opaque token이고 window는 겹치지 않는 4,000자 이하 구간이다. Full transcript는 문서 전체가 60,000자 이하이면서 남은 aggregate output budget에 들어올 때만 허용한다. 초과 시 `transcript_too_large`로 chunk search를 요구한다.
+
+질문, history, transcript/summary/card 본문과 tool output은 모두 untrusted JSON data block이다. 그 안의 “도구 호출”, “시스템 지시 변경”, “파일 읽기” 문구는 권한이 아니며 protocol 밖 이름/인자는 실행하지 않는다. Invalid JSON, tool args, final segment 또는 citation은 남은 model-turn 안에서 요청 전체당 repair 한 번만 허용하고 repair도 model turn을 소비한다.
+
+| 예산 | normal | deep |
+|---|---:|---:|
+| model turn | 4 | 6 |
+| tool call | 6 | 10 |
+| knowledge card | 50 | 100 |
+| summary | 8 | 16 |
+| transcript window | 12 | 24 |
+| full transcript | 2 | 4 |
+| aggregate tool output | 120,000자 | 240,000자 |
+
+Per-result 상한은 knowledge card 8,000자, summary 20,000자, transcript window 4,000자다. 모든 tool result는 `truncated`와 `budgetExhausted`를 구조화하고, 중복/초과 meeting ID, forged cursor, stale/corrupt/missing artifact, profile I/O, index unavailable을 raw path/fs/provider output 없는 typed result로 낮춘다. Profile missing은 정상 `{configured:false,runtimeTimezone,weekStartsOn,currentLocalDateTime}` 결과이며 일반 질문을 막거나 전역 warning을 만들지 않는다. 자기 지칭 해석에 실제 필요할 때만 `personalization_needed` clarification을 추가한다.
+
+서버 evidence ledger는 이번 요청에서 실제 성공한 search/card/summary/transcript read의 meeting ID, tier, truncation만 기록한다. Search-only hit와 assistant history `referenceMap`은 citation credit이 아니다. 과거 번호 follow-up은 최신 assistant turn map을 기본으로 safe ID/live tombstone을 재검증해 prompt context에만 넣고, 여러 이전 turn의 같은 번호가 서로 다른 회의를 뜻하는 질문은 추측하지 않고 clarification을 반환한다. 모델이 해당 회의를 현재 turn의 card/summary/transcript 도구로 다시 읽어야 claim citation 후보가 된다.
+
+Model final은 raw answer나 `[n]`, title/link가 아니라 최대 40개의 `{kind:"claim"|"clarification"|"limitation",format,text,citationMeetingIds}` segment를 반환한다. Claim은 1~5개 read-evidence ID를 가져야 하고 clarification/limitation은 citation이 비어야 한다. 서버는 claim 단위로 모든 ID가 ledger에 있고 final live/tombstone 재검증을 통과하는지 all-or-nothing으로 검사한다. 하나라도 탈락한 claim은 citation 일부만 지워 유지하지 않고 repair 대상으로 삼으며, repair 뒤에도 invalid하면 claim 전체를 제거하고 `unsupported_claim_omitted`를 기록한다.
+
+Surviving claim의 meeting은 첫 등장 순서로 `1..N` 번호를 서버가 부여한다. Public `answerSegments`는 모델 ID 대신 `referenceNumbers`만, `references`는 실제 사용된 회의만 `{number,meetingId,currentTitle,startedAt,href:"/meetings/{safeId}"}`로 반환한다. 읽었지만 인용하지 않은 범위는 ID 목록이 아니라 `checkedScope` count로만 집계한다. `searchReplay`도 실제 성공한 `search_meetings` 인자/결과 count에서만 만든다. Evidence ledger 검증은 source가 실제로 읽혔고 final 시점에 live였다는 provenance 검증이며, claim의 의미적 함의까지 서버가 자동 증명했다는 뜻은 아니다.
+
+`evidenceStatus`는 surviving claim이 없으면 `none`, card-only source 또는 unsupported/stale/truncated/budget/candidate/index/personalization degradation이 있으면 `partial`, 모든 cited source가 summary/transcript tier이고 degradation이 없을 때만 `sufficient`다. Model confidence는 public DTO에 없다. Public success는 no-store `{answerSegments,references,evidenceStatus,checkedScope,warnings,searchReplay?}`이며 reference 번호는 contiguous·meeting ID는 unique·모든 reference는 최소 한 claim에서 사용되어야 한다. Actionable failure는 같은 static envelope `{error:{code,message}}`로 `chat_llm_unconfigured`(409), `chat_llm_unavailable`(503), `chat_timeout`(504), `chat_index_unavailable`(503)을 반환하고 prompt, raw model/provider output, tool trace, absolute path를 응답이나 로그에 포함하지 않는다.
+
 ## Local-only ingress·public boundary
 
 - 모든 current API route와 `/meetings/[id]` data-reading RSC는 params 해석·body read·filesystem/network/spawn보다 먼저 공통 guard를 통과한다. Host는 raw exact `127.0.0.1|localhost` + valid port만, API Fetch Metadata는 `same-origin`만 허용한다. Direct document navigation의 `Sec-Fetch-Site:none`은 page에서만 허용한다.

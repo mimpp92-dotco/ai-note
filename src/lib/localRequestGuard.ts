@@ -4,6 +4,7 @@ import {
 } from "@/lib/publicApi";
 
 export const DATA_SURFACE_INVENTORY = [
+  "/api/chat",
   "/api/glossary",
   "/api/folders",
   "/api/folders/[id]",

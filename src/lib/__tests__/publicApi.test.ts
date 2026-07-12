@@ -97,6 +97,22 @@ describe("safe errors and logging", () => {
     });
   });
 
+  it.each([
+    ["chat_llm_unconfigured", 409],
+    ["chat_llm_unavailable", 503],
+    ["chat_timeout", 504],
+    ["chat_index_unavailable", 503],
+  ] as const)("keeps chat error %s static and strips raw provider/path details", async (code, status) => {
+    const response = publicErrorResponse(code, status, {
+      path: "/Users/private/transcript.md",
+      providerOutput: "token@example.com model stderr",
+      meetingId: "meeting-1",
+    });
+    const payload = await response.json();
+    expect(payload).toMatchObject({ error: { code, details: { meetingId: "meeting-1" } } });
+    expect(JSON.stringify(payload)).not.toMatch(/\/Users|token@example|providerOutput|stderr/u);
+  });
+
   it("logs only the structured allowlist and never serializes Error/raw values", () => {
     const sink = vi.fn();
     safeLog("warn", {

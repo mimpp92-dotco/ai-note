@@ -30,6 +30,10 @@ export type PublicErrorCode =
   | "recovery_not_supported"
   | "recovery_conflict"
   | "recovery_io"
+  | "chat_llm_unconfigured"
+  | "chat_llm_unavailable"
+  | "chat_timeout"
+  | "chat_index_unavailable"
   | "summary_tool_missing"
   | "summary_timeout"
   | "summary_auth_required"
@@ -61,6 +65,10 @@ const PUBLIC_ERROR_MESSAGES: Record<PublicErrorCode, string> = {
   recovery_not_supported: "이 환경에서는 조직 파일을 안전하게 복구할 수 없습니다",
   recovery_conflict: "조직 파일 복구 상태를 안전하게 확인할 수 없습니다",
   recovery_io: "조직 파일 복구 중 로컬 저장소 오류가 발생했습니다",
+  chat_llm_unconfigured: "질문 기능을 사용하려면 요약 모델을 먼저 설정해 주세요",
+  chat_llm_unavailable: "설정한 로컬 요약 모델을 사용할 수 없습니다. 설정과 로그인을 확인해 주세요",
+  chat_timeout: "답변 준비 시간이 초과되었습니다. 다시 시도하거나 확인 범위를 줄여 주세요",
+  chat_index_unavailable: "회의 검색 데이터를 사용할 수 없습니다. 검색 데이터를 다시 만들어 주세요",
   summary_tool_missing: "선택한 요약 도구를 찾을 수 없습니다. 설정을 확인해 주세요",
   summary_timeout: "요약 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요",
   summary_auth_required: "요약 도구 로그인이 필요합니다. 로그인한 뒤 다시 시도해 주세요",
