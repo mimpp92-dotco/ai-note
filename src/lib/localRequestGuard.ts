@@ -4,11 +4,13 @@ import {
 } from "@/lib/publicApi";
 
 export const DATA_SURFACE_INVENTORY = [
+  "/api/chat",
   "/api/glossary",
   "/api/folders",
   "/api/folders/[id]",
   "/api/folders/[id]/delete-preview",
   "/api/folders/[id]/parent",
+  "/api/knowledge/reindex",
   "/api/library",
   "/api/library/rebuild",
   "/api/library/reveal",
@@ -25,6 +27,8 @@ export const DATA_SURFACE_INVENTORY = [
   "/api/organization-pending",
   "/api/settings/llm",
   "/api/settings/llm/health",
+  "/api/settings/profile",
+  "/api/search",
   "/api/summary-work",
   "/api/summarize",
   "/api/transcribe",

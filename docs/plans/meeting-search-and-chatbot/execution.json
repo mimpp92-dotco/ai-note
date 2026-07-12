@@ -1,0 +1,993 @@
+{
+  "schemaVersion": 2,
+  "slug": "meeting-search-and-chatbot",
+  "runId": "9825a4f6472e",
+  "model": "codex",
+  "planDigest": "28ded805fcf446ae85a178b113976f720d11d7e2039112c05310f3ea3a00db7a",
+  "startedAt": "2026-07-12T11:07:36+0900",
+  "completedAt": "2026-07-12T14:26:56+0900",
+  "finalGate": {
+    "passed": true,
+    "commands": [
+      "npm test",
+      "npm run typecheck",
+      "npm run lint",
+      "npm run build",
+      "npm run check:links"
+    ],
+    "results": [
+      {
+        "command": "npm test",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  89 passed (89)\n      Tests  834 passed (834)\n   Start at  14:26:11\n   Duration  9.14s (transform 4.65s, setup 5.15s, import 9.81s, tests 28.27s, environment 26.10s)\n\nNot implemented: navigation to another Document\n"
+      },
+      {
+        "command": "npm run typecheck",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+      },
+      {
+        "command": "npm run lint",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "\n> ai-note@0.1.0 lint\n> eslint .\n\n"
+      },
+      {
+        "command": "npm run build",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "brary/reveal                    214 B         103 kB\n├ ƒ /api/meetings                          214 B         103 kB\n├ ƒ /api/meetings/[id]                     214 B         103 kB\n├ ƒ /api/meetings/[id]/audio               214 B         103 kB\n├ ƒ /api/meetings/[id]/export              214 B         103 kB\n├ ƒ /api/meetings/[id]/finalize            214 B         103 kB\n├ ƒ /api/meetings/[id]/location            214 B         103 kB\n├ ƒ /api/meetings/[id]/reveal              214 B         103 kB\n├ ƒ /api/meetings/[id]/review              214 B         103 kB\n├ ƒ /api/meetings/[id]/summarize           214 B         103 kB\n├ ƒ /api/meetings/[id]/title               214 B         103 kB\n├ ƒ /api/organization-pending              214 B         103 kB\n├ ƒ /api/search                            214 B         103 kB\n├ ƒ /api/settings/llm                      214 B         103 kB\n├ ƒ /api/settings/llm/health               214 B         103 kB\n├ ƒ /api/settings/profile                  214 B         103 kB\n├ ƒ /api/summarize                         214 B         103 kB\n├ ƒ /api/summary-work                      214 B         103 kB\n├ ƒ /api/transcribe                        214 B         103 kB\n├ ƒ /api/whisper/health                    214 B         103 kB\n├ ƒ /api/workspaces                        214 B         103 kB\n├ ƒ /api/workspaces/[id]                   214 B         103 kB\n├ ƒ /api/workspaces/[id]/delete-preview    214 B         103 kB\n├ ○ /glossary                            4.03 kB         106 kB\n├ ƒ /meetings/[id]                       7.12 kB         148 kB\n├ ○ /search                              12.2 kB         148 kB\n└ ○ /settings                             6.8 kB         127 kB\n+ First Load JS shared by all             102 kB\n  ├ chunks/1255-d90f22433f14e976.js      46.2 kB\n  ├ chunks/4bd1b696-f785427dddbba9fb.js  54.2 kB\n  └ other shared chunks (total)          1.93 kB\n\n\n○  (Static)   prerendered as static content\nƒ  (Dynamic)  server-rendered on demand\n\n"
+      },
+      {
+        "command": "npm run check:links",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "\n> ai-note@0.1.0 check:links\n> node scripts/check-links.mjs\n\n✓ 링크 무결성 OK — 276개 상대 링크 전부 실재.\n"
+      }
+    ]
+  },
+  "attemptHistory": [
+    {
+      "phase": 1,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:07:36+0900",
+      "startSha": "3ea35d676a0ad1cfdabb60bff338378aac9fe749",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:10:10+0900",
+      "state": "error",
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/PRD.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "src/domain/__tests__/knowledge.test.ts",
+        "src/domain/__tests__/userProfile.test.ts",
+        "src/domain/knowledge.ts",
+        "src/domain/userProfile.ts"
+      ],
+      "error": "git add -- docs/plans/meeting-search-and-chatbot/execution.json failed: The following paths are ignored by one of your .gitignore files:\ndocs/plans/meeting-search-and-chatbot\nhint: Use -f if you really want to add them.\nhint: Disable this message with \"git config set advice.addIgnoredFile false\""
+    },
+    {
+      "phase": 1,
+      "attempt": 2,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:10:10+0900",
+      "startSha": "c9df396b162dbc73d5ea42857e38f49dd84558ba",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:11:25+0900",
+      "state": "error",
+      "error": "phase 1 contracts-and-schemas testPolicy.required but no test file changed"
+    },
+    {
+      "phase": 1,
+      "attempt": 3,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:11:25+0900",
+      "startSha": "c9df396b162dbc73d5ea42857e38f49dd84558ba",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:12:39+0900",
+      "state": "error",
+      "changedFiles": [
+        "src/domain/__tests__/knowledge.test.ts",
+        "src/domain/knowledge.ts"
+      ],
+      "error": "git add -- docs/plans/meeting-search-and-chatbot/execution.json failed: The following paths are ignored by one of your .gitignore files:\ndocs/plans/meeting-search-and-chatbot\nhint: Use -f if you really want to add them.\nhint: Disable this message with \"git config set advice.addIgnoredFile false\""
+    },
+    {
+      "phase": 1,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:13:02+0900",
+      "startSha": "fbdc49b6d55854f4b88d93e2e6eaa0616e119e80",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:14:16+0900",
+      "state": "error",
+      "error": "phase 1 contracts-and-schemas modified plan-owned files: docs/plans/meeting-search-and-chatbot/"
+    },
+    {
+      "phase": 1,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:20:15+0900",
+      "startSha": "7faca60ad11bc0a2ee178186c77105a810657098",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:23:20+0900",
+      "state": "completed",
+      "changedFiles": [
+        "src/domain/__tests__/knowledge.test.ts",
+        "src/domain/knowledge.ts"
+      ]
+    },
+    {
+      "phase": 2,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:23:20+0900",
+      "startSha": "01e87534d8dbe14bacd6fd72505f444a8be8c583",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:35:49+0900",
+      "state": "error",
+      "error": "phase 2 user-profile-settings modified paths outside allowedPaths: src/app/api/settings/profile/"
+    },
+    {
+      "phase": 2,
+      "attempt": 2,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:35:49+0900",
+      "startSha": "01e87534d8dbe14bacd6fd72505f444a8be8c583",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:40:16+0900",
+      "state": "completed",
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/profileRoutes.test.ts",
+        "src/app/api/settings/profile/route.ts",
+        "src/app/settings/page.tsx",
+        "src/components/SettingsForm.tsx",
+        "src/components/UserProfileForm.tsx",
+        "src/components/__tests__/UserProfileForm.test.tsx",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/userProfile.test.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/userProfile.ts"
+      ]
+    },
+    {
+      "phase": 3,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:40:17+0900",
+      "startSha": "54293da4eff7d79aaac27c48b82e80fcbc759ec8",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:56:58+0900",
+      "state": "completed",
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "src/lib/__tests__/knowledgeIndex.test.ts",
+        "src/lib/__tests__/knowledgeIndexRepository.test.ts",
+        "src/lib/knowledgeIndex.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/paths.ts"
+      ]
+    },
+    {
+      "phase": 4,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:56:58+0900",
+      "startSha": "08e42913b89bdb57c09ffd970ddf9dfa78638081",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T12:14:25+0900",
+      "state": "completed",
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/knowledgeReindexRoutes.test.ts",
+        "src/app/api/knowledge/reindex/route.ts",
+        "src/lib/__tests__/knowledgeIndex.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizePublisher.test.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/summarize.ts"
+      ]
+    },
+    {
+      "phase": 5,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T12:14:26+0900",
+      "startSha": "e14c00587335b6068375510e0921913d9904800b",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T12:34:35+0900",
+      "state": "completed",
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/searchRoutes.test.ts",
+        "src/app/api/search/route.ts",
+        "src/app/search/page.tsx",
+        "src/components/LibraryNavigation.tsx",
+        "src/components/SearchClient.tsx",
+        "src/components/SearchResults.tsx",
+        "src/components/__tests__/LibraryNavigation.test.tsx",
+        "src/components/__tests__/SearchClient.test.tsx",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/meetingSearch.test.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/meetingSearch.ts"
+      ]
+    },
+    {
+      "phase": 6,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T12:34:35+0900",
+      "startSha": "35ba6e3a3f77948e21846322e264d93a79dd8f23",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T13:00:16+0900",
+      "state": "completed",
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "src/app/api/__tests__/chatRoutes.test.ts",
+        "src/app/api/chat/route.ts",
+        "src/domain/__tests__/chat.test.ts",
+        "src/domain/chat.ts",
+        "src/lib/__tests__/chatOrchestrator.test.ts",
+        "src/lib/__tests__/chatTools.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/publicApi.test.ts",
+        "src/lib/chatOrchestrator.ts",
+        "src/lib/chatTools.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/publicApi.ts"
+      ]
+    },
+    {
+      "phase": 7,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T13:00:16+0900",
+      "startSha": "257004ea8278339844b9b5f39cd7cfe69e578625",
+      "exitCode": 0,
+      "blockedReason": "Phase 7 requires synthetic browser assertions and a two-pass UI/UX review, but the required in-app Browser backend is unavailable (browser discovery returned no available browser), so browser evidence cannot be truthfully produced."
+    },
+    {
+      "phase": 7,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T13:18:55+0900",
+      "startSha": "8682097b7fbe5bcd5c2503479db824ae1722b51f",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T14:07:57+0900",
+      "state": "completed",
+      "changedFiles": [
+        "docs/UI_GUIDE.md",
+        "src/components/ChatAnswer.tsx",
+        "src/components/ChatClient.tsx",
+        "src/components/ChatStatus.tsx",
+        "src/components/LibraryNavigation.tsx",
+        "src/components/SearchClient.tsx",
+        "src/components/SearchResults.tsx",
+        "src/components/SettingsForm.tsx",
+        "src/components/UserProfileForm.tsx",
+        "src/components/__tests__/ChatClient.test.tsx",
+        "src/components/__tests__/SearchClient.test.tsx"
+      ]
+    },
+    {
+      "phase": 8,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T14:07:57+0900",
+      "startSha": "6958cffe006d9dcd284ac5db42a223df1ddab3ea",
+      "exitCode": 0,
+      "blockedReason": "Phase 8 blocked: npm run lint fails on unused variables in src/components/__tests__/ChatClient.test.tsx:448 and src/components/__tests__/SearchClient.test.tsx:136; fixing them requires forbidden src/** changes outside this phase's allowedPaths."
+    },
+    {
+      "phase": 8,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T14:16:50+0900",
+      "startSha": "156aa87c3b9de75ceb3567c1694ba37576895387",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T14:26:11+0900",
+      "state": "completed",
+      "changedFiles": [
+        "README.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PRD.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "docs/decisions/README.md"
+      ]
+    }
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "contracts-and-schemas",
+      "state": "completed",
+      "summary": "Phase 1 contracts and schemas are complete, with deterministic mentionedPeople placeholder filtering verified by targeted tests and typecheck.",
+      "commit": "6006d506c93d60df74d23efaf06229909f74f48d",
+      "verify": {
+        "commands": [
+          "npm test -- src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts",
+          "npm run typecheck"
+        ],
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  2 passed (2)\n      Tests  10 passed (10)\n   Start at  11:23:18\n   Duration  798ms (transform 56ms, setup 146ms, import 90ms, tests 20ms, environment 1.14s)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
+      },
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "src/domain/__tests__/knowledge.test.ts",
+            "src/domain/knowledge.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/domain/__tests__/userProfile.test.ts",
+            "src/domain/__tests__/knowledge.test.ts"
+          ],
+          "red": {
+            "command": "npm test -- src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts",
+            "exitCode": 0
+          }
+        }
+      },
+      "changedFiles": [
+        "src/domain/__tests__/knowledge.test.ts",
+        "src/domain/knowledge.ts"
+      ],
+      "attempts": 1,
+      "retryCount": 3,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-12T11:20:15+0900",
+      "completedAt": "2026-07-12T11:23:20+0900"
+    },
+    {
+      "phase": 2,
+      "name": "user-profile-settings",
+      "state": "completed",
+      "summary": "Phase 2 added a separate durable user-profile repository, guarded profile API, independent Settings UI, and verified R1/R7 behavior.",
+      "commit": "9824b0510c698277c66d095f7cbfcf385624a595",
+      "verify": {
+        "commands": [
+          "npm test -- src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx",
+          "npm run typecheck"
+        ],
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  4 passed (4)\n      Tests  59 passed (59)\n   Start at  11:40:14\n   Duration  1.04s (transform 180ms, setup 273ms, import 349ms, tests 399ms, environment 541ms)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
+      },
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "docs/ARCHITECTURE.md",
+            "docs/UI_GUIDE.md",
+            "src/app/api/__tests__/profileRoutes.test.ts",
+            "src/app/api/settings/profile/route.ts",
+            "src/app/settings/page.tsx",
+            "src/components/SettingsForm.tsx",
+            "src/components/UserProfileForm.tsx",
+            "src/components/__tests__/UserProfileForm.test.tsx",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/lib/__tests__/userProfile.test.ts",
+            "src/lib/localRequestGuard.ts",
+            "src/lib/userProfile.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/lib/__tests__/userProfile.test.ts",
+            "src/app/api/__tests__/profileRoutes.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/components/__tests__/UserProfileForm.test.tsx"
+          ],
+          "red": {
+            "command": "npm test -- src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/lib/__tests__/userProfile.test.ts src/app/api/__tests__/profileRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/UserProfileForm.test.tsx",
+            "exitCode": 0
+          }
+        }
+      },
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/profileRoutes.test.ts",
+        "src/app/api/settings/profile/route.ts",
+        "src/app/settings/page.tsx",
+        "src/components/SettingsForm.tsx",
+        "src/components/UserProfileForm.tsx",
+        "src/components/__tests__/UserProfileForm.test.tsx",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/userProfile.test.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/userProfile.ts"
+      ],
+      "attempts": 2,
+      "retryCount": 0,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-12T11:23:20+0900",
+      "completedAt": "2026-07-12T11:40:16+0900"
+    },
+    {
+      "phase": 3,
+      "name": "knowledge-index-repository",
+      "state": "completed",
+      "summary": "Phase 3 added fail-closed durable knowledge-card/corpus-map repositories, live metadata projection boundaries, and verified 18 targeted tests plus typecheck.",
+      "commit": "df6a2ddc4b77c5f7b55e11ef73df206eeb78fe66",
+      "verify": {
+        "commands": [
+          "npm test -- src/lib/__tests__/knowledgeIndex.test.ts src/lib/__tests__/knowledgeIndexRepository.test.ts",
+          "npm run typecheck"
+        ],
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/lib/__tests__/knowledgeIndex.test.ts src/lib/__tests__/knowledgeIndexRepository.test.ts",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/lib/__tests__/knowledgeIndex.test.ts src/lib/__tests__/knowledgeIndexRepository.test.ts\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  2 passed (2)\n      Tests  18 passed (18)\n   Start at  11:56:56\n   Duration  397ms (transform 123ms, setup 156ms, import 174ms, tests 138ms, environment 0ms)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
+      },
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "docs/ARCHITECTURE.md",
+            "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+            "src/lib/__tests__/knowledgeIndex.test.ts",
+            "src/lib/__tests__/knowledgeIndexRepository.test.ts",
+            "src/lib/knowledgeIndex.ts",
+            "src/lib/knowledgeIndexRepository.ts",
+            "src/lib/paths.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/lib/__tests__/knowledgeIndex.test.ts",
+            "src/lib/__tests__/knowledgeIndexRepository.test.ts"
+          ],
+          "red": {
+            "command": "npm test -- src/lib/__tests__/knowledgeIndex.test.ts src/lib/__tests__/knowledgeIndexRepository.test.ts",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/lib/__tests__/knowledgeIndex.test.ts src/lib/__tests__/knowledgeIndexRepository.test.ts",
+            "exitCode": 0
+          }
+        }
+      },
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "src/lib/__tests__/knowledgeIndex.test.ts",
+        "src/lib/__tests__/knowledgeIndexRepository.test.ts",
+        "src/lib/knowledgeIndex.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/paths.ts"
+      ],
+      "attempts": 1,
+      "retryCount": 0,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-12T11:40:17+0900",
+      "completedAt": "2026-07-12T11:56:58+0900"
+    },
+    {
+      "phase": 4,
+      "name": "summarize-indexing-and-reindex",
+      "state": "completed",
+      "summary": "Phase 4 added post-publish best-effort knowledge indexing, safe serialized all/meeting reindexing, and documented partial recovery without rolling back successful summaries.",
+      "commit": "003e04543fdabd148d89cdc5c37b1c0ced5707b5",
+      "verify": {
+        "commands": [
+          "npm test -- src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+          "npm run typecheck"
+        ],
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  5 passed (5)\n      Tests  74 passed (74)\n   Start at  12:14:22\n   Duration  2.03s (transform 517ms, setup 476ms, import 723ms, tests 2.42s, environment 0ms)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
+      },
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "docs/ARCHITECTURE.md",
+            "docs/UI_GUIDE.md",
+            "src/app/api/__tests__/knowledgeReindexRoutes.test.ts",
+            "src/app/api/knowledge/reindex/route.ts",
+            "src/lib/__tests__/knowledgeIndex.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/lib/__tests__/summarize.test.ts",
+            "src/lib/__tests__/summarizePublisher.test.ts",
+            "src/lib/knowledgeIndexRepository.ts",
+            "src/lib/localRequestGuard.ts",
+            "src/lib/summarize.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/lib/__tests__/summarize.test.ts",
+            "src/lib/__tests__/summarizePublisher.test.ts",
+            "src/lib/__tests__/knowledgeIndex.test.ts",
+            "src/app/api/__tests__/knowledgeReindexRoutes.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts"
+          ],
+          "red": {
+            "command": "npm test -- src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 0
+          }
+        }
+      },
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/knowledgeReindexRoutes.test.ts",
+        "src/app/api/knowledge/reindex/route.ts",
+        "src/lib/__tests__/knowledgeIndex.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizePublisher.test.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/summarize.ts"
+      ],
+      "attempts": 1,
+      "retryCount": 0,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-12T11:56:58+0900",
+      "completedAt": "2026-07-12T12:14:25+0900"
+    },
+    {
+      "phase": 5,
+      "name": "simple-search",
+      "state": "completed",
+      "summary": "Phase 5 added deterministic live-fenced simple search, guarded API, resilient divider-list UI, navigation, tests, and search contracts without reading transcripts by default.",
+      "commit": "a761a5864a2a567c52b9e8f01c5d3ec341ff3ed8",
+      "verify": {
+        "commands": [
+          "npm test -- src/lib/__tests__/meetingSearch.test.ts src/app/api/__tests__/searchRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/SearchClient.test.tsx src/components/__tests__/LibraryNavigation.test.tsx",
+          "npm run typecheck"
+        ],
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/lib/__tests__/meetingSearch.test.ts src/app/api/__tests__/searchRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/SearchClient.test.tsx src/components/__tests__/LibraryNavigation.test.tsx",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/lib/__tests__/meetingSearch.test.ts src/app/api/__tests__/searchRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/SearchClient.test.tsx src/components/__tests__/LibraryNavigation.test.tsx\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  5 passed (5)\n      Tests  112 passed (112)\n   Start at  12:34:32\n   Duration  1.97s (transform 578ms, setup 334ms, import 908ms, tests 1.36s, environment 1.15s)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
+      },
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "docs/ARCHITECTURE.md",
+            "docs/UI_GUIDE.md",
+            "src/app/api/__tests__/searchRoutes.test.ts",
+            "src/app/api/search/route.ts",
+            "src/app/search/page.tsx",
+            "src/components/LibraryNavigation.tsx",
+            "src/components/SearchClient.tsx",
+            "src/components/SearchResults.tsx",
+            "src/components/__tests__/LibraryNavigation.test.tsx",
+            "src/components/__tests__/SearchClient.test.tsx",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/lib/__tests__/meetingSearch.test.ts",
+            "src/lib/localRequestGuard.ts",
+            "src/lib/meetingSearch.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/lib/__tests__/meetingSearch.test.ts",
+            "src/app/api/__tests__/searchRoutes.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/components/__tests__/SearchClient.test.tsx",
+            "src/components/__tests__/LibraryNavigation.test.tsx"
+          ],
+          "red": {
+            "command": "npm test -- src/lib/__tests__/meetingSearch.test.ts src/app/api/__tests__/searchRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/SearchClient.test.tsx src/components/__tests__/LibraryNavigation.test.tsx",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/lib/__tests__/meetingSearch.test.ts src/app/api/__tests__/searchRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts src/components/__tests__/SearchClient.test.tsx src/components/__tests__/LibraryNavigation.test.tsx",
+            "exitCode": 0
+          }
+        }
+      },
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/searchRoutes.test.ts",
+        "src/app/api/search/route.ts",
+        "src/app/search/page.tsx",
+        "src/components/LibraryNavigation.tsx",
+        "src/components/SearchClient.tsx",
+        "src/components/SearchResults.tsx",
+        "src/components/__tests__/LibraryNavigation.test.tsx",
+        "src/components/__tests__/SearchClient.test.tsx",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/meetingSearch.test.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/meetingSearch.ts"
+      ],
+      "attempts": 1,
+      "retryCount": 0,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-12T12:14:26+0900",
+      "completedAt": "2026-07-12T12:34:35+0900"
+    },
+    {
+      "phase": 6,
+      "name": "chatbot-tool-backend",
+      "state": "completed",
+      "summary": "Phase 6 added bounded local chat tools, evidence-ledger orchestration, a guarded no-store API, typed failures, and architecture contracts with 106 targeted tests green.",
+      "commit": "cfd5d005ccfaf243b5a131c4bbf0ad46f3550158",
+      "verify": {
+        "commands": [
+          "npm test -- src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+          "npm run typecheck"
+        ],
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  6 passed (6)\n      Tests  106 passed (106)\n   Start at  13:00:13\n   Duration  773ms (transform 583ms, setup 479ms, import 850ms, tests 147ms, environment 1.17s)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
+      },
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "docs/ARCHITECTURE.md",
+            "src/app/api/__tests__/chatRoutes.test.ts",
+            "src/app/api/chat/route.ts",
+            "src/domain/__tests__/chat.test.ts",
+            "src/domain/chat.ts",
+            "src/lib/__tests__/chatOrchestrator.test.ts",
+            "src/lib/__tests__/chatTools.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/lib/__tests__/publicApi.test.ts",
+            "src/lib/chatOrchestrator.ts",
+            "src/lib/chatTools.ts",
+            "src/lib/localRequestGuard.ts",
+            "src/lib/publicApi.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/domain/__tests__/chat.test.ts",
+            "src/lib/__tests__/chatTools.test.ts",
+            "src/lib/__tests__/chatOrchestrator.test.ts",
+            "src/app/api/__tests__/chatRoutes.test.ts",
+            "src/lib/__tests__/publicApi.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts"
+          ],
+          "red": {
+            "command": "npm test -- src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/domain/__tests__/chat.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/chatOrchestrator.test.ts src/app/api/__tests__/chatRoutes.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 0
+          }
+        }
+      },
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "src/app/api/__tests__/chatRoutes.test.ts",
+        "src/app/api/chat/route.ts",
+        "src/domain/__tests__/chat.test.ts",
+        "src/domain/chat.ts",
+        "src/lib/__tests__/chatOrchestrator.test.ts",
+        "src/lib/__tests__/chatTools.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/publicApi.test.ts",
+        "src/lib/chatOrchestrator.ts",
+        "src/lib/chatTools.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/publicApi.ts"
+      ],
+      "attempts": 1,
+      "retryCount": 0,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-12T12:34:35+0900",
+      "completedAt": "2026-07-12T13:00:16+0900"
+    },
+    {
+      "phase": 7,
+      "name": "feature-ui-ux-polish",
+      "state": "completed",
+      "summary": "Phase 7 completed the shared question/search tabs, bounded cited chat and recovery UX, Settings/profile polish, and synthetic browser review with 63 targeted tests and typecheck green.",
+      "commit": "e706a6328e955fc6fde35cde1273872ae5cd8a2b",
+      "verify": {
+        "commands": [
+          "npm test -- src/components/__tests__/ChatClient.test.tsx src/components/__tests__/SearchClient.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx",
+          "npm run typecheck"
+        ],
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/components/__tests__/ChatClient.test.tsx src/components/__tests__/SearchClient.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/components/__tests__/ChatClient.test.tsx src/components/__tests__/SearchClient.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  4 passed (4)\n      Tests  63 passed (63)\n   Start at  14:07:54\n   Duration  2.23s (transform 778ms, setup 325ms, import 1.15s, tests 2.39s, environment 2.61s)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
+      },
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "docs/UI_GUIDE.md",
+            "src/components/ChatAnswer.tsx",
+            "src/components/ChatClient.tsx",
+            "src/components/ChatStatus.tsx",
+            "src/components/LibraryNavigation.tsx",
+            "src/components/SearchClient.tsx",
+            "src/components/SearchResults.tsx",
+            "src/components/SettingsForm.tsx",
+            "src/components/UserProfileForm.tsx",
+            "src/components/__tests__/ChatClient.test.tsx",
+            "src/components/__tests__/SearchClient.test.tsx"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/components/__tests__/ChatClient.test.tsx",
+            "src/components/__tests__/SearchClient.test.tsx",
+            "src/components/__tests__/UserProfileForm.test.tsx",
+            "src/components/__tests__/LibraryNavigation.test.tsx"
+          ],
+          "red": {
+            "command": "npm test -- src/components/__tests__/ChatClient.test.tsx src/components/__tests__/SearchClient.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/components/__tests__/ChatClient.test.tsx src/components/__tests__/SearchClient.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx",
+            "exitCode": 0
+          }
+        },
+        "browser": {
+          "fixture": "synthetic",
+          "assertionsPassed": true,
+          "usedRealUserData": false
+        },
+        "ui-ux-review": {
+          "designBriefApplied": true,
+          "perceptualPassCompleted": true,
+          "technicalPassCompleted": true,
+          "unresolvedP0": 0,
+          "unresolvedP1": 0,
+          "inScopeP2Resolved": true,
+          "viewports": [
+            "1440x900",
+            "768x1024",
+            "390x844",
+            "320x720",
+            "1280x800@200%"
+          ],
+          "keyboardPrimaryFlowsPassed": true,
+          "contrastAAPassed": true,
+          "horizontalOverflow": false,
+          "consoleErrors": 0,
+          "newDesignDependency": false,
+          "usedExistingDesignSystem": true
+        }
+      },
+      "changedFiles": [
+        "docs/UI_GUIDE.md",
+        "src/components/ChatAnswer.tsx",
+        "src/components/ChatClient.tsx",
+        "src/components/ChatStatus.tsx",
+        "src/components/LibraryNavigation.tsx",
+        "src/components/SearchClient.tsx",
+        "src/components/SearchResults.tsx",
+        "src/components/SettingsForm.tsx",
+        "src/components/UserProfileForm.tsx",
+        "src/components/__tests__/ChatClient.test.tsx",
+        "src/components/__tests__/SearchClient.test.tsx"
+      ],
+      "attempts": 1,
+      "retryCount": 1,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-12T13:18:55+0900",
+      "completedAt": "2026-07-12T14:07:57+0900"
+    },
+    {
+      "phase": 8,
+      "name": "docs-final-qa",
+      "state": "completed",
+      "summary": "Phase 8 finalized user-facing and contract documentation for optional profiles, derived search data, deterministic search, evidence-validated chat, UI recovery, and provider boundaries; all five full QA gates passed.",
+      "commit": "66bd8c410da81daa68bef01fde4c6d252ba5b859",
+      "verify": {
+        "commands": [
+          "npm test",
+          "npm run typecheck",
+          "npm run lint",
+          "npm run build",
+          "npm run check:links"
+        ],
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  89 passed (89)\n      Tests  834 passed (834)\n   Start at  14:25:27\n   Duration  9.35s (transform 4.69s, setup 5.23s, import 10.21s, tests 28.40s, environment 27.20s)\n\nNot implemented: navigation to another Document\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          },
+          {
+            "command": "npm run lint",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 lint\n> eslint .\n\n"
+          },
+          {
+            "command": "npm run build",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "brary/reveal                    214 B         103 kB\n├ ƒ /api/meetings                          214 B         103 kB\n├ ƒ /api/meetings/[id]                     214 B         103 kB\n├ ƒ /api/meetings/[id]/audio               214 B         103 kB\n├ ƒ /api/meetings/[id]/export              214 B         103 kB\n├ ƒ /api/meetings/[id]/finalize            214 B         103 kB\n├ ƒ /api/meetings/[id]/location            214 B         103 kB\n├ ƒ /api/meetings/[id]/reveal              214 B         103 kB\n├ ƒ /api/meetings/[id]/review              214 B         103 kB\n├ ƒ /api/meetings/[id]/summarize           214 B         103 kB\n├ ƒ /api/meetings/[id]/title               214 B         103 kB\n├ ƒ /api/organization-pending              214 B         103 kB\n├ ƒ /api/search                            214 B         103 kB\n├ ƒ /api/settings/llm                      214 B         103 kB\n├ ƒ /api/settings/llm/health               214 B         103 kB\n├ ƒ /api/settings/profile                  214 B         103 kB\n├ ƒ /api/summarize                         214 B         103 kB\n├ ƒ /api/summary-work                      214 B         103 kB\n├ ƒ /api/transcribe                        214 B         103 kB\n├ ƒ /api/whisper/health                    214 B         103 kB\n├ ƒ /api/workspaces                        214 B         103 kB\n├ ƒ /api/workspaces/[id]                   214 B         103 kB\n├ ƒ /api/workspaces/[id]/delete-preview    214 B         103 kB\n├ ○ /glossary                            4.03 kB         106 kB\n├ ƒ /meetings/[id]                       7.12 kB         148 kB\n├ ○ /search                              12.2 kB         148 kB\n└ ○ /settings                             6.8 kB         127 kB\n+ First Load JS shared by all             102 kB\n  ├ chunks/1255-d90f22433f14e976.js      46.2 kB\n  ├ chunks/4bd1b696-f785427dddbba9fb.js  54.2 kB\n  └ other shared chunks (total)          1.93 kB\n\n\n○  (Static)   prerendered as static content\nƒ  (Dynamic)  server-rendered on demand\n\n"
+          },
+          {
+            "command": "npm run check:links",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 check:links\n> node scripts/check-links.mjs\n\n✓ 링크 무결성 OK — 276개 상대 링크 전부 실재.\n"
+          }
+        ]
+      },
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "README.md",
+            "docs/ARCHITECTURE.md",
+            "docs/PRD.md",
+            "docs/UI_GUIDE.md",
+            "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+            "docs/decisions/README.md"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        }
+      },
+      "changedFiles": [
+        "README.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PRD.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "docs/decisions/README.md"
+      ],
+      "attempts": 1,
+      "retryCount": 1,
+      "blockedReason": "",
+      "errorMessage": "",
+      "startedAt": "2026-07-12T14:16:50+0900",
+      "completedAt": "2026-07-12T14:26:11+0900"
+    }
+  ]
+}

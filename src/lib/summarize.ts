@@ -9,8 +9,12 @@ import {
   tryAcquireMeetingOperation,
   type MeetingOperationLease,
 } from "@/lib/meetingLifecycle";
-import { meetingPaths } from "@/lib/paths";
-import { classifyLlmFailure } from "@/lib/publicApi";
+import {
+  createKnowledgeIndexRepository,
+  type KnowledgeIndexRepository,
+} from "@/lib/knowledgeIndexRepository";
+import { dataRoot, meetingPaths } from "@/lib/paths";
+import { classifyLlmFailure, safeLog } from "@/lib/publicApi";
 import { readStatus, updateStatus } from "@/lib/status";
 import { resolveTranscript, summarizeCore } from "@/lib/summarizeCore";
 import {
@@ -25,6 +29,24 @@ import { getConfiguredAdapter } from "@/services/llm";
 import type { LlmAdapter } from "@/services/llm/types";
 
 export const MAX_SUMMARIZE_ATTEMPTS = 3;
+
+type SummarizeKnowledgeIndexRepository = Pick<
+  KnowledgeIndexRepository,
+  "refreshAfterSummary"
+>;
+
+let knowledgeIndexRepositoryForTests: SummarizeKnowledgeIndexRepository | null = null;
+
+export function setSummarizeKnowledgeIndexRepositoryForTests(
+  repository: SummarizeKnowledgeIndexRepository | null,
+): void {
+  knowledgeIndexRepositoryForTests = repository;
+}
+
+function knowledgeIndexRepository(): SummarizeKnowledgeIndexRepository {
+  return knowledgeIndexRepositoryForTests
+    ?? createKnowledgeIndexRepository({ dataRoot: dataRoot() });
+}
 
 export type SummarizeFailureReason =
   | "not_found"
@@ -209,13 +231,34 @@ async function executePreparedSummarize(
       }
     }
 
-    await publishSummarizeAttempt({
+    const publication = await publishSummarizeAttempt({
       id,
       ownerToken: lease.ownerToken,
       attempt,
       transcript: result.transcript,
       summary: `${JSON.stringify(result.summary, null, 2)}\n`,
     });
+    if (publication.state === "published") {
+      try {
+        const indexing = await knowledgeIndexRepository().refreshAfterSummary({
+          meetingId: id,
+          meetingOperationOwnerToken: lease.ownerToken,
+        });
+        if (indexing.status !== "ready") {
+          safeLog("warn", {
+            code: "knowledge_index_incomplete",
+            operation: "summarize_index",
+            meetingId: id,
+          });
+        }
+      } catch {
+        safeLog("warn", {
+          code: "knowledge_index_failed",
+          operation: "summarize_index",
+          meetingId: id,
+        });
+      }
+    }
     return { ok: true };
   } catch (error) {
     if (error instanceof SummarizePublishError && !error.restored) {

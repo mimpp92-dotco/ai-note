@@ -43,12 +43,24 @@ export function libraryPath(root = dataRoot()): string {
   return join(root, "library.json");
 }
 
+export function knowledgeRoot(root = dataRoot()): string {
+  return join(root, "knowledge");
+}
+
+export function corpusMapPath(root = dataRoot()): string {
+  return join(knowledgeRoot(root), "corpus-map.json");
+}
+
 export function meetingsRoot(): string {
   return join(dataRoot(), "meetings");
 }
 
 export function meetingDir(id: string): string {
   return join(meetingsRoot(), assertSafeId(id));
+}
+
+export function knowledgeCardPath(id: string, root = dataRoot()): string {
+  return join(root, "meetings", assertSafeId(id), "knowledge-card.json");
 }
 
 export function meetingPaths(id: string): MeetingPaths {

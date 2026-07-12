@@ -8,8 +8,8 @@
 ## 새 ADR 추가
 
 ```bash
-cp docs/decisions/0000-template.md docs/decisions/0018-내-결정.md
-$EDITOR docs/decisions/0018-내-결정.md   # 5칸 채우고 아래 목록에 추가
+cp docs/decisions/0000-template.md docs/decisions/0019-내-결정.md
+$EDITOR docs/decisions/0019-내-결정.md   # 5칸 채우고 아래 목록에 추가
 ```
 
 ## 목록
@@ -31,3 +31,4 @@ $EDITOR docs/decisions/0018-내-결정.md   # 5칸 채우고 아래 목록에 �
 | [0015](0015-durable-meeting-tombstone.md) | Durable meeting tombstone이 logical delete commit | 채택됨 |
 | [0016](0016-atomic-finalize-directory-publication.md) | Finalize는 receipt를 포함한 directory rename으로 publish | 채택됨 |
 | [0017](0017-corrupt-library-rebuild-and-generation-reset.md) | Corrupt library 원본 보존형 재구축과 client generation reset | 채택됨 |
+| [0018](0018-meeting-knowledge-index-and-chatbot.md) | 파생 지식 인덱스와 근거 기반 회의 챗봇 | 채택됨 |

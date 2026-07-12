@@ -14,8 +14,11 @@ whisper/               # 로컬 Python whisper 서비스(uv 3.11/3.12 핀 venv)
 scripts/               # check-links.mjs (링크 무결성 체커)
 .claude/commands/      # meeting-summarize.md
 data/meetings/{id}/    # 런타임 산출물(gitignore, fixtures 제외)
+data/meetings/{id}/knowledge-card.json # meeting별 재생성 가능한 검색 파생물
 data/meeting-tombstones/{id}.json # 영구 ID delete fence(app lifecycle writer)
 data/library.json      # workspace/folder/placement 중앙 registry(app-api 단일 writer)
+data/user-profile.json # optional 개인화 프로필(app-api 단일 writer, LLM settings와 분리)
+data/knowledge/corpus-map.json # bounded 전체 검색 후보 projection
 fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fallback
 ```
 
@@ -49,8 +52,104 @@ flowchart LR
 | `raw.md` + `segments.json` | whisper | 원본 불변 |
 | `transcript.md` + `summary.json` | **app summarize publisher만** | 재생성 가능. `summary.json`이 generation completion marker |
 | `data/library.json` | **library repository만** | workspace/folder/placement metadata. Meeting directory는 이동하지 않음 |
+| `data/user-profile.json` | **profile settings app-api만** | optional 표시 이름/별칭/시간 기준. `data/settings.json` LLM provider 설정과 분리 |
 | `.whisper-dispatch.json` | **whisper만** | audio identity + durable dispatch publication phase |
 | `meeting-tombstones/{id}.json` | **app lifecycle만** | 영구 logical-delete fence. 물리 cleanup 후에도 보존 |
+| `data/meetings/{id}/knowledge-card.json` | knowledge index repository | meeting별 검색 파생물. source summary/transcript SHA-256 포함, 삭제 후 재생성 가능 |
+| `data/knowledge/corpus-map.json` | knowledge index repository | card의 bounded summary projection만 모은 전체 검색 파생물, 삭제 후 재생성 가능 |
+
+## 회의 지식 인덱스 계약
+
+`knowledge-card.json` v1은 `meetingId`, `sourceHashes.summary/transcript`, summary content, action-item search metadata, `reviewParticipants`, `mentionedPeople`을 가진다. `reviewParticipants`는 생성 당시 `status.review` snapshot일 뿐이며 v1 `mentionedPeople`은 placeholder가 아닌 action item owner 같은 deterministic source만 사용한다. transcript/summary SHA-256은 한 artifact lease 안에서 한 번 읽은 in-memory byte pair로 계산한다. `corpus-map.json` v1은 card의 bounded `meetingId`/one-line/purpose/highlights/mentioned-people projection만 포함하고 전체 transcript, absolute path, title/status/location/review snapshot을 포함하지 않는다. 내부 read mode는 `missing|ready|stale|corrupt|io_error`, public aggregate는 `ready|partial|unavailable`과 safe reason `missing|stale|corrupt|io_error`만 노출한다.
+
+Card write는 caller의 meeting operation owner 아래 `safe meeting ID → tombstone fence → artifact write lease → tombstone 재확인 → status와 source pair read → atomic replace` 순서를 따른다. Corrupt/unreadable status, deleted/ambiguous tombstone, unsafe record, missing/malformed/ambiguous pair는 live card로 복구하지 않고 fail-closed한다. Rename이 card/corpus의 logical commit이며 parent sync가 일시 실패한 `pending`도 committed 결과로 유지하고 rollback이나 blind rewrite를 하지 않는다.
+
+요약/재요약 성공 경로는 app publisher가 `summary.json` completion marker를 발행하고 matching `summarizeAttempt`를 committed 상태로 정리한 뒤에만 별도의 knowledge repository 호출로 card와 corpus 갱신을 시도한다. Publisher 결과와 index 결과는 독립적이다. Index의 missing/stale/corrupt/I/O 실패나 post-rename `pending`은 이미 발행된 transcript/summary pair와 `summarized` status를 rollback·실패 전이시키지 않으며, raw 오류 대신 bounded safe log와 다음 read의 index 상태로만 남는다. Corpus 갱신 trigger는 이 성공한 pair 발행과 명시적 `POST /api/knowledge/reindex`뿐이다.
+
+`data/knowledge/` 최초 생성은 data root와 새 entry가 실제 non-symlink directory인지 확인하고 `data/` namespace를 sync한다. 알려진 directory-sync 미지원은 `best_effort`, 지원 환경의 일시 실패는 `pending`으로 구분한다. Corpus write는 absolute canonical `corpus-map.json` path process queue에서 직렬화한다. Rebuild는 common meeting classifier의 `live` record만 대상으로 library/classification snapshot과 meeting별 tombstone/artifact-read-lease card snapshot을 queue 밖에서 수집한다. 모든 per-meeting lease를 놓은 뒤에만 corpus queue를 잡아 latest bounded map을 atomic replace하므로 artifact/library lease와 corpus queue를 중첩하지 않는다.
+
+`POST /api/knowledge/reindex`는 strict `{scope:"all"}` 또는 `{scope:"meeting",meetingId}`만 8 KiB JSON으로 받으며 local guard를 body와 filesystem보다 먼저 적용한다. 명시적 reindex 요청은 canonical corpus path에 대응하는 repository reindex queue에서 동기 직렬화하고 background job/stream을 만들지 않는다. All scope는 common classifier 결과의 live meeting만 operation→artifact-write 순서로 card를 갱신하고 tombstoned/corrupt/unreadable/unsafe record는 fail-closed count로만 집계한 뒤, 모든 meeting operation/artifact lease를 놓고 corpus snapshot을 commit한다. Public DTO는 `status:ready|partial|unavailable`, ordered safe `reasons:missing|stale|corrupt|io_error`, bounded `total/indexed/skipped` count와 `durability:durable|best_effort|pending|null`만 반환하며 path, raw filesystem error, provider/attempt ID는 포함하지 않는다.
+
+Library/classification snapshot과 card snapshot 사이의 최신성 경쟁은 허용하되 commit sequence가 더 새 corpus commit을 이전 snapshot으로 덮지 못하게 한다. `summary-work` read, library read/queue, per-meeting artifact lease, corpus queue는 중첩하지 않고 `snapshot → lease/queue release → corpus commit` 순서를 지킨다. Snapshot 뒤 title/review/location/delete가 바뀔 수 있으므로 corpus를 current truth로 간주하지 않으며 public consumer가 응답 직전 live join과 tombstone fence를 다시 수행한다.
+
+인덱스의 title/status/location/reviewParticipants 같은 mutable metadata snapshot은 public current truth가 아니다. Public projection은 persisted semantic fields만 선택하고 title/status/location/reviewParticipants를 query-time live status/library 입력에서 별도로 결합하며, 응답 직전 tombstone을 재검증한다. Title/review/move/delete lifecycle route에는 corpus fan-out hook을 추가하지 않는다. 챗봇은 검색·회의 조회 도구를 호출하며 서버 evidence ledger가 claim-level citation provenance를 검증한다. 모델은 번호/title/link를 만들지 않고 서버가 실제 인용된 validated meeting ID에 첫 등장 순서 stable 번호와 app-relative link를 부여한다. 상세 결정은 ADR [0018](decisions/0018-meeting-knowledge-index-and-chatbot.md)을 따른다.
+
+### AI 없는 단순 검색 계약
+
+`GET /api/search`는 Node dynamic route이며 local guard를 URL query 해석과 filesystem/repository read보다 먼저 실행한다. Query는 500자 이하이고 NFKC→locale-independent lower-case→separator-to-space→whitespace collapse 순서로 정규화한다. `+`, `#`, `.`, `_`, `-`는 word character와 닿은 run만 보존해 `C++`, `C#`, `v2.1`, `ai-note`를 한 token으로 유지한다. 공백 token은 모든 token이 title/topic/one-line/highlights/discussion/decisions/action-items/risks/followups/current participants 또는 current metadata field 중 적어도 하나와 substring 일치해야 하는 AND 조건이다.
+
+Date/workspace/folder/status/action-item filter는 score 계산 전에 적용한다. Ranking은 `src/lib/meetingSearch.ts`의 명시적 field-weight table과 exact-phrase bonus가 정본이며, 동점은 `startedAt` 최신순 → meeting ID 영문 오름차순이다. Public match reason은 상위 3개의 user-facing field label과 query 주변 180자 이하 plain-text excerpt만 포함하고 HTML/Markdown, score, absolute path, raw filesystem/provider output을 포함하지 않는다. `mentionedPeople`은 action-item owner처럼 결정적으로 만든 hint일 뿐 임의 인명 인식 결과로 설명하지 않는다.
+
+기본 검색 source는 `corpus-map.json`과 `knowledge-card.json`이며 `transcript.md` 전체를 매 요청마다 읽지 않는다. Search card freshness는 canonical pair의 completion marker인 current `summary.json` 해시와 current `summarizeAttempt`를 사용한다. Pair publisher가 transcript와 summary를 한 generation으로 발행하고 summary를 마지막에 commit한다는 계약에 의존한다. Ready card만 summary semantic field를 제공한다. Stale/missing/corrupt card는 본문을 제공하지 않지만 current live title/date/status/location/review participants는 검색할 수 있고 aggregate는 `partial`이다. Corpus 자체가 missing/corrupt/I/O로 읽히지 않으면 `unavailable`이며 결과를 반환하지 않는다.
+
+검색은 library/classified-status snapshot에서 후보를 만들고 card를 읽은 뒤 current library/status snapshot을 다시 읽는다. 두 snapshot의 `libraryId+revision`이 다르면 혼합 generation을 반환하지 않고 no-store `409 {error:{code:"search_retry",message}}`로 낮춘다. Public result 직전 current classifier와 tombstone을 다시 확인해 tombstoned/ambiguous/unsafe/corrupt/missing-status meeting을 제외하고 title/status/location/review participants는 반드시 마지막 live snapshot에서 투영한다.
+
+성공 DTO는 다음 bounded shape다. `limit` 기본값은 20, 최대 50이며 cursor pagination 없이 limit 밖 valid result 존재만 `hasMore`로 알린다. `summaryPendingCount`는 semantic card를 아직 사용할 수 없는 요약 대기 상태를 UI가 구분하기 위한 bounded count다.
+
+```ts
+{
+  query: string;
+  results: Array<{
+    meetingId: string;
+    title: string;
+    status: MeetingStatus;
+    startedAt: string;
+    location: { workspaceId: string; folderId: string | null; breadcrumb: string[] } | null;
+    matches: Array<{ field: string; label: string; excerpt: string }>;
+    href: `/meetings/${string}`;
+  }>;
+  hasMore: boolean;
+  summaryPendingCount: number;
+  index: {
+    status: "ready" | "partial" | "unavailable";
+    reasons: Array<"missing" | "stale" | "corrupt" | "io_error">;
+    reindexable: boolean;
+  };
+}
+```
+
+### 전체 회의 챗봇 tool protocol
+
+`POST /api/chat`는 Node dynamic·non-streaming route다. Local request guard를 body read, 설정 조회, filesystem, adapter 실행보다 먼저 적용하고 exact JSON을 128 KiB에서 제한한다. 요청은 strict `{message,mode:"normal"|"deep",history?}`이며 message는 4,000자, history는 완결된 `user → assistant` pair 최대 4개(8 item), item당 8,000자·합계 24,000자다. Assistant history의 optional `referenceMap`은 turn-local unique `{number:1..20,meetingId}`만 보존하고 title/href/path를 받지 않는다. History는 현재 요청 prompt 문맥에만 사용하며 서버 파일이나 별도 대화 저장소에 영구 저장하지 않는다.
+
+챗봇은 기존 configured `LlmAdapter.run(prompt,{json:true})`를 model turn마다 한 번 호출하는 stateless JSON loop다. Streaming, background job, 새 provider/API-key surface를 만들지 않는다. 허용 envelope는 bounded `tool_calls | final`뿐이고 허용 도구는 다음 여섯 개다.
+
+- `get_user_profile({})`
+- `search_meetings({query,filters?,limit?})`
+- `read_knowledge_cards({meetingIds})`
+- `read_summaries({meetingIds})`
+- `read_transcript_chunks({meetingId,query,cursor?,limit?})`
+- `read_full_transcript({meetingId})`
+
+모델은 absolute/arbitrary path, filename, URL, command를 도구 인자로 넘길 수 없다. 회의 artifact 도구는 safe meeting ID → tombstone fence → artifact read lease → tombstone 재확인 → bounded pair/card read 순서를 지킨다. Card는 ready content만 내보내고 persisted title/status/location/review snapshot을 사용하지 않으며 마지막 live status/library projection으로 현재 metadata를 다시 결합한다. Transcript chunk cursor는 요청 범위에서만 유효한 opaque token이고 window는 겹치지 않는 4,000자 이하 구간이다. Full transcript는 문서 전체가 60,000자 이하이면서 남은 aggregate output budget에 들어올 때만 허용한다. 초과 시 `transcript_too_large`로 chunk search를 요구한다.
+
+질문, history, transcript/summary/card 본문과 tool output은 모두 untrusted JSON data block이다. 그 안의 “도구 호출”, “시스템 지시 변경”, “파일 읽기” 문구는 권한이 아니며 protocol 밖 이름/인자는 실행하지 않는다. Invalid JSON, tool args, final segment 또는 citation은 남은 model-turn 안에서 요청 전체당 repair 한 번만 허용하고 repair도 model turn을 소비한다.
+
+| 예산 | normal | deep |
+|---|---:|---:|
+| model turn | 4 | 6 |
+| tool call | 6 | 10 |
+| knowledge card | 50 | 100 |
+| summary | 8 | 16 |
+| transcript window | 12 | 24 |
+| full transcript | 2 | 4 |
+| aggregate tool output | 120,000자 | 240,000자 |
+
+Per-result 상한은 knowledge card 8,000자, summary 20,000자, transcript window 4,000자다. 모든 tool result는 `truncated`와 `budgetExhausted`를 구조화하고, 중복/초과 meeting ID, forged cursor, stale/corrupt/missing artifact, profile I/O, index unavailable을 raw path/fs/provider output 없는 typed result로 낮춘다. Profile missing은 정상 `{configured:false,runtimeTimezone,weekStartsOn,currentLocalDateTime}` 결과이며 일반 질문을 막거나 전역 warning을 만들지 않는다. 자기 지칭 해석에 실제 필요할 때만 `personalization_needed` clarification을 추가한다.
+
+서버 evidence ledger는 이번 요청에서 실제 성공한 search/card/summary/transcript read의 meeting ID, tier, truncation만 기록한다. Search-only hit와 assistant history `referenceMap`은 citation credit이 아니다. 과거 번호 follow-up은 최신 assistant turn map을 기본으로 safe ID/live tombstone을 재검증해 prompt context에만 넣고, 여러 이전 turn의 같은 번호가 서로 다른 회의를 뜻하는 질문은 추측하지 않고 clarification을 반환한다. 모델이 해당 회의를 현재 turn의 card/summary/transcript 도구로 다시 읽어야 claim citation 후보가 된다.
+
+Model final은 raw answer나 `[n]`, title/link가 아니라 최대 40개의 `{kind:"claim"|"clarification"|"limitation",format,text,citationMeetingIds}` segment를 반환한다. Claim은 1~5개 read-evidence ID를 가져야 하고 clarification/limitation은 citation이 비어야 한다. 서버는 claim 단위로 모든 ID가 ledger에 있고 final live/tombstone 재검증을 통과하는지 all-or-nothing으로 검사한다. 하나라도 탈락한 claim은 citation 일부만 지워 유지하지 않고 repair 대상으로 삼으며, repair 뒤에도 invalid하면 claim 전체를 제거하고 `unsupported_claim_omitted`를 기록한다.
+
+Surviving claim의 meeting은 첫 등장 순서로 `1..N` 번호를 서버가 부여한다. Public `answerSegments`는 모델 ID 대신 `referenceNumbers`만, `references`는 실제 사용된 회의만 `{number,meetingId,currentTitle,startedAt,href:"/meetings/{safeId}"}`로 반환한다. 읽었지만 인용하지 않은 범위는 ID 목록이 아니라 `checkedScope` count로만 집계한다. `searchReplay`도 실제 성공한 `search_meetings` 인자/결과 count에서만 만든다. Evidence ledger 검증은 source가 실제로 읽혔고 final 시점에 live였다는 provenance 검증이며, claim의 의미적 함의까지 서버가 자동 증명했다는 뜻은 아니다.
+
+`evidenceStatus`는 surviving claim이 없으면 `none`, card-only source 또는 unsupported/stale/truncated/budget/candidate/index/personalization degradation이 있으면 `partial`, 모든 cited source가 summary/transcript tier이고 degradation이 없을 때만 `sufficient`다. Model confidence는 public DTO에 없다. Public success는 no-store `{answerSegments,references,evidenceStatus,checkedScope,warnings,searchReplay?}`이며 reference 번호는 contiguous·meeting ID는 unique·모든 reference는 최소 한 claim에서 사용되어야 한다. Actionable failure는 같은 static envelope `{error:{code,message}}`로 `chat_llm_unconfigured`(409), `chat_llm_unavailable`(503), `chat_timeout`(504), `chat_index_unavailable`(503)을 반환하고 prompt, raw model/provider output, tool trace, absolute path를 응답이나 로그에 포함하지 않는다.
+
+## 검색·질문의 persistence·provider 경계
+
+- `data/user-profile.json`, meeting별 `knowledge-card.json`, `data/knowledge/corpus-map.json`은 gitignored local 파생/설정 데이터다. 프로필은 LLM provider 설정과 별도 writer를 가지며 API key를 포함하지 않는다. 단순 `GET /api/search`는 LLM이나 외부 network를 호출하지 않는다.
+- Chat UI는 완결 4 turn만 현재 browser tab의 React memory에 보존하고 새로고침 뒤 복원하지 않는다. Server는 요청의 bounded `history`를 prompt context로만 사용하며 chat session/file/database를 만들지 않는다.
+- `POST /api/chat`는 새 provider나 직접 유료 API 호출을 만들지 않고 사용자가 저장한 `LlmAdapter`를 재사용한다. Ollama egress는 explicit loopback HTTP만 허용한다. Claude/Codex 선택 시 앱은 로컬 CLI process에 bounded 질문/history/tool evidence를 전달하며, CLI가 사용하는 provider-side 처리는 사용자가 로그인한 CLI의 정책 경계에 속한다. 앱은 provider credential, raw prompt/tool trace, 대화 기록을 별도 저장하지 않는다.
 
 ## Local-only ingress·public boundary
 
@@ -250,6 +349,13 @@ StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `re
 - health는 UI와 설정 화면의 readiness/test-connection 용도다. **CLI provider(claude/codex)의 `ok`는 바이너리 감지이지 인증 보장이 아니다(낙관적)** — 실제 인증·요약 가능 여부는 첫 요약에서 확인된다. 홈 배너와 상세 상태 카드는 `configured && ok`일 때만 “요약 자동 처리 중”으로 안내한다. 감지형 health는 로그인 깨짐을 요약 전에 못 잡으므로, 홈 배너는 전사됐지만 요약 안 된 회의를 **“처리 중 N”(에러 없음)과 “확인 필요 M”(`retry_summary` 에러)로 분리**해 거짓초록을 막는다. 배경 워커 후보 선정은 기존처럼 settings 존재 기반이며, 실제 실행 실패는 `runSummarize()`의 retryable error로 기록한다(claude는 미로그인 시 이유를 stdout으로 출력하므로 `exec.ts`가 stderr가 비면 stdout 꼬리를 에러에 싣는다).
 - Claude·Codex CLI health는 `claude --version`/`codex --version` 수준의 binary 감지다(인증 불요·즉시 반환이라 콜드 스타트 타임아웃 오탐이 없다). UI 문구는 둘 다 “감지됨”으로 표시하고 인증/실제 요약 가능 여부는 첫 요약 실행에서 확인한다.
 - **claude 요약 호출 격리(ADR 0010):** claude 생성 호출(`run()`)은 invocation별 `mkdtemp` 격리 cwd에서 인라인 MCP-off(`--strict-mcp-config --mcp-config '{"mcpServers":{}}'`)·slash-off(`--disable-slash-commands`)로 실행하고, 종료 뒤 temp를 best-effort cleanup한다. 자식 env에서 유료 청구 env(자격증명 `ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY` + 백엔드 리다이렉트 `ANTHROPIC_BASE_URL`·`CLAUDE_CODE_USE_BEDROCK`/`VERTEX`)를 스크럽한다(구독 OAuth와 `HOME`/`PATH`는 유지 → $0 유지). 프로젝트 디렉토리 밖에서 돌기 때문에 워크스페이스 `CLAUDE.md`/MCP 컨텍스트가 교정 출력에 새지 않는다(과거 오염 버그 제거). 전사(PII)는 stdin으로만 전달하며, 프롬프트·`summary.json` 스키마·`summarizeCore` 계약은 불변. 생성 타임아웃은 600초(위 참조).
+
+## User profile settings 계약
+
+- `GET /api/settings/profile`은 저장된 profile이 있으면 `{configured:true,profile}`을, 파일이 없으면 `{configured:false,defaults:{timezone,weekStartsOn:"monday"}}`을 반환한다. Missing read는 파일을 만들지 않으며 timezone default는 local runtime의 유효한 IANA 값이고 판정 불가할 때만 `UTC`다.
+- `POST /api/settings/profile`은 strict profile v1(`displayName`, normalized `aliases`, IANA `timezone`, `weekStartsOn`)만 32 KiB bounded JSON으로 받고 `data/user-profile.json`에 쓴다. 이 파일은 LLM provider용 `data/settings.json`과 shape·writer surface를 합치지 않는다.
+- Profile write도 temp→file fsync→rename→parent-directory fsync를 사용한다. Success는 normalized profile과 `durability:durable|best_effort|pending`을 반환하고 pending은 이미 logical commit된 상태라 rollback·blind retry하지 않는다. Corrupt/invalid stored profile은 unconfigured로 낮추지 않고 safe load error로 fail-closed한다.
+- Profile은 optional personalization context다. 미설정이어도 일반 검색과 개인화가 필요 없는 질문을 막지 않으며, ‘내 할 일’·상대 날짜처럼 자기 지칭 해석에 profile이 필요한 경우에만 비차단 설정 안내를 제공한다.
 
 ## 프롬프트 (교정·요약)
 

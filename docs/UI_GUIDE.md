@@ -75,6 +75,62 @@
 
 ## 화면 스펙 (상태별)
 
+### 검색·질문
+
+- 기존 shared `Tabs`를 사용하고 `질문` 탭을 기본 진입으로 둔다. 비스트리밍 응답 중에는 확인할 수 없는 가짜 세부 진행 단계를 표시하지 않고 단일한 처리 중 상태만 알린다.
+- **검색 composition**: compact page heading 아래 검색 input과 명시적 dark `검색` primary action 하나를 둔다. Date/workspace/folder/status/action-item 조건은 기본 닫힌 native `필터` disclosure에 넣고, disclosure 밖에서도 active filter count와 `필터 초기화`를 확인할 수 있게 한다. 320px에서는 input/action과 filter field를 한 열로 쌓으며 Korean IME composition 중 Enter는 submit하지 않는다.
+- **검색 결과 hierarchy**: 결과는 card grid나 nested card가 아니라 위아래 divider를 공유하는 단일 column list다. 각 row는 live title → 날짜·live 위치·live 상태 한 metadata group → 최대 3개의 matched-field label/plain excerpt → 최소 44px `회의 열기` 순서다. `hasMore`는 “상위 N개 결과”와 검색어/필터를 좁히는 설명만 제공하고 다음/더 보기 control을 만들지 않는다.
+- Initial, 검색 중, 결과, 결과 없음, partial, unavailable, request error를 서로 다른 copy와 다음 행동으로 구분한다. 결과 없음은 검색어 축소와 filter reset을 안내하고, 요약 대기 회의는 제목·날짜·위치·참석자만 검색될 수 있음을 설명한다. Loading·request failure·재색인 중에도 이전 결과 surface와 현재 draft를 유지하고 결과 container에는 최소 높이를 둔다.
+- 프로필 미설정은 일반 검색·질문을 막는 오류가 아니다. ‘내 할 일’·상대 날짜처럼 자기 지칭 해석에 개인화 정보가 필요한 경우에만 비차단 설정 안내로 표시한다.
+- 근거가 있는 claim 바로 뒤에 inline `[n]` marker를 두고 답변 아래 reference list를 제공한다. 같은 meeting은 답변 안에서 stable number를 유지하며, 복사 결과에도 reference list를 포함한다. 번호·제목·link는 모델 출력이 아니라 서버가 검증한 meeting으로 생성한다.
+- **검색 데이터 상태**: ready는 별도 성공 배지를 만들지 않는다. Partial은 현재 결과·검색어·필터를 그대로 유지한 채 “일부 회의의 검색 데이터가 아직 최신 상태가 아닙니다” warning과 `검색 데이터 업데이트` CTA를 결과 위에 둔다. Unavailable은 입력한 검색어·필터를 보존하고 결과 영역에 복구 설명과 같은 CTA를 둔다. 현재 UI는 내부 `missing|stale|corrupt|io_error`를 reason별 진단 문구로 노출하지 않고 partial/unavailable의 안전한 aggregate copy로 낮춘다. `index`, `stale`, `corrupt`, raw path/error는 화면에 그대로 표시하지 않는다.
+- **재색인 CTA**: CTA 실행 중에도 current query/filter와 기존 결과·답변을 지우거나 입력을 disable하지 않는다. 성공하면 같은 query/filter를 자동 재실행하고 결과 heading에 polite 상태를 알린다. 실패하면 기존 결과·답변·draft와 focus를 유지한 inline error를 보여 주고 사용자가 다시 시도하거나 회의를 열 수 있게 한다. 재색인은 페이지 이동, polling job, progress stream처럼 표현하지 않는 한 번의 동기 요청이다.
+
+#### 검색·질문 고정 디자인 브리프
+
+| 항목 | 규칙 |
+|---|---|
+| 사용자 상황 | 혼자 여러 회의 사이의 결정·할 일·출처를 반복해서 찾는 사용자이며 긴 제목·답변과 불완전한 검색 데이터가 정상 상태다. |
+| 시각 register | Product / restrained / earned familiarity. Assistant persona, avatar, marketing hero, chat bubble, nested card를 만들지 않는다. |
+| 화면 순서 | 24px page heading → shared `질문`/`검색` Tabs → 선택한 입력 하나 → 상태와 결과. 한 탭에는 dark primary action을 하나만 둔다. |
+| 읽기 폭·간격 | 답변은 16px, line-height 1.6~1.7, 약 65~72ch로 제한한다. related gap은 8/12/16px, section gap은 24/32px의 기존 scale을 사용한다. |
+| 색·면·motion | 기존 warm palette와 system sans만 사용한다. 성공을 큰 배지로 만들지 않고 warning/error에만 필요한 semantic surface를 쓴다. 장식 motion·gradient·glass·glow를 추가하지 않는다. |
+
+- 질문 composer는 visible label, 1~5줄 auto-grow, `Enter` 제출, `Shift+Enter` 줄바꿈, Korean IME 조합 Enter 무시를 제공한다. 실행 중에는 입력·이전 답변을 유지하고 `답변을 준비하고 있습니다`처럼 실제로 아는 상태만 표시한다.
+- 대화는 사용자 질문 heading과 assistant `article`을 divider/spacing으로만 구분한다. 현재 브라우저 탭의 React 메모리에 완결 4 turn까지만 유지하며 `대화 지우기`를 제공하고, 새로고침 뒤에는 복원하지 않는다.
+- 답변은 server-built segment만 plain React text로 렌더한다. 문단은 `<p>`, 연속 bullet은 `<ul>/<li>`이며 HTML/Markdown을 주입하지 않는다.
+- 읽기 순서는 claim과 inline `[n]` → 해당할 때 출처·검색 데이터·개인화 복구 안내 → divider형 `참고 회의` ordered list → deep 실패 안내 → 답변 action → 기본 닫힌 `확인한 범위`다. 같은 답변의 같은 회의는 같은 번호를 재사용하고, 각 assistant turn은 독립 fragment ID를 사용한다.
+- 답변 action은 최대 `더 깊게 찾기`, `검색 결과로 보기`, `답변 복사` 세 개다. `더 깊게 찾기`만 deep 재실행을 만들고, 실패하면 기존 답변을 유지한다. 복사 결과에는 inline 번호와 현재 제목·날짜의 참고 회의 목록을 포함하되 local href나 meeting ID는 넣지 않는다.
+- 답변 완료는 focus를 옮기지 않는다. Inline marker를 활성화했을 때만 연결된 reference row를 scroll하고 programmatic focus한다. 독립 control은 44px target과 visible focus를 유지한다.
+- 외부 디자인 레퍼런스는 검토 절차의 참고일 뿐 runtime/install dependency가 아니다. AI NOTE의 기존 palette, type, Tabs, control grammar가 항상 우선한다.
+
+#### 검색·질문 상태 matrix
+
+| Surface | 상태 | 필수 UX |
+|---|---|---|
+| 질문 composer | pristine / draft / IME / submitting / error | visible label, 한 primary action, 중복 제출 방지, draft 보존, 정직한 한 줄 상태 |
+| 답변 | 출처 충분 / 일부 / 없음 / deep 실행·실패 / copied | 기존 답변 보존, inline reference, 참고 회의, 상태별 다음 행동, 복사 feedback 한 번 |
+| 검색 | initial / loading / results / empty / partial / unavailable / request·update error | query·filter·기존 결과 보존, 서로 다른 copy와 복구, pagination을 암시하지 않음 |
+| 내 정보 | loading / load error / pristine / dirty / saving / saved / durability pending / error | 요약 모델 section과 독립, load error overwrite 차단, draft 보존 |
+
+#### 사용자 용어
+
+| 내부 표현 | 화면 표현 |
+|---|---|
+| index / knowledge-card / corpus-map | 검색 데이터 |
+| stale / partial index | 일부 회의가 아직 최신 상태가 아님 |
+| evidence / evidence status | 출처 / 출처 확인 상태 |
+| budget exhausted / truncation | 확인할 범위가 커서 일부만 확인함 |
+| LLM / provider error | 요약 모델 / 답변을 만들지 못함 |
+| claim / tool / raw error code | 화면에 노출하지 않음 |
+
+#### Phase 7 검증 기준선
+
+- Synthetic fixture만 사용한 perceptual pass와 technical pass를 `1440×900`, `768×1024`, `390×844`, `320×720`, `1280×800 @ 200%`에서 완료했다. 실제 사용자 데이터는 사용하지 않았다.
+- Keyboard primary flow, AA contrast, 긴 CJK/English overflow를 확인했고 horizontal overflow·console error·미해결 P0/P1은 0이었다. 기존 디자인 시스템만 사용했으며 새 runtime/design dependency는 추가하지 않았다.
+
+오류·복구 문장은 `무엇이 실패했는지 → 입력과 기존 결과가 보존됐는지 → 다음 행동` 순서로 쓴다. Raw path, meeting ID, provider output, 내부 상태 코드는 표시하지 않는다.
+
 ### 녹음 화면
 - 상단 우측 **다크 "실시간 기록 시작"** 버튼. 녹음 중: 펄스 red dot + "기록 중" + `mm:ss` 타이머(mono) + **레벨 미터**(입력 소리 확인). 마이크 무음 시 레벨 0 = 사용자가 문제 인지. 페이지 이탈 시 `beforeunload` 경고.
 - 시각 timer와 `role="meter"`의 빠른 값 변화는 live region 밖에 둔다. Full/compact recorder 모두 작은 전용 `role="status" aria-live="polite"`가 권한 확인·기록 시작·정리·저장·실패 같은 phase 전환만 알린다.
@@ -114,6 +170,13 @@
 - 저장 모델: **명시적 "저장" 버튼**(자동저장 아님). 두 탭은 로컬 state로 함께 편집되고 하단 단일 버튼으로 1회 저장. 변경 시 "변경됨", 저장 후 "저장됨", 실패 시 `role="status"` 인라인 에러(로컬 state 보존).
 - Initial GET은 `loading|ready|load_error`를 구분한다. Non-2xx·network·invalid body는 빈 단어장으로 낮추지 않고 editor/replace-save를 잠근 뒤 재시도를 제공한다. 저장은 `ready && dirty && !saving`에서만 가능하고 성공 body로 정규화하며 실패 시 draft를 보존한다.
 - 안내: "새 회의는 자동 반영 · 기존 회의는 상세의 '다시 요약'으로 갱신".
+
+### 설정 화면 · 내 정보
+
+- Settings page는 `<main>`과 `h1 "설정"`을 하나씩만 가진다. `내 정보`와 `요약 모델`은 같은 정보 단계의 중첩되지 않은 sibling section이며 각 section의 loading/load error/dirty/saving/saved/pending/save error는 다른 section의 편집과 상태를 가리거나 막지 않는다.
+- `내 정보`는 선택 설정이다. 제목 바로 아래에서 ‘내 할 일’·상대 날짜 개인화를 보완하지만 일반 검색/질문의 필수 조건은 아님을 설명한다. 표시 이름과 쉼표/줄바꿈 별칭은 첫 group에 보이고, timezone/주 시작 요일은 기본이 닫힌 native `날짜 기준` disclosure에 둔다. 사용자가 열었거나 검증 오류가 있는 disclosure를 저장/상태 갱신 때문에 임의로 닫지 않는다.
+- Missing profile의 timezone은 local runtime default 또는 판정 불가 시 `UTC`로 제안하되 `아직 저장되지 않음`을 함께 표시한다. IANA 값을 직접 입력할 수 있고 native datalist가 가능한 환경에서는 bounded suggestion만 제공한다. Pending durability는 실패/재저장 CTA가 아니라 `저장됨 · 디스크 동기화 확인 대기` committed warning으로 표시한다.
+- 320px에서는 두 section 모두 field와 action/status를 한 열로 reflow하고 timezone·별칭·CJK 장문이 action과 폭을 경쟁하거나 horizontal overflow를 만들지 않는다.
 
 ### 요약 모델 설정
 - Initial GET은 `loading|ready|load_error`를 구분한다. `{provider:null}`만 명시적 미설정 ready이며, read 실패를 기본 Claude 설정으로 가장하지 않고 editor/save를 잠근 뒤 재시도를 제공한다.

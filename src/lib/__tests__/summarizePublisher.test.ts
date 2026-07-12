@@ -18,7 +18,7 @@ import {
   acquireMeetingOperation,
   resetMeetingLifecycleForTests,
 } from "@/lib/meetingLifecycle";
-import { meetingPaths } from "@/lib/paths";
+import { corpusMapPath, knowledgeCardPath, meetingPaths } from "@/lib/paths";
 import { initialStatus, readStatus, writeStatus } from "@/lib/status";
 import { resetStatusUpdaterStateForTests } from "@/lib/statusUpdater";
 import {
@@ -149,6 +149,8 @@ describe("durable summarize pair publisher", () => {
     expect((await readStatus(id))?.status).toBe("summarized");
     expect(result.state).toBe("published");
     expect(existsSync(summarizeAttemptPaths(id, attempt.attemptId).dir)).toBe(false);
+    expect(existsSync(knowledgeCardPath(id))).toBe(false);
+    expect(existsSync(corpusMapPath())).toBe(false);
   });
 
   it("restores the old transcript when summary publication fails", async () => {
@@ -171,6 +173,8 @@ describe("durable summarize pair publisher", () => {
     expect(await readFile(paths.transcript, "utf8")).toBe(OLD_TRANSCRIPT);
     expect(await readFile(paths.summary, "utf8")).toBe(OLD_SUMMARY);
     expect((await readStatus(id))?.summarizeAttempt?.attemptId).toBe(attempt.attemptId);
+    expect(existsSync(knowledgeCardPath(id))).toBe(false);
+    expect(existsSync(corpusMapPath())).toBe(false);
   });
 
   it("reconciles a crash after transcript publication without exposing a mixed generation", async () => {
@@ -244,6 +248,8 @@ describe("durable summarize pair publisher", () => {
     operation.release();
     expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(NEW_TRANSCRIPT);
     expect(await readFile(meetingPaths(id).summary, "utf8")).toBe(NEW_SUMMARY);
+    expect(existsSync(knowledgeCardPath(id))).toBe(false);
+    expect(existsSync(corpusMapPath())).toBe(false);
 
     const reconcileOperation = await acquireMeetingOperation(id, "summarize_reconcile");
     await expect(reconcileSummarizeAttempt(

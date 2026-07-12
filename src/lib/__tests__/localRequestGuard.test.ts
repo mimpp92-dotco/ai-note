@@ -186,6 +186,7 @@ describe("bounded JSON stream", () => {
 describe("data-surface inventory", () => {
   it("contains every current API and data-reading RSC boundary", () => {
     expect(DATA_SURFACE_INVENTORY).toEqual(expect.arrayContaining([
+      "/api/chat",
       "/api/meetings",
       "/api/meetings/[id]",
       "/api/meetings/[id]/audio",
@@ -195,10 +196,13 @@ describe("data-surface inventory", () => {
       "/api/meetings/[id]/review",
       "/api/meetings/[id]/summarize",
       "/api/meetings/[id]/title",
+      "/api/knowledge/reindex",
+      "/api/search",
       "/api/transcribe",
       "/api/glossary",
       "/api/settings/llm",
       "/api/settings/llm/health",
+      "/api/settings/profile",
       "/api/whisper/health",
       "/meetings/[id]",
     ]));
