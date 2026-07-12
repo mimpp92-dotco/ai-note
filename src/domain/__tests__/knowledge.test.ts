@@ -42,6 +42,8 @@ describe("knowledge index contracts", () => {
       { owner: "-", task: "a-3", due: "미정" },
       { owner: "", task: "b", due: "미정" },
       { owner: "미정", task: "c", due: "미정" },
+      { owner: "Unknown", task: "c-2", due: "미정" },
+      { owner: "미지정", task: "c-3", due: "미정" },
       { owner: " 민수 ", task: "d", due: "내일" },
       { owner: "민수", task: "e", due: "금요일" },
     ])).toEqual(["민수"]);
