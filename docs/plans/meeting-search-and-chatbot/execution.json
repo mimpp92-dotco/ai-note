@@ -249,6 +249,15 @@
         "src/components/__tests__/ChatClient.test.tsx",
         "src/components/__tests__/SearchClient.test.tsx"
       ]
+    },
+    {
+      "phase": 8,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T14:07:57+0900",
+      "startSha": "6958cffe006d9dcd284ac5db42a223df1ddab3ea",
+      "exitCode": 0,
+      "blockedReason": "Phase 8 blocked: npm run lint fails on unused variables in src/components/__tests__/ChatClient.test.tsx:448 and src/components/__tests__/SearchClient.test.tsx:136; fixing them requires forbidden src/** changes outside this phase's allowedPaths."
     }
   ],
   "phases": [
@@ -855,7 +864,7 @@
     {
       "phase": 8,
       "name": "docs-final-qa",
-      "state": "pending",
+      "state": "blocked",
       "summary": "",
       "commit": "",
       "verify": {
@@ -871,11 +880,11 @@
       },
       "evidence": {},
       "changedFiles": [],
-      "attempts": 0,
+      "attempts": 1,
       "retryCount": 0,
-      "blockedReason": "",
+      "blockedReason": "Phase 8 blocked: npm run lint fails on unused variables in src/components/__tests__/ChatClient.test.tsx:448 and src/components/__tests__/SearchClient.test.tsx:136; fixing them requires forbidden src/** changes outside this phase's allowedPaths.",
       "errorMessage": "",
-      "startedAt": "",
+      "startedAt": "2026-07-12T14:07:57+0900",
       "completedAt": ""
     }
   ]
