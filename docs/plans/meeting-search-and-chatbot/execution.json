@@ -143,6 +143,29 @@
         "src/lib/knowledgeIndexRepository.ts",
         "src/lib/paths.ts"
       ]
+    },
+    {
+      "phase": 4,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:56:58+0900",
+      "startSha": "08e42913b89bdb57c09ffd970ddf9dfa78638081",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T12:14:25+0900",
+      "state": "completed",
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/knowledgeReindexRoutes.test.ts",
+        "src/app/api/knowledge/reindex/route.ts",
+        "src/lib/__tests__/knowledgeIndex.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizePublisher.test.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/summarize.ts"
+      ]
     }
   ],
   "phases": [
@@ -373,25 +396,87 @@
     {
       "phase": 4,
       "name": "summarize-indexing-and-reindex",
-      "state": "pending",
-      "summary": "",
-      "commit": "",
+      "state": "completed",
+      "summary": "Phase 4 added post-publish best-effort knowledge indexing, safe serialized all/meeting reindexing, and documented partial recovery without rolling back successful summaries.",
+      "commit": "003e04543fdabd148d89cdc5c37b1c0ced5707b5",
       "verify": {
         "commands": [
           "npm test -- src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts",
           "npm run typecheck"
         ],
-        "passed": false,
-        "results": []
+        "passed": true,
+        "results": [
+          {
+            "command": "npm test -- src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  5 passed (5)\n      Tests  74 passed (74)\n   Start at  12:14:22\n   Duration  2.03s (transform 517ms, setup 476ms, import 723ms, tests 2.42s, environment 0ms)\n\n"
+          },
+          {
+            "command": "npm run typecheck",
+            "exitCode": 0,
+            "passed": true,
+            "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+          }
+        ]
       },
-      "evidence": {},
-      "changedFiles": [],
-      "attempts": 0,
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "docs/ARCHITECTURE.md",
+            "docs/UI_GUIDE.md",
+            "src/app/api/__tests__/knowledgeReindexRoutes.test.ts",
+            "src/app/api/knowledge/reindex/route.ts",
+            "src/lib/__tests__/knowledgeIndex.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts",
+            "src/lib/__tests__/summarize.test.ts",
+            "src/lib/__tests__/summarizePublisher.test.ts",
+            "src/lib/knowledgeIndexRepository.ts",
+            "src/lib/localRequestGuard.ts",
+            "src/lib/summarize.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/lib/__tests__/summarize.test.ts",
+            "src/lib/__tests__/summarizePublisher.test.ts",
+            "src/lib/__tests__/knowledgeIndex.test.ts",
+            "src/app/api/__tests__/knowledgeReindexRoutes.test.ts",
+            "src/lib/__tests__/localRequestGuard.test.ts"
+          ],
+          "red": {
+            "command": "npm test -- src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/app/api/__tests__/knowledgeReindexRoutes.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+            "exitCode": 0
+          }
+        }
+      },
+      "changedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/api/__tests__/knowledgeReindexRoutes.test.ts",
+        "src/app/api/knowledge/reindex/route.ts",
+        "src/lib/__tests__/knowledgeIndex.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizePublisher.test.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/summarize.ts"
+      ],
+      "attempts": 1,
       "retryCount": 0,
       "blockedReason": "",
       "errorMessage": "",
-      "startedAt": "",
-      "completedAt": ""
+      "startedAt": "2026-07-12T11:56:58+0900",
+      "completedAt": "2026-07-12T12:14:25+0900"
     },
     {
       "phase": 5,
