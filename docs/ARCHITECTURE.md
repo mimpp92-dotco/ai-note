@@ -145,6 +145,12 @@ Surviving claim의 meeting은 첫 등장 순서로 `1..N` 번호를 서버가 �
 
 `evidenceStatus`는 surviving claim이 없으면 `none`, card-only source 또는 unsupported/stale/truncated/budget/candidate/index/personalization degradation이 있으면 `partial`, 모든 cited source가 summary/transcript tier이고 degradation이 없을 때만 `sufficient`다. Model confidence는 public DTO에 없다. Public success는 no-store `{answerSegments,references,evidenceStatus,checkedScope,warnings,searchReplay?}`이며 reference 번호는 contiguous·meeting ID는 unique·모든 reference는 최소 한 claim에서 사용되어야 한다. Actionable failure는 같은 static envelope `{error:{code,message}}`로 `chat_llm_unconfigured`(409), `chat_llm_unavailable`(503), `chat_timeout`(504), `chat_index_unavailable`(503)을 반환하고 prompt, raw model/provider output, tool trace, absolute path를 응답이나 로그에 포함하지 않는다.
 
+## 검색·질문의 persistence·provider 경계
+
+- `data/user-profile.json`, meeting별 `knowledge-card.json`, `data/knowledge/corpus-map.json`은 gitignored local 파생/설정 데이터다. 프로필은 LLM provider 설정과 별도 writer를 가지며 API key를 포함하지 않는다. 단순 `GET /api/search`는 LLM이나 외부 network를 호출하지 않는다.
+- Chat UI는 완결 4 turn만 현재 browser tab의 React memory에 보존하고 새로고침 뒤 복원하지 않는다. Server는 요청의 bounded `history`를 prompt context로만 사용하며 chat session/file/database를 만들지 않는다.
+- `POST /api/chat`는 새 provider나 직접 유료 API 호출을 만들지 않고 사용자가 저장한 `LlmAdapter`를 재사용한다. Ollama egress는 explicit loopback HTTP만 허용한다. Claude/Codex 선택 시 앱은 로컬 CLI process에 bounded 질문/history/tool evidence를 전달하며, CLI가 사용하는 provider-side 처리는 사용자가 로그인한 CLI의 정책 경계에 속한다. 앱은 provider credential, raw prompt/tool trace, 대화 기록을 별도 저장하지 않는다.
+
 ## Local-only ingress·public boundary
 
 - 모든 current API route와 `/meetings/[id]` data-reading RSC는 params 해석·body read·filesystem/network/spawn보다 먼저 공통 guard를 통과한다. Host는 raw exact `127.0.0.1|localhost` + valid port만, API Fetch Metadata는 `same-origin`만 허용한다. Direct document navigation의 `Sec-Fetch-Site:none`은 page에서만 허용한다.
