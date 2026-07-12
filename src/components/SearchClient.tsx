@@ -8,8 +8,11 @@ import {
   useState,
 } from "react";
 
+import { ChatClient, useChatController } from "@/components/ChatClient";
 import { useOptionalLibrary } from "@/components/LibraryProvider";
 import { SearchResults } from "@/components/SearchResults";
+import { Tabs } from "@/components/Tabs";
+import type { ChatResponse, ChatSearchFilters } from "@/domain/chat";
 import type { MeetingStatus } from "@/domain/meeting";
 import type { MeetingSearchResponse } from "@/lib/meetingSearch";
 
@@ -42,6 +45,7 @@ const STATUS_OPTIONS: Array<{ value: MeetingStatus; label: string }> = [
 
 type RequestPhase = "initial" | "loading" | "ready" | "request_error";
 type ReindexPhase = "idle" | "running" | "success" | "error";
+type SearchTab = "question" | "search";
 
 function activeFilterCount(filters: SearchFilterDraft): number {
   return [
@@ -63,6 +67,17 @@ function searchUrl(query: string, filters: SearchFilterDraft): string {
   if (filters.status) search.set("status", filters.status);
   if (filters.hasActionItem) search.set("hasActionItem", "true");
   return `/api/search?${search.toString()}`;
+}
+
+function filtersFromReplay(filters: ChatSearchFilters): SearchFilterDraft {
+  return {
+    dateFrom: filters.dateFrom ?? "",
+    dateTo: filters.dateTo ?? "",
+    workspaceId: filters.workspaceId ?? "",
+    folderId: filters.folderId === null ? "unfiled" : filters.folderId ?? "",
+    status: filters.status ?? "",
+    hasActionItem: filters.hasActionItem ?? false,
+  };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -89,6 +104,8 @@ function isSearchResponse(value: unknown): value is MeetingSearchResponse {
 
 export function SearchClient() {
   const libraryState = useOptionalLibrary();
+  const [tab, setTab] = useState<SearchTab>("question");
+  const chat = useChatController();
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<SearchFilterDraft>(EMPTY_FILTERS);
   const [phase, setPhase] = useState<RequestPhase>("initial");
@@ -186,17 +203,19 @@ export function SearchClient() {
     }
   };
 
+  const replayFromChat = (replay: NonNullable<ChatResponse["searchReplay"]>) => {
+    const replayFilters = filtersFromReplay(replay.filters);
+    setTab("search");
+    setQuery(replay.query);
+    setFilters(replayFilters);
+    setReindexPhase("idle");
+    void runSearch(replay.query, replayFilters);
+  };
+
   const showDataUpdate = response?.index.status !== "ready" && response?.index.reindexable;
 
-  return (
-    <main id="main" className="w-full max-w-5xl space-y-7 px-4 py-12 sm:px-6">
-      <header className="max-w-2xl">
-        <h1 className="text-2xl font-bold tracking-tight text-ink">검색/질문</h1>
-        <p className="mt-2 text-[14px] leading-relaxed text-inkSoft">
-          회의 제목, 요약, 결정과 할 일을 검색합니다.
-        </p>
-      </header>
-
+  const searchPanel = (
+    <>
       <form onSubmit={onSubmit} aria-busy={phase === "loading"} className="max-w-3xl space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
           <label className="min-w-0 flex-1 text-[13px] font-semibold text-ink">
@@ -213,20 +232,20 @@ export function SearchClient() {
               }}
               onKeyDown={onQueryKeyDown}
               placeholder="예: 다음 분기 로드맵"
-              className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-line bg-panel px-3 text-[15px] text-ink placeholder:text-inkSoft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+              className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-panel px-3 text-[15px] text-ink placeholder:text-inkSoft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             />
           </label>
           <button
             type="submit"
             disabled={!query.trim() || phase === "loading"}
-            className="min-h-11 w-full rounded-lg bg-ink px-6 text-[14px] font-semibold text-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-45 sm:w-auto"
+            className="min-h-11 w-full rounded-lg bg-ink px-6 text-[14px] font-semibold text-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-45 sm:w-auto"
           >
             {phase === "loading" ? "검색 중…" : "검색"}
           </button>
         </div>
 
         <details className="rounded-[12px] border border-line bg-panel">
-          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 text-[13px] font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 text-[13px] font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent">
             <span>필터</span>
             <span className="text-inkSoft">활성 필터 {count}개</span>
           </summary>
@@ -237,7 +256,7 @@ export function SearchClient() {
                 type="date"
                 value={filters.dateFrom}
                 onChange={(event) => updateFilter("dateFrom", event.currentTarget.value)}
-                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-line bg-bg px-3 text-[14px] text-ink"
+                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               />
             </label>
             <label className="block min-w-0 text-[13px] font-medium text-ink">
@@ -246,7 +265,7 @@ export function SearchClient() {
                 type="date"
                 value={filters.dateTo}
                 onChange={(event) => updateFilter("dateTo", event.currentTarget.value)}
-                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-line bg-bg px-3 text-[14px] text-ink"
+                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               />
             </label>
             <label className="block min-w-0 text-[13px] font-medium text-ink">
@@ -258,7 +277,7 @@ export function SearchClient() {
                   setFilters((current) => ({ ...current, workspaceId, folderId: "" }));
                   setReindexPhase("idle");
                 }}
-                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-line bg-bg px-3 text-[14px] text-ink"
+                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 <option value="">전체 워크스페이스</option>
                 {libraryState?.library?.workspaces.map((workspace) => (
@@ -272,7 +291,7 @@ export function SearchClient() {
                 value={filters.folderId}
                 disabled={!filters.workspaceId}
                 onChange={(event) => updateFilter("folderId", event.currentTarget.value)}
-                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-line bg-bg px-3 text-[14px] text-ink disabled:opacity-50"
+                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
               >
                 <option value="">전체 폴더</option>
                 <option value="unfiled">미분류</option>
@@ -286,7 +305,7 @@ export function SearchClient() {
               <select
                 value={filters.status}
                 onChange={(event) => updateFilter("status", event.currentTarget.value as SearchFilterDraft["status"])}
-                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-line bg-bg px-3 text-[14px] text-ink"
+                className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 <option value="">전체 상태</option>
                 {STATUS_OPTIONS.map((option) => (
@@ -299,7 +318,7 @@ export function SearchClient() {
                 type="checkbox"
                 checked={filters.hasActionItem}
                 onChange={(event) => updateFilter("hasActionItem", event.currentTarget.checked)}
-                className="h-4 w-4 accent-accent"
+                className="h-4 w-4 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               />
               할 일이 있는 회의만
             </label>
@@ -309,7 +328,7 @@ export function SearchClient() {
           type="button"
           disabled={count === 0}
           onClick={resetFilters}
-          className="min-h-11 rounded-lg px-3 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:text-inkSoft disabled:opacity-50"
+          className="min-h-11 rounded-lg px-3 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:text-inkSoft disabled:opacity-50"
         >
           필터 초기화
         </button>
@@ -352,9 +371,9 @@ export function SearchClient() {
           <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
             <button
               type="button"
-              disabled={reindexPhase === "running"}
+              aria-disabled={reindexPhase === "running"}
               onClick={() => void reindex()}
-              className="min-h-11 rounded-lg border border-line bg-panel px-4 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-50"
+              className="min-h-11 rounded-lg border border-inkFaint bg-panel px-4 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent aria-disabled:opacity-50"
             >
               {reindexPhase === "running" ? "업데이트 중…" : "검색 데이터 업데이트"}
             </button>
@@ -375,6 +394,39 @@ export function SearchClient() {
           />
         )}
       </div>
+    </>
+  );
+
+  return (
+    <main id="main" className="w-full max-w-5xl space-y-7 px-4 py-12 sm:px-6">
+      <header className="max-w-2xl">
+        <h1 className="text-2xl font-bold tracking-tight text-ink">검색/질문</h1>
+        <p className="mt-2 text-[14px] leading-relaxed text-inkSoft">
+          여러 회의에 질문해 출처와 함께 답을 확인하거나, 회의를 직접 검색합니다.
+        </p>
+      </header>
+
+      <Tabs<SearchTab>
+        id="search-question-tabs"
+        ariaLabel="회의 질문과 검색"
+        value={tab}
+        onValueChange={setTab}
+        panelClassName="pt-6"
+        items={[
+          {
+            value: "question",
+            label: "질문",
+            content: (
+              <ChatClient
+                controller={chat}
+                onSearchReplay={replayFromChat}
+                onSwitchToSearch={() => setTab("search")}
+              />
+            ),
+          },
+          { value: "search", label: "검색", content: searchPanel },
+        ]}
+      />
     </main>
   );
 }

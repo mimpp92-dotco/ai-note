@@ -201,7 +201,7 @@ export function LibraryNavigation() {
           aria-label="라이브러리 메뉴 열기"
           aria-expanded={drawerOpen}
           onClick={() => setDrawerOpen(true)}
-          className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-line bg-panel text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-inkFaint bg-panel text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <MenuIcon />
         </button>
@@ -228,7 +228,7 @@ export function LibraryNavigation() {
                   type="button"
                   aria-label="라이브러리 메뉴 닫기"
                   onClick={() => dismiss("explicit_cancel")}
-                  className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-line bg-panel text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                  className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-inkFaint bg-panel text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   <CloseIcon />
                 </button>
@@ -319,7 +319,7 @@ function NavigationContents({
   return (
     <>
       <div className="space-y-3 border-b border-line px-4 py-5">
-        <GuardedLink href={`/?workspace=${workspace.id}`} className="block text-[15px] font-bold text-ink" onNavigationCommitted={onNavigationCommitted}>
+        <GuardedLink href={`/?workspace=${workspace.id}`} className="flex min-h-11 flex-col justify-center text-[15px] font-bold text-ink" onNavigationCommitted={onNavigationCommitted}>
           AI NOTE
           <span className="mt-0.5 block text-[12px] font-medium text-inkSoft">로컬 회의록</span>
         </GuardedLink>
@@ -332,7 +332,7 @@ function NavigationContents({
               onChange={(event) => {
                 router.push(`/?workspace=${event.currentTarget.value}`, event.currentTarget);
               }}
-              className="min-h-11 w-full appearance-none truncate rounded-lg border border-line bg-panel pl-3 pr-12 text-[14px] font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+              className="min-h-11 w-full appearance-none truncate rounded-lg border border-inkFaint bg-panel pl-3 pr-12 text-[14px] font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               {library.workspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
@@ -374,7 +374,7 @@ function NavigationContents({
         <div className="flex min-h-11 items-center justify-between px-2">
           <p className="text-[12px] font-semibold text-inkSoft">폴더</p>
           {canMutate && (
-            <button type="button" aria-label="새 폴더" onClick={(event) => onEdit({ kind: "folder-create", workspaceId: workspace.id, parent: null, trigger: event.currentTarget })} className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-accent hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            <button type="button" aria-label="새 폴더" onClick={(event) => onEdit({ kind: "folder-create", workspaceId: workspace.id, parent: null, trigger: event.currentTarget })} className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-accent hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
               <PlusIcon />
             </button>
           )}
@@ -401,7 +401,7 @@ function NavigationContents({
 
       <div className="space-y-1 px-3 py-3">
         {library.counts.organizationPendingCount > 0 && (
-          <GuardedLink href={`/?workspace=${library.defaultWorkspaceId}#organization-pending`} onNavigationCommitted={onNavigationCommitted} className="flex min-h-11 items-center justify-between rounded-lg px-3 text-[13px] font-medium text-warn hover:bg-panel">
+          <GuardedLink href={`/?workspace=${library.defaultWorkspaceId}#organization-pending`} onNavigationCommitted={onNavigationCommitted} className="flex min-h-11 items-center justify-between rounded-lg px-3 text-[13px] font-medium text-accent hover:bg-panel">
             <span>위치 저장 대기</span><span>{library.counts.organizationPendingCount}</span>
           </GuardedLink>
         )}
@@ -503,7 +503,7 @@ function FolderList({
           <li key={folder.id}>
             <div className="flex min-h-11 min-w-0 items-center gap-0.5">
               {nested ? (
-                <button type="button" aria-label={`${folder.name} 하위 폴더 ${isExpanded ? "접기" : "펼치기"}`} aria-expanded={isExpanded} onClick={() => toggleFolder(folder.id)} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-inkSoft hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                <button type="button" aria-label={`${folder.name} 하위 폴더 ${isExpanded ? "접기" : "펼치기"}`} aria-expanded={isExpanded} onClick={() => toggleFolder(folder.id)} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-inkSoft hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
                   {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
                 </button>
               ) : <span className="inline-block w-11 shrink-0" />}
@@ -513,12 +513,12 @@ function FolderList({
                 {count > 0 && <span className="shrink-0 text-[11px] tabular-nums">{count}</span>}
               </GuardedLink>
               {canMutate && (
-                <button type="button" aria-label={`${folder.name} 폴더 편집`} onClick={(event) => onEdit({ kind: "folder-edit", folder, trigger: event.currentTarget })} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-inkSoft hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                <button type="button" aria-label={`${folder.name} 폴더 편집`} onClick={(event) => onEdit({ kind: "folder-edit", folder, trigger: event.currentTarget })} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-inkSoft hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
                   <KebabVerticalIcon />
                 </button>
               )}
               {canMutate && depth < 3 && (
-                <button type="button" aria-label={`${folder.name}에 새 하위 폴더`} onClick={(event) => onEdit({ kind: "folder-create", workspaceId: folder.workspaceId, parent: folder, trigger: event.currentTarget })} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-accent hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                <button type="button" aria-label={`${folder.name}에 새 하위 폴더`} onClick={(event) => onEdit({ kind: "folder-create", workspaceId: folder.workspaceId, parent: folder, trigger: event.currentTarget })} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-accent hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
                   <PlusIcon />
                 </button>
               )}
@@ -569,7 +569,7 @@ function SystemRow({ label, status }: { label: string; status: ReturnType<typeof
     <div className="mt-1 flex min-h-11 items-center gap-2 rounded-md px-2" title={status.title} aria-live="polite">
       <span className="w-8 text-[11px] font-semibold text-inkSoft">{label}</span>
       <span className={`h-2 w-2 rounded-full ${status.dotClass}`} aria-hidden="true" />
-      <span className={`truncate text-[11px] font-medium ${status.textClass}`}>{status.label}</span>
+      <span className="truncate text-[11px] font-medium text-inkSoft">{status.label}</span>
     </div>
   );
 }
@@ -755,7 +755,7 @@ function LibraryEditorDialog({
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={(event) => { composingRef.current = false; setName(event.currentTarget.value); }}
             onKeyDown={onInputKeyDown}
-            className="mt-1 min-h-11 w-full rounded-lg border border-line bg-bg px-3 text-[14px] text-ink focus:outline-none focus:ring-2 focus:ring-accent/40"
+            className="mt-1 min-h-11 w-full rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus:outline-none focus:ring-2 focus:ring-accent"
           />
         </label>
         {!workspace && (
@@ -790,7 +790,7 @@ function LibraryEditorDialog({
               type="button"
               disabled={saving}
               onClick={() => onAction({ kind: "folder-delete", folder: editor.folder, trigger: editor.trigger })}
-              className="min-h-11 rounded-full border border-warn/50 px-4 text-[13px] font-semibold text-warn"
+              className="min-h-11 rounded-full border border-warn/50 px-4 text-[13px] font-semibold text-accent"
             >
               폴더 삭제 후 보존
             </button>
@@ -802,7 +802,7 @@ function LibraryEditorDialog({
               type="button"
               disabled={saving || currentLibrary.workspaces.length === 1}
               onClick={() => onAction({ kind: "workspace-delete", workspace: editor.workspace, trigger: editor.trigger })}
-              className="min-h-11 rounded-full border border-warn/50 px-4 text-[13px] font-semibold text-warn disabled:opacity-40"
+              className="min-h-11 rounded-full border border-warn/50 px-4 text-[13px] font-semibold text-accent disabled:opacity-40"
             >
               워크스페이스 삭제 후 보존
             </button>

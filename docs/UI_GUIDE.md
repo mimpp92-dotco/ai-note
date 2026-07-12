@@ -86,6 +86,46 @@
 - **검색 데이터 상태**: ready는 별도 성공 배지를 만들지 않는다. Partial은 현재 결과·검색어·필터를 그대로 유지한 채 “일부 회의의 검색 데이터가 아직 최신 상태가 아닙니다” warning과 `검색 데이터 업데이트` CTA를 결과 위에 둔다. Unavailable은 입력한 검색어·필터를 보존하고 결과 영역에 복구 설명과 같은 CTA를 둔다. 내부 `missing`은 “아직 준비되지 않음”, `stale`은 “최신 내용 반영 필요”, `corrupt`는 “일부 검색 데이터를 읽을 수 없음”, I/O는 “로컬 검색 데이터에 접근할 수 없음”으로 바꾸며 `index`, `stale`, `corrupt`, raw path/error를 화면에 그대로 노출하지 않는다.
 - **재색인 CTA**: CTA 실행 중에도 current query/filter와 기존 결과·답변을 지우거나 입력을 disable하지 않는다. 성공하면 같은 query/filter를 자동 재실행하고 결과 heading에 polite 상태를 알린다. 실패하면 기존 결과·답변·draft와 focus를 유지한 inline error를 보여 주고 사용자가 다시 시도하거나 회의를 열 수 있게 한다. 재색인은 페이지 이동, polling job, progress stream처럼 표현하지 않는 한 번의 동기 요청이다.
 
+#### 검색·질문 고정 디자인 브리프
+
+| 항목 | 규칙 |
+|---|---|
+| 사용자 상황 | 혼자 여러 회의 사이의 결정·할 일·출처를 반복해서 찾는 사용자이며 긴 제목·답변과 불완전한 검색 데이터가 정상 상태다. |
+| 시각 register | Product / restrained / earned familiarity. Assistant persona, avatar, marketing hero, chat bubble, nested card를 만들지 않는다. |
+| 화면 순서 | 24px page heading → shared `질문`/`검색` Tabs → 선택한 입력 하나 → 상태와 결과. 한 탭에는 dark primary action을 하나만 둔다. |
+| 읽기 폭·간격 | 답변은 16px, line-height 1.6~1.7, 약 65~72ch로 제한한다. related gap은 8/12/16px, section gap은 24/32px의 기존 scale을 사용한다. |
+| 색·면·motion | 기존 warm palette와 system sans만 사용한다. 성공을 큰 배지로 만들지 않고 warning/error에만 필요한 semantic surface를 쓴다. 장식 motion·gradient·glass·glow를 추가하지 않는다. |
+
+- 질문 composer는 visible label, 1~5줄 auto-grow, `Enter` 제출, `Shift+Enter` 줄바꿈, Korean IME 조합 Enter 무시를 제공한다. 실행 중에는 입력·이전 답변을 유지하고 `답변을 준비하고 있습니다`처럼 실제로 아는 상태만 표시한다.
+- 대화는 사용자 질문 heading과 assistant `article`을 divider/spacing으로만 구분한다. 현재 브라우저 탭의 React 메모리에 완결 4 turn까지만 유지하며 `대화 지우기`를 제공하고, 새로고침 뒤에는 복원하지 않는다.
+- 답변은 server-built segment만 plain React text로 렌더한다. 문단은 `<p>`, 연속 bullet은 `<ul>/<li>`이며 HTML/Markdown을 주입하지 않는다.
+- 읽기 순서는 claim과 inline `[n]` → divider형 `참고 회의` ordered list → 답변 action → 기본 닫힌 `확인한 범위`다. 같은 답변의 같은 회의는 같은 번호를 재사용하고, 각 assistant turn은 독립 fragment ID를 사용한다.
+- 답변 action은 최대 `더 깊게 찾기`, `검색 결과로 보기`, `답변 복사` 세 개다. `더 깊게 찾기`만 deep 재실행을 만들고, 실패하면 기존 답변을 유지한다. 복사 결과에는 inline 번호와 현재 제목·날짜의 참고 회의 목록을 포함하되 local href나 meeting ID는 넣지 않는다.
+- 답변 완료는 focus를 옮기지 않는다. Inline marker를 활성화했을 때만 연결된 reference row를 scroll하고 programmatic focus한다. 독립 control은 44px target과 visible focus를 유지한다.
+- 외부 디자인 레퍼런스는 검토 절차의 참고일 뿐 runtime/install dependency가 아니다. AI NOTE의 기존 palette, type, Tabs, control grammar가 항상 우선한다.
+
+#### 검색·질문 상태 matrix
+
+| Surface | 상태 | 필수 UX |
+|---|---|---|
+| 질문 composer | pristine / draft / IME / submitting / error | visible label, 한 primary action, 중복 제출 방지, draft 보존, 정직한 한 줄 상태 |
+| 답변 | 출처 충분 / 일부 / 없음 / deep 실행·실패 / copied | 기존 답변 보존, inline reference, 참고 회의, 상태별 다음 행동, 복사 feedback 한 번 |
+| 검색 | initial / loading / results / empty / partial / unavailable / request·update error | query·filter·기존 결과 보존, 서로 다른 copy와 복구, pagination을 암시하지 않음 |
+| 내 정보 | loading / load error / pristine / dirty / saving / saved / durability pending / error | 요약 모델 section과 독립, load error overwrite 차단, draft 보존 |
+
+#### 사용자 용어
+
+| 내부 표현 | 화면 표현 |
+|---|---|
+| index / knowledge-card / corpus-map | 검색 데이터 |
+| stale / partial index | 일부 회의가 아직 최신 상태가 아님 |
+| evidence / evidence status | 출처 / 출처 확인 상태 |
+| budget exhausted / truncation | 확인할 범위가 커서 일부만 확인함 |
+| LLM / provider error | 요약 모델 / 답변을 만들지 못함 |
+| claim / tool / raw error code | 화면에 노출하지 않음 |
+
+오류·복구 문장은 `무엇이 실패했는지 → 입력과 기존 결과가 보존됐는지 → 다음 행동` 순서로 쓴다. Raw path, meeting ID, provider output, 내부 상태 코드는 표시하지 않는다.
+
 ### 녹음 화면
 - 상단 우측 **다크 "실시간 기록 시작"** 버튼. 녹음 중: 펄스 red dot + "기록 중" + `mm:ss` 타이머(mono) + **레벨 미터**(입력 소리 확인). 마이크 무음 시 레벨 0 = 사용자가 문제 인지. 페이지 이탈 시 `beforeunload` 경고.
 - 시각 timer와 `role="meter"`의 빠른 값 변화는 live region 밖에 둔다. Full/compact recorder 모두 작은 전용 `role="status" aria-live="polite"`가 권한 확인·기록 시작·정리·저장·실패 같은 phase 전환만 알린다.

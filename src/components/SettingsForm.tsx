@@ -20,7 +20,7 @@ const PROVIDERS: { value: LlmProvider; label: string; hint: string }[] = [
 ];
 
 const field =
-  "w-full rounded-md border border-line bg-panel px-3 py-2 text-[14px] text-ink placeholder:text-inkSoft focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  "min-h-11 w-full rounded-md border border-inkFaint bg-panel px-3 py-2 text-[14px] text-ink placeholder:text-inkSoft focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent";
 
 type LoadState = "loading" | "ready" | "load_error";
 type FieldError = "model" | "baseUrl" | null;
@@ -288,7 +288,7 @@ export function SettingsForm({ embedded = false }: { embedded?: boolean } = {}) 
           className="space-y-6 rounded-[16px] border border-line bg-panel p-4 shadow-[0_1px_2px_rgba(42,36,32,.04)] sm:p-6"
         >
           {savedSnapshot === null && (
-            <p className="rounded-md bg-warnBg px-3 py-2 text-[13px] text-warn">
+            <p className="rounded-md bg-warnBg px-3 py-2 text-[13px] text-ink">
               저장된 요약 모델 설정이 없습니다.
             </p>
           )}
@@ -423,7 +423,7 @@ function HealthMessage({ health }: { health: LlmHealthState }) {
     status.tone === "success"
       ? "bg-successBg text-success"
       : status.tone === "warn"
-        ? "bg-warnBg text-warn"
+        ? "bg-warnBg text-ink"
         : "bg-error/10 text-error";
   return (
     <p role="status" className={`rounded-md px-3 py-2 text-[13px] ${bg}`} title={status.title}>

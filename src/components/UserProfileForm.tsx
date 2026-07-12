@@ -35,7 +35,7 @@ interface ConfiguredProfileState {
 type ProfileState = MissingProfileState | ConfiguredProfileState;
 
 const field =
-  "w-full min-w-0 rounded-md border border-line bg-panel px-3 py-2 text-[14px] text-ink placeholder:text-inkSoft focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60";
+  "min-h-11 w-full min-w-0 rounded-md border border-inkFaint bg-panel px-3 py-2 text-[14px] text-ink placeholder:text-inkSoft focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60";
 
 function isTimezone(timezone: unknown): timezone is string {
   if (typeof timezone !== "string" || timezone.trim().length === 0) return false;
@@ -303,7 +303,7 @@ export function UserProfileForm() {
           className="min-w-0 space-y-6 rounded-[16px] border border-line bg-panel p-4 shadow-[0_1px_2px_rgba(42,36,32,.04)] sm:p-6"
         >
           {savedProfile === null && (
-            <p className="break-words rounded-md bg-warnBg px-3 py-2 text-[13px] leading-relaxed text-warn">
+            <p className="break-words rounded-md bg-warnBg px-3 py-2 text-[13px] leading-relaxed text-ink">
               브라우저 기준 기본 시간대: {defaultTimezone} · 아직 저장되지 않음
             </p>
           )}
@@ -384,7 +384,7 @@ export function UserProfileForm() {
             onToggle={(event) => setDateOpen(event.currentTarget.open)}
             className="min-w-0 rounded-[12px] border border-line bg-bg"
           >
-            <summary className="flex min-h-11 cursor-pointer items-center px-4 text-[14px] font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
+            <summary className="flex min-h-11 cursor-pointer items-center px-4 text-[14px] font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent">
               날짜 기준
             </summary>
             <div className="min-w-0 space-y-4 border-t border-line p-4">
@@ -460,7 +460,7 @@ export function UserProfileForm() {
               </span>
             )}
             {feedback === "pending" && (
-              <span role="status" aria-live="polite" className="break-words text-[13px] text-warn">
+              <span role="status" aria-live="polite" className="break-words text-[13px] text-accent">
                 저장됨 · 디스크 동기화 확인 대기
               </span>
             )}

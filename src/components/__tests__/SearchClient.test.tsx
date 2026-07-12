@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SearchClient } from "@/components/SearchClient";
 import type { LibraryProviderValue } from "@/components/LibraryProvider";
+import type { ChatResponse } from "@/domain/chat";
 import type { MeetingSearchResponse } from "@/lib/meetingSearch";
 
 const navigation = vi.hoisted(() => ({
@@ -98,6 +99,34 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+function chatPayload(): ChatResponse {
+  return {
+    answerSegments: [{
+      kind: "claim",
+      format: "paragraph",
+      text: "제품 로드맵은 다음 분기에 출시하기로 결정했습니다.",
+      referenceNumbers: [1],
+    }],
+    references: [{
+      number: 1,
+      meetingId: "meeting-1",
+      currentTitle: "제품 로드맵 회의",
+      startedAt: "2026-07-12T00:00:00.000Z",
+      href: "/meetings/meeting-1",
+    }],
+    evidenceStatus: "sufficient",
+    checkedScope: {
+      searchResults: 1,
+      knowledgeCards: 1,
+      summaries: 1,
+      transcriptWindows: 0,
+      fullTranscripts: 0,
+      distinctMeetings: 1,
+    },
+    warnings: [],
+  };
+}
+
 function stubFetch(options: {
   payload?: MeetingSearchResponse;
   searchStatus?: number;
@@ -118,13 +147,19 @@ function stubFetch(options: {
         : payload,
       options.searchStatus ?? 200);
     }
+    if (url === "/api/chat") return response(chatPayload());
     throw new Error(`unexpected URL: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
+function openSearchTab() {
+  fireEvent.click(screen.getByRole("tab", { name: "검색" }));
+}
+
 function submit(query = "로드맵") {
+  openSearchTab();
   const input = screen.getByRole("searchbox", { name: "회의 검색" });
   fireEvent.change(input, { target: { value: query } });
   fireEvent.click(screen.getByRole("button", { name: /^검색$/ }));
@@ -143,9 +178,50 @@ afterEach(() => {
 });
 
 describe("SearchClient", () => {
+  it("opens the Question tab by default and renders only the selected input and primary action", () => {
+    stubFetch();
+    render(<SearchClient />);
+
+    expect(screen.getByRole("tab", { name: "질문" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("textbox", { name: "회의에 질문" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "질문하기" })).toHaveLength(1);
+    expect(screen.queryByRole("searchbox", { name: "회의 검색" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^검색$/ })).not.toBeInTheDocument();
+
+    openSearchTab();
+    expect(screen.getByRole("searchbox", { name: "회의 검색" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^검색$/ })).toHaveLength(1);
+    expect(screen.queryByRole("textbox", { name: "회의에 질문" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "질문하기" })).not.toBeInTheDocument();
+  });
+
+  it("preserves completed chat and search state across tab round trips", async () => {
+    stubFetch();
+    render(<SearchClient />);
+
+    const question = screen.getByRole("textbox", { name: "회의에 질문" });
+    fireEvent.change(question, { target: { value: "로드맵 결정은?" } });
+    fireEvent.click(screen.getByRole("button", { name: "질문하기" }));
+    expect(await screen.findByText(/다음 분기에 출시/)).toBeInTheDocument();
+
+    openSearchTab();
+    fireEvent.click(screen.getByText("필터", { selector: "span" }));
+    fireEvent.change(screen.getByLabelText("상태"), { target: { value: "summarized" } });
+    const searchInput = submit("로드맵");
+    expect(await screen.findByRole("heading", { name: "제품 로드맵 회의" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "질문" }));
+    expect(screen.getByText(/다음 분기에 출시/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "검색" }));
+    expect(searchInput).toHaveValue("로드맵");
+    expect(screen.getByLabelText("상태")).toHaveValue("summarized");
+    expect(screen.getByRole("heading", { name: "제품 로드맵 회의" })).toBeInTheDocument();
+  });
+
   it("uses an explicit primary submit and ignores Enter during Korean IME composition", async () => {
     const fetchMock = stubFetch();
     render(<SearchClient />);
+    openSearchTab();
     const input = screen.getByRole("searchbox", { name: "회의 검색" });
     const submitButton = screen.getByRole("button", { name: /^검색$/ });
     expect(submitButton).toBeDisabled();
@@ -165,6 +241,7 @@ describe("SearchClient", () => {
   it("groups progressive filters in a disclosure, counts active filters, and keeps reset in mobile semantic order", () => {
     stubFetch();
     render(<SearchClient />);
+    openSearchTab();
 
     const disclosureSummary = screen.getByText("필터", { selector: "span" });
     const disclosure = disclosureSummary.closest("details");
@@ -215,6 +292,7 @@ describe("SearchClient", () => {
   it("distinguishes no results and offers query reduction plus filter reset", async () => {
     stubFetch({ payload: resultPayload({ results: [], query: "너무 긴 검색", hasMore: false }) });
     render(<SearchClient />);
+    openSearchTab();
     fireEvent.click(screen.getByText("필터", { selector: "span" }));
     fireEvent.change(screen.getByLabelText("상태"), { target: { value: "summarized" } });
     submit("너무 긴 검색");
@@ -274,6 +352,7 @@ describe("SearchClient", () => {
       }),
     });
     render(<SearchClient />);
+    openSearchTab();
     fireEvent.click(screen.getByText("필터", { selector: "span" }));
     fireEvent.change(screen.getByLabelText("상태"), { target: { value: "summarized" } });
     const input = submit("로드맵");
@@ -300,6 +379,7 @@ describe("SearchClient", () => {
       reindexStatus: 500,
     });
     render(<SearchClient />);
+    openSearchTab();
     const input = submit("로드맵");
     await screen.findByRole("heading", { name: "제품 로드맵 회의" });
     fireEvent.change(input, { target: { value: "수정 중인 검색어" } });

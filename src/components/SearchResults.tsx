@@ -50,7 +50,7 @@ export function SearchResults({
           <button
             type="button"
             onClick={onResetFilters}
-            className="mt-4 min-h-11 rounded-lg border border-line px-4 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            className="mt-4 min-h-11 rounded-lg border border-inkFaint px-4 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             필터 초기화
           </button>
@@ -95,7 +95,7 @@ export function SearchResults({
               </ul>
               <GuardedLink
                 href={result.href}
-                className="mt-4 inline-flex min-h-11 items-center rounded-lg border border-line px-4 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                className="mt-4 inline-flex min-h-11 items-center rounded-lg border border-inkFaint px-4 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 회의 열기
               </GuardedLink>
