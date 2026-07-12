@@ -5,9 +5,9 @@
   "model": "codex",
   "planDigest": "28ded805fcf446ae85a178b113976f720d11d7e2039112c05310f3ea3a00db7a",
   "startedAt": "2026-07-12T11:07:36+0900",
-  "completedAt": "",
+  "completedAt": "2026-07-12T14:26:56+0900",
   "finalGate": {
-    "passed": false,
+    "passed": true,
     "commands": [
       "npm test",
       "npm run typecheck",
@@ -15,7 +15,38 @@
       "npm run build",
       "npm run check:links"
     ],
-    "results": []
+    "results": [
+      {
+        "command": "npm test",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  89 passed (89)\n      Tests  834 passed (834)\n   Start at  14:26:11\n   Duration  9.14s (transform 4.65s, setup 5.15s, import 9.81s, tests 28.27s, environment 26.10s)\n\nNot implemented: navigation to another Document\n"
+      },
+      {
+        "command": "npm run typecheck",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "\n> ai-note@0.1.0 typecheck\n> tsc --noEmit\n\n"
+      },
+      {
+        "command": "npm run lint",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "\n> ai-note@0.1.0 lint\n> eslint .\n\n"
+      },
+      {
+        "command": "npm run build",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "brary/reveal                    214 B         103 kB\n├ ƒ /api/meetings                          214 B         103 kB\n├ ƒ /api/meetings/[id]                     214 B         103 kB\n├ ƒ /api/meetings/[id]/audio               214 B         103 kB\n├ ƒ /api/meetings/[id]/export              214 B         103 kB\n├ ƒ /api/meetings/[id]/finalize            214 B         103 kB\n├ ƒ /api/meetings/[id]/location            214 B         103 kB\n├ ƒ /api/meetings/[id]/reveal              214 B         103 kB\n├ ƒ /api/meetings/[id]/review              214 B         103 kB\n├ ƒ /api/meetings/[id]/summarize           214 B         103 kB\n├ ƒ /api/meetings/[id]/title               214 B         103 kB\n├ ƒ /api/organization-pending              214 B         103 kB\n├ ƒ /api/search                            214 B         103 kB\n├ ƒ /api/settings/llm                      214 B         103 kB\n├ ƒ /api/settings/llm/health               214 B         103 kB\n├ ƒ /api/settings/profile                  214 B         103 kB\n├ ƒ /api/summarize                         214 B         103 kB\n├ ƒ /api/summary-work                      214 B         103 kB\n├ ƒ /api/transcribe                        214 B         103 kB\n├ ƒ /api/whisper/health                    214 B         103 kB\n├ ƒ /api/workspaces                        214 B         103 kB\n├ ƒ /api/workspaces/[id]                   214 B         103 kB\n├ ƒ /api/workspaces/[id]/delete-preview    214 B         103 kB\n├ ○ /glossary                            4.03 kB         106 kB\n├ ƒ /meetings/[id]                       7.12 kB         148 kB\n├ ○ /search                              12.2 kB         148 kB\n└ ○ /settings                             6.8 kB         127 kB\n+ First Load JS shared by all             102 kB\n  ├ chunks/1255-d90f22433f14e976.js      46.2 kB\n  ├ chunks/4bd1b696-f785427dddbba9fb.js  54.2 kB\n  └ other shared chunks (total)          1.93 kB\n\n\n○  (Static)   prerendered as static content\nƒ  (Dynamic)  server-rendered on demand\n\n"
+      },
+      {
+        "command": "npm run check:links",
+        "exitCode": 0,
+        "passed": true,
+        "outputTail": "\n> ai-note@0.1.0 check:links\n> node scripts/check-links.mjs\n\n✓ 링크 무결성 OK — 276개 상대 링크 전부 실재.\n"
+      }
+    ]
   },
   "attemptHistory": [
     {
