@@ -75,15 +75,29 @@
       "completedAt": "2026-07-12T11:14:16+0900",
       "state": "error",
       "error": "phase 1 contracts-and-schemas modified plan-owned files: docs/plans/meeting-search-and-chatbot/"
+    },
+    {
+      "phase": 1,
+      "attempt": 1,
+      "model": "codex",
+      "startedAt": "2026-07-12T11:20:15+0900",
+      "startSha": "7faca60ad11bc0a2ee178186c77105a810657098",
+      "exitCode": 0,
+      "completedAt": "2026-07-12T11:23:20+0900",
+      "state": "completed",
+      "changedFiles": [
+        "src/domain/__tests__/knowledge.test.ts",
+        "src/domain/knowledge.ts"
+      ]
     }
   ],
   "phases": [
     {
       "phase": 1,
       "name": "contracts-and-schemas",
-      "state": "in_progress",
-      "summary": "Phase 1 contracts and schemas verified with placeholder-safe deterministic mentionedPeople derivation and passing targeted tests/typecheck.",
-      "commit": "fbdc49b6d55854f4b88d93e2e6eaa0616e119e80",
+      "state": "completed",
+      "summary": "Phase 1 contracts and schemas are complete, with deterministic mentionedPeople placeholder filtering verified by targeted tests and typecheck.",
+      "commit": "6006d506c93d60df74d23efaf06229909f74f48d",
       "verify": {
         "commands": [
           "npm test -- src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts",
@@ -95,7 +109,7 @@
             "command": "npm test -- src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts",
             "exitCode": 0,
             "passed": true,
-            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  2 passed (2)\n      Tests  10 passed (10)\n   Start at  11:14:14\n   Duration  737ms (transform 54ms, setup 144ms, import 86ms, tests 19ms, environment 1.04s)\n\n"
+            "outputTail": "\n> ai-note@0.1.0 test\n> vitest run --passWithNoTests src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts\n\n\n RUN  v4.1.9 /Users/dylan/ai-note\n\n\n Test Files  2 passed (2)\n      Tests  10 passed (10)\n   Start at  11:23:18\n   Duration  798ms (transform 56ms, setup 146ms, import 90ms, tests 20ms, environment 1.14s)\n\n"
           },
           {
             "command": "npm run typecheck",
@@ -105,17 +119,42 @@
           }
         ]
       },
-      "evidence": {},
+      "evidence": {
+        "scope-check": {
+          "passed": true,
+          "changedFiles": [
+            "src/domain/__tests__/knowledge.test.ts",
+            "src/domain/knowledge.ts"
+          ]
+        },
+        "test-green": {
+          "passed": true
+        },
+        "tdd-red-green": {
+          "testFiles": [
+            "src/domain/__tests__/userProfile.test.ts",
+            "src/domain/__tests__/knowledge.test.ts"
+          ],
+          "red": {
+            "command": "npm test -- src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts",
+            "exitCode": 1
+          },
+          "green": {
+            "command": "npm test -- src/domain/__tests__/userProfile.test.ts src/domain/__tests__/knowledge.test.ts",
+            "exitCode": 0
+          }
+        }
+      },
       "changedFiles": [
         "src/domain/__tests__/knowledge.test.ts",
         "src/domain/knowledge.ts"
       ],
       "attempts": 1,
-      "retryCount": 1,
+      "retryCount": 3,
       "blockedReason": "",
       "errorMessage": "",
-      "startedAt": "2026-07-12T11:13:02+0900",
-      "completedAt": ""
+      "startedAt": "2026-07-12T11:20:15+0900",
+      "completedAt": "2026-07-12T11:23:20+0900"
     },
     {
       "phase": 2,
