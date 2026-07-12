@@ -36,6 +36,7 @@ import {
 } from "@/lib/knowledgeIndex";
 import { scanMeetingRecordObservations } from "@/lib/library";
 import { isSafeId } from "@/lib/meetingId";
+import { tryAcquireMeetingOperation } from "@/lib/meetingLifecycle";
 import {
   inspectMeetingTombstone as inspectDefaultMeetingTombstone,
   type MeetingTombstoneObservation,
@@ -89,8 +90,26 @@ export interface CorpusMapRebuildResult extends CorpusMapCommit {
   skippedCount: number;
 }
 
+export type KnowledgeReindexReason = "missing" | "stale" | "corrupt" | "io_error";
+
+export type KnowledgeReindexScope =
+  | { scope: "all" }
+  | { scope: "meeting"; meetingId: string };
+
+export interface KnowledgeReindexResult {
+  status: "ready" | "partial" | "unavailable";
+  reasons: KnowledgeReindexReason[];
+  count: {
+    total: number;
+    indexed: number;
+    skipped: number;
+  };
+  durability: KnowledgeIndexDurability | null;
+}
+
 export type KnowledgeIndexRepositoryBarrierPoint =
-  | "inside_corpus_queue_before_commit";
+  | "inside_corpus_queue_before_commit"
+  | "inside_reindex_queue_before_work";
 
 export interface KnowledgeIndexRepositoryOptions {
   dataRoot: string;
@@ -125,6 +144,8 @@ export interface KnowledgeIndexRepository {
   writeCorpusMap(corpusMap: CorpusMap): Promise<CorpusMapCommit>;
   readCorpusMap(expectedCards?: readonly KnowledgeCard[]): Promise<CorpusMapReadResult>;
   rebuildCorpusMap(): Promise<CorpusMapRebuildResult>;
+  refreshAfterSummary(input: WriteKnowledgeCardInput): Promise<KnowledgeReindexResult>;
+  reindex(scope: KnowledgeReindexScope): Promise<KnowledgeReindexResult>;
 }
 
 export class KnowledgeIndexRepositoryError extends Error {
@@ -216,6 +237,70 @@ function mergeDurability(
   if (left === "pending" || right === "pending") return "pending";
   if (left === "best_effort" || right === "best_effort") return "best_effort";
   return "durable";
+}
+
+const REINDEX_REASON_ORDER: readonly KnowledgeReindexReason[] = [
+  "missing",
+  "stale",
+  "corrupt",
+  "io_error",
+];
+
+function mergeOptionalDurability(
+  current: KnowledgeIndexDurability | null,
+  next: KnowledgeIndexDurability | null,
+): KnowledgeIndexDurability | null {
+  if (current === null) return next;
+  if (next === null) return current;
+  return mergeDurability(current, next);
+}
+
+function orderedReasons(reasons: ReadonlySet<KnowledgeReindexReason>): KnowledgeReindexReason[] {
+  return REINDEX_REASON_ORDER.filter((reason) => reasons.has(reason));
+}
+
+function resultForReindex(
+  total: number,
+  indexed: number,
+  reasons: ReadonlySet<KnowledgeReindexReason>,
+  durability: KnowledgeIndexDurability | null,
+): KnowledgeReindexResult {
+  const safeReasons = orderedReasons(reasons);
+  return {
+    status: safeReasons.length === 0
+      ? "ready"
+      : indexed > 0
+        ? "partial"
+        : "unavailable",
+    reasons: safeReasons,
+    count: {
+      total,
+      indexed,
+      skipped: Math.max(0, total - indexed),
+    },
+    durability,
+  };
+}
+
+function reasonForRecord(record: ClassifiedMeetingRecord): KnowledgeReindexReason | null {
+  if (record.kind === "hidden_deleted") return null;
+  if (record.kind === "corrupt_status") return "corrupt";
+  if (record.kind === "unreadable_status" || record.kind === "unsafe_record") return "io_error";
+  if (record.kind === "incomplete" || record.kind === "hidden_staging") return "missing";
+  if (record.status?.summarizeAttempt !== undefined) return "stale";
+  return null;
+}
+
+function reasonForRepositoryError(error: unknown): KnowledgeReindexReason {
+  if (!(error instanceof KnowledgeIndexRepositoryError)) return "io_error";
+  if (error.code === "meeting_deleted" || error.code === "source_pair_missing") return "missing";
+  if (error.code === "source_pair_ambiguous" || error.code === "status_unavailable") {
+    return "corrupt";
+  }
+  if (error.code === "invalid_meeting_id" || error.code === "unsafe_knowledge_root") {
+    return "corrupt";
+  }
+  return "io_error";
 }
 
 function serialize(value: CorpusMap | KnowledgeCard): string {
@@ -633,6 +718,117 @@ export function createKnowledgeIndexRepository(
     };
   };
 
+  interface CardReindexOutcome {
+    indexed: boolean;
+    reason?: KnowledgeReindexReason;
+    durability: KnowledgeIndexDurability | null;
+  }
+
+  const reindexCardWithOwner = async (
+    input: WriteKnowledgeCardInput,
+  ): Promise<CardReindexOutcome> => {
+    try {
+      const commit = await writeKnowledgeCard(input);
+      return { indexed: true, durability: commit.durability };
+    } catch (error) {
+      return {
+        indexed: false,
+        reason: reasonForRepositoryError(error),
+        durability: null,
+      };
+    }
+  };
+
+  const finishReindex = async (
+    total: number,
+    outcomes: readonly CardReindexOutcome[],
+    initialReasons: ReadonlySet<KnowledgeReindexReason> = new Set(),
+  ): Promise<KnowledgeReindexResult> => {
+    const reasons = new Set(initialReasons);
+    let indexed = 0;
+    let durability: KnowledgeIndexDurability | null = null;
+    for (const outcome of outcomes) {
+      if (outcome.indexed) indexed += 1;
+      if (outcome.reason) reasons.add(outcome.reason);
+      durability = mergeOptionalDurability(durability, outcome.durability);
+    }
+    try {
+      const corpus = await rebuildCorpusMap();
+      if (corpus.state === "superseded") {
+        reasons.add("stale");
+      } else {
+        durability = mergeOptionalDurability(durability, corpus.durability);
+      }
+    } catch {
+      reasons.add("io_error");
+    }
+    return resultForReindex(total, indexed, reasons, durability);
+  };
+
+  const refreshAfterSummary = async (
+    input: WriteKnowledgeCardInput,
+  ): Promise<KnowledgeReindexResult> => {
+    const outcome = await reindexCardWithOwner(input);
+    return finishReindex(1, [outcome]);
+  };
+
+  const reindexQueueKey = `${queueKey}:reindex`;
+  const reindex = (scope: KnowledgeReindexScope): Promise<KnowledgeReindexResult> => (
+    enqueueCorpus(reindexQueueKey, async () => {
+      await options.barrier?.("inside_reindex_queue_before_work");
+      let records: readonly ClassifiedMeetingRecord[];
+      try {
+        records = await loadClassifiedMeetingRecords();
+      } catch {
+        return resultForReindex(
+          scope.scope === "meeting" ? 1 : 0,
+          0,
+          new Set(["io_error"]),
+          null,
+        );
+      }
+
+      const selected = scope.scope === "meeting"
+        ? records.filter((record) => record.meetingId === scope.meetingId).slice(0, 1)
+        : records.filter((record) => record.meetingId !== null);
+      const total = scope.scope === "meeting" ? 1 : selected.length;
+      const reasons = new Set<KnowledgeReindexReason>();
+      const outcomes: CardReindexOutcome[] = [];
+
+      if (scope.scope === "meeting" && selected.length === 0) reasons.add("missing");
+      for (const record of selected) {
+        const classifiedReason = reasonForRecord(record);
+        if (record.kind !== "live" || record.meetingId === null || classifiedReason) {
+          if (classifiedReason) reasons.add(classifiedReason);
+          else if (scope.scope === "meeting" && record.kind === "hidden_deleted") {
+            reasons.add("missing");
+          }
+          continue;
+        }
+        let operation;
+        try {
+          operation = await tryAcquireMeetingOperation(record.meetingId, "summarize");
+        } catch {
+          reasons.add("io_error");
+          continue;
+        }
+        if (!operation) {
+          reasons.add("stale");
+          continue;
+        }
+        try {
+          outcomes.push(await reindexCardWithOwner({
+            meetingId: record.meetingId,
+            meetingOperationOwnerToken: operation.ownerToken,
+          }));
+        } finally {
+          operation.release();
+        }
+      }
+      return finishReindex(total, outcomes, reasons);
+    })
+  );
+
   return {
     ensureKnowledgeRoot,
     writeKnowledgeCard,
@@ -640,5 +836,7 @@ export function createKnowledgeIndexRepository(
     writeCorpusMap,
     readCorpusMap,
     rebuildCorpusMap,
+    refreshAfterSummary,
+    reindex,
   };
 }

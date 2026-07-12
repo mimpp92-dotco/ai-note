@@ -1,8 +1,12 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { resetArtifactLeaseStateForTests } from "@/lib/artifactLease";
 import type { StatusJson } from "@/domain/meeting";
 import {
   buildCorpusMap,
@@ -11,6 +15,18 @@ import {
   isKnowledgeCardStale,
   projectKnowledgeCardWithLiveMetadata,
 } from "@/lib/knowledgeIndex";
+import {
+  createKnowledgeIndexRepository,
+  resetKnowledgeIndexRepositoryStateForTests,
+} from "@/lib/knowledgeIndexRepository";
+import { resetMeetingLifecycleForTests } from "@/lib/meetingLifecycle";
+import { resetMeetingTombstoneStateForTests } from "@/lib/meetingTombstone";
+import {
+  corpusMapPath,
+  dataRoot,
+  knowledgeCardPath,
+  meetingPaths,
+} from "@/lib/paths";
 
 const encoder = new TextEncoder();
 
@@ -189,5 +205,96 @@ describe("corpus and live metadata projections", () => {
     });
     expect(JSON.stringify(projection)).not.toContain("오래된 제목");
     expect(JSON.stringify(projection)).not.toContain("딜런");
+  });
+});
+
+describe("knowledge reindex coordinator", () => {
+  let originalCwd: string;
+  let workDir: string;
+
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    workDir = await mkdtemp(join(tmpdir(), "knowledge-reindex-"));
+    process.chdir(workDir);
+    await mkdir(dataRoot(), { recursive: true });
+    resetArtifactLeaseStateForTests();
+    resetMeetingLifecycleForTests();
+    resetMeetingTombstoneStateForTests();
+    resetKnowledgeIndexRepositoryStateForTests();
+  });
+
+  afterEach(async () => {
+    process.chdir(originalCwd);
+    resetArtifactLeaseStateForTests();
+    resetMeetingLifecycleForTests();
+    resetMeetingTombstoneStateForTests();
+    resetKnowledgeIndexRepositoryStateForTests();
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  async function seedIndexableMeeting(id: string): Promise<void> {
+    const paths = meetingPaths(id);
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.transcript, "기존 회의 전사\n");
+    await writeFile(paths.summary, `${JSON.stringify(summary)}\n`);
+    await writeFile(paths.status, `${JSON.stringify({
+      ...status(),
+      id,
+      paths: {
+        audio: paths.audio,
+        play: paths.play,
+        raw: paths.raw,
+        transcript: paths.transcript,
+        summary: paths.summary,
+        segments: paths.segments,
+      },
+    })}\n`);
+  }
+
+  it("reindexes an existing summary/transcript pair and commits its corpus projection", async () => {
+    const id = "meeting-existing";
+    await seedIndexableMeeting(id);
+    const repository = createKnowledgeIndexRepository({ dataRoot: dataRoot() });
+
+    await expect(repository.reindex({ scope: "meeting", meetingId: id })).resolves.toEqual({
+      status: "ready",
+      reasons: [],
+      count: { total: 1, indexed: 1, skipped: 0 },
+      durability: "durable",
+    });
+    expect(JSON.parse(await readFile(knowledgeCardPath(id), "utf8"))).toMatchObject({
+      meetingId: id,
+    });
+    expect(JSON.parse(await readFile(corpusMapPath(), "utf8"))).toMatchObject({
+      cards: [{ meetingId: id }],
+    });
+  });
+
+  it("serializes concurrent explicit reindex requests in the repository", async () => {
+    let entries = 0;
+    let releaseFirst!: () => void;
+    let firstEntered!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const entered = new Promise<void>((resolve) => { firstEntered = resolve; });
+    const repository = createKnowledgeIndexRepository({
+      dataRoot: dataRoot(),
+      barrier: async (point) => {
+        if (point !== "inside_reindex_queue_before_work") return;
+        entries += 1;
+        if (entries === 1) {
+          firstEntered();
+          await gate;
+        }
+      },
+    });
+
+    const first = repository.reindex({ scope: "all" });
+    await entered;
+    const second = repository.reindex({ scope: "all" });
+    await Promise.resolve();
+    expect(entries).toBe(1);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(entries).toBe(2);
   });
 });

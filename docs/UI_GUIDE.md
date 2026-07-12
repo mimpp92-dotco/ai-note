@@ -80,6 +80,8 @@
 - 기존 shared `Tabs`를 사용하고 `질문` 탭을 기본 진입으로 둔다. 비스트리밍 응답 중에는 확인할 수 없는 가짜 세부 진행 단계를 표시하지 않고 단일한 처리 중 상태만 알린다.
 - 프로필 미설정은 일반 검색·질문을 막는 오류가 아니다. ‘내 할 일’·상대 날짜처럼 자기 지칭 해석에 개인화 정보가 필요한 경우에만 비차단 설정 안내로 표시한다.
 - 근거가 있는 claim 바로 뒤에 inline `[n]` marker를 두고 답변 아래 reference list를 제공한다. 같은 meeting은 답변 안에서 stable number를 유지하며, 복사 결과에도 reference list를 포함한다. 번호·제목·link는 모델 출력이 아니라 서버가 검증한 meeting으로 생성한다.
+- **검색 데이터 상태**: ready는 별도 성공 배지를 만들지 않는다. Partial은 현재 결과·검색어·필터를 그대로 유지한 채 “일부 회의의 검색 데이터가 아직 최신 상태가 아닙니다” warning과 `검색 데이터 업데이트` CTA를 결과 위에 둔다. Unavailable은 입력한 검색어·필터를 보존하고 결과 영역에 복구 설명과 같은 CTA를 둔다. 내부 `missing`은 “아직 준비되지 않음”, `stale`은 “최신 내용 반영 필요”, `corrupt`는 “일부 검색 데이터를 읽을 수 없음”, I/O는 “로컬 검색 데이터에 접근할 수 없음”으로 바꾸며 `index`, `stale`, `corrupt`, raw path/error를 화면에 그대로 노출하지 않는다.
+- **재색인 CTA**: CTA 실행 중에도 current query/filter와 기존 결과·답변을 지우거나 입력을 disable하지 않는다. 성공하면 같은 query/filter를 자동 재실행하고 결과 heading에 polite 상태를 알린다. 실패하면 기존 결과·답변·draft와 focus를 유지한 inline error를 보여 주고 사용자가 다시 시도하거나 회의를 열 수 있게 한다. 재색인은 페이지 이동, polling job, progress stream처럼 표현하지 않는 한 번의 동기 요청이다.
 
 ### 녹음 화면
 - 상단 우측 **다크 "실시간 기록 시작"** 버튼. 녹음 중: 펄스 red dot + "기록 중" + `mm:ss` 타이머(mono) + **레벨 미터**(입력 소리 확인). 마이크 무음 시 레벨 0 = 사용자가 문제 인지. 페이지 이탈 시 `beforeunload` 경고.

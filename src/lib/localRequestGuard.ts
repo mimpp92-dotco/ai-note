@@ -9,6 +9,7 @@ export const DATA_SURFACE_INVENTORY = [
   "/api/folders/[id]",
   "/api/folders/[id]/delete-preview",
   "/api/folders/[id]/parent",
+  "/api/knowledge/reindex",
   "/api/library",
   "/api/library/rebuild",
   "/api/library/reveal",

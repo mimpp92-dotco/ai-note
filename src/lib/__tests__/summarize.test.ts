@@ -1,22 +1,32 @@
 // @vitest-environment node
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createDirectorySyncCapability,
   createNodeFileOps,
   type FileOps,
 } from "@/lib/durableFileOps";
-import { meetingPaths } from "@/lib/paths";
-import { dataRoot } from "@/lib/paths";
+import { resetKnowledgeIndexRepositoryStateForTests } from "@/lib/knowledgeIndexRepository";
 import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
+import {
+  corpusMapPath,
+  dataRoot,
+  knowledgeCardPath,
+  meetingPaths,
+} from "@/lib/paths";
 import { writeSettings } from "@/lib/settings";
 import { initialStatus, readStatus, writeStatus } from "@/lib/status";
-import { acceptSummarize, isSummarizeInflight, runSummarize } from "@/lib/summarize";
+import {
+  acceptSummarize,
+  isSummarizeInflight,
+  runSummarize,
+  setSummarizeKnowledgeIndexRepositoryForTests,
+} from "@/lib/summarize";
 import {
   createStatusUpdater,
   resetStatusUpdaterStateForTests,
@@ -44,10 +54,15 @@ beforeEach(() => {
   process.chdir(workDir);
   savedFakeLlm = process.env.FAKE_LLM;
   savedFakeLlmFail = process.env.FAKE_LLM_FAIL;
+  resetKnowledgeIndexRepositoryStateForTests();
+  setSummarizeKnowledgeIndexRepositoryForTests(null);
 });
 
 afterEach(() => {
   delete globalThis.__aiNoteFakeLlmRunHook;
+  vi.restoreAllMocks();
+  setSummarizeKnowledgeIndexRepositoryForTests(null);
+  resetKnowledgeIndexRepositoryStateForTests();
   resetStatusUpdaterStateForTests();
   if (savedFakeLlm === undefined) delete process.env.FAKE_LLM;
   else process.env.FAKE_LLM = savedFakeLlm;
@@ -181,6 +196,73 @@ describe("runSummarize", () => {
     expect(status?.summarizeAttempts).toBe(0);
   });
 
+  it("creates a knowledge card and corpus map only after the summary pair is published", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-indexed";
+    await seedTranscribed(id);
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    const card = JSON.parse(await readFile(knowledgeCardPath(id), "utf8"));
+    const corpus = JSON.parse(await readFile(corpusMapPath(), "utf8"));
+    expect(card).toMatchObject({ meetingId: id });
+    expect(corpus).toMatchObject({ cards: [{ meetingId: id }] });
+    expect((await readStatus(id))?.summarizeAttempt).toBeUndefined();
+  });
+
+  it("keeps the published summary successful when knowledge indexing fails", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-index-failure";
+    await seedTranscribed(id);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    setSummarizeKnowledgeIndexRepositoryForTests({
+      refreshAfterSummary: async () => {
+        throw new Error("/private/sensitive/index-path");
+      },
+    });
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect(await readFile(meetingPaths(id).summary, "utf8")).toContain("FAKE 회의 요약");
+    expect((await readStatus(id))?.status).toBe("summarized");
+    expect(warning).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      code: "knowledge_index_failed",
+      operation: "summarize_index",
+      meetingId: id,
+    }));
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("/private/sensitive/index-path");
+    warning.mockRestore();
+  });
+
+  it("treats pending index durability as committed without failing or rolling back summary", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-index-pending";
+    await seedTranscribed(id);
+    let observedPublishedPair = false;
+    setSummarizeKnowledgeIndexRepositoryForTests({
+      refreshAfterSummary: async () => {
+        observedPublishedPair = (await readStatus(id))?.summarizeAttempt === undefined
+          && (await readFile(meetingPaths(id).summary, "utf8")).includes("FAKE 회의 요약");
+        return {
+          status: "ready",
+          reasons: [],
+          count: { total: 1, indexed: 1, skipped: 0 },
+          durability: "pending",
+        };
+      },
+    });
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect(observedPublishedPair).toBe(true);
+    expect((await readStatus(id))?.status).toBe("summarized");
+    expect(await readFile(meetingPaths(id).summary, "utf8")).toContain("FAKE 회의 요약");
+  });
+
   it("refuses a meeting that is already summarized", async () => {
     process.env.FAKE_LLM = "1";
     await writeSettings({ provider: "claude-cli" });
@@ -215,6 +297,27 @@ describe("runSummarize", () => {
     const summary = JSON.parse(await readFile(p.summary, "utf-8"));
     expect(summary.title).not.toBe("STALE_MARKER"); // regenerated, not the stale file
     expect((await readStatus(id))?.status).toBe("summarized");
+  });
+
+  it("re-summarize replaces a stale knowledge card with current source hashes", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-force-index";
+    await seedTranscribed(id);
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    const cardPath = knowledgeCardPath(id);
+    const stale = JSON.parse(await readFile(cardPath, "utf8"));
+    stale.sourceHashes.summary = "0".repeat(64);
+    stale.content.oneLine = "STALE_INDEX_MARKER";
+    await writeFile(cardPath, `${JSON.stringify(stale)}\n`);
+
+    await expect(runSummarize(id, { force: true })).resolves.toEqual({ ok: true });
+
+    const refreshed = JSON.parse(await readFile(cardPath, "utf8"));
+    expect(refreshed.sourceHashes.summary).not.toBe("0".repeat(64));
+    expect(refreshed.content.oneLine).not.toBe("STALE_INDEX_MARKER");
+    expect((await stat(cardPath)).isFile()).toBe(true);
   });
 
   it("without force, the worker path never re-summarizes an already-summarized meeting", async () => {

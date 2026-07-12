@@ -195,6 +195,7 @@ describe("data-surface inventory", () => {
       "/api/meetings/[id]/review",
       "/api/meetings/[id]/summarize",
       "/api/meetings/[id]/title",
+      "/api/knowledge/reindex",
       "/api/transcribe",
       "/api/glossary",
       "/api/settings/llm",
