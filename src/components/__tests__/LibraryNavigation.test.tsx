@@ -256,6 +256,16 @@ describe("activated library navigation", () => {
     expect(within(nav).getByRole("link", { name: /모든 회의/ })).not.toHaveAttribute("aria-current");
   });
 
+  it("links to 검색/질문 and marks the search route active", () => {
+    navigation.pathname = "/search";
+    renderShell();
+    const nav = screen.getByRole("navigation", { name: "라이브러리" });
+    const searchLink = within(nav).getByRole("link", { name: "검색/질문" });
+    expect(searchLink).toHaveAttribute("href", "/search");
+    expect(searchLink).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("link", { name: /모든 회의/ })).not.toHaveAttribute("aria-current");
+  });
+
   it("updates polite system rows only when the visible health label actually changes", () => {
     const view = renderShell();
     const initialLabel = screen.getAllByText("Whisper base · 준비됨")[0];

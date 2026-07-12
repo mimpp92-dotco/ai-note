@@ -405,6 +405,7 @@ function NavigationContents({
             <span>위치 저장 대기</span><span>{library.counts.organizationPendingCount}</span>
           </GuardedLink>
         )}
+        <NavigationRow href="/search" active={pathname.startsWith("/search")} label="검색/질문" onNavigationCommitted={onNavigationCommitted} />
         <NavigationRow href="/glossary" active={pathname.startsWith("/glossary")} label="단어 관리" onNavigationCommitted={onNavigationCommitted} />
         <NavigationRow href="/settings" active={pathname.startsWith("/settings")} label="설정" onNavigationCommitted={onNavigationCommitted} />
       </div>
@@ -431,6 +432,7 @@ function FallbackNavigation({
       <GuardedLink href="/" className="px-3 py-3 text-[15px] font-bold text-ink" onNavigationCommitted={onNavigationCommitted}>AI NOTE</GuardedLink>
       <NavigationRow href="/" active={pathname === "/"} label="모든 회의" onNavigationCommitted={onNavigationCommitted} />
       <div className="mt-auto">
+        <NavigationRow href="/search" active={pathname.startsWith("/search")} label="검색/질문" onNavigationCommitted={onNavigationCommitted} />
         <NavigationRow href="/glossary" active={pathname.startsWith("/glossary")} label="단어 관리" onNavigationCommitted={onNavigationCommitted} />
         <NavigationRow href="/settings" active={pathname.startsWith("/settings")} label="설정" onNavigationCommitted={onNavigationCommitted} />
         <SystemRows whisper={whisper} llm={llm} />

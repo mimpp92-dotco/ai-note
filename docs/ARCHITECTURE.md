@@ -74,6 +74,40 @@ Library/classification snapshot과 card snapshot 사이의 최신성 경쟁은 �
 
 인덱스의 title/status/location/reviewParticipants 같은 mutable metadata snapshot은 public current truth가 아니다. Public projection은 persisted semantic fields만 선택하고 title/status/location/reviewParticipants를 query-time live status/library 입력에서 별도로 결합하며, 응답 직전 tombstone을 재검증한다. Title/review/move/delete lifecycle route에는 corpus fan-out hook을 추가하지 않는다. 챗봇은 검색·회의 조회 도구를 호출하며 서버 evidence ledger가 claim-level citation provenance를 검증한다. 모델은 번호/title/link를 만들지 않고 서버가 실제 인용된 validated meeting ID에 첫 등장 순서 stable 번호와 app-relative link를 부여한다. 상세 결정은 ADR [0018](decisions/0018-meeting-knowledge-index-and-chatbot.md)을 따른다.
 
+### AI 없는 단순 검색 계약
+
+`GET /api/search`는 Node dynamic route이며 local guard를 URL query 해석과 filesystem/repository read보다 먼저 실행한다. Query는 500자 이하이고 NFKC→locale-independent lower-case→separator-to-space→whitespace collapse 순서로 정규화한다. `+`, `#`, `.`, `_`, `-`는 word character와 닿은 run만 보존해 `C++`, `C#`, `v2.1`, `ai-note`를 한 token으로 유지한다. 공백 token은 모든 token이 title/topic/one-line/highlights/discussion/decisions/action-items/risks/followups/current participants 또는 current metadata field 중 적어도 하나와 substring 일치해야 하는 AND 조건이다.
+
+Date/workspace/folder/status/action-item filter는 score 계산 전에 적용한다. Ranking은 `src/lib/meetingSearch.ts`의 명시적 field-weight table과 exact-phrase bonus가 정본이며, 동점은 `startedAt` 최신순 → meeting ID 영문 오름차순이다. Public match reason은 상위 3개의 user-facing field label과 query 주변 180자 이하 plain-text excerpt만 포함하고 HTML/Markdown, score, absolute path, raw filesystem/provider output을 포함하지 않는다. `mentionedPeople`은 action-item owner처럼 결정적으로 만든 hint일 뿐 임의 인명 인식 결과로 설명하지 않는다.
+
+기본 검색 source는 `corpus-map.json`과 `knowledge-card.json`이며 `transcript.md` 전체를 매 요청마다 읽지 않는다. Search card freshness는 canonical pair의 completion marker인 current `summary.json` 해시와 current `summarizeAttempt`를 사용한다. Pair publisher가 transcript와 summary를 한 generation으로 발행하고 summary를 마지막에 commit한다는 계약에 의존한다. Ready card만 summary semantic field를 제공한다. Stale/missing/corrupt card는 본문을 제공하지 않지만 current live title/date/status/location/review participants는 검색할 수 있고 aggregate는 `partial`이다. Corpus 자체가 missing/corrupt/I/O로 읽히지 않으면 `unavailable`이며 결과를 반환하지 않는다.
+
+검색은 library/classified-status snapshot에서 후보를 만들고 card를 읽은 뒤 current library/status snapshot을 다시 읽는다. 두 snapshot의 `libraryId+revision`이 다르면 혼합 generation을 반환하지 않고 no-store `409 {error:{code:"search_retry",message}}`로 낮춘다. Public result 직전 current classifier와 tombstone을 다시 확인해 tombstoned/ambiguous/unsafe/corrupt/missing-status meeting을 제외하고 title/status/location/review participants는 반드시 마지막 live snapshot에서 투영한다.
+
+성공 DTO는 다음 bounded shape다. `limit` 기본값은 20, 최대 50이며 cursor pagination 없이 limit 밖 valid result 존재만 `hasMore`로 알린다. `summaryPendingCount`는 semantic card를 아직 사용할 수 없는 요약 대기 상태를 UI가 구분하기 위한 bounded count다.
+
+```ts
+{
+  query: string;
+  results: Array<{
+    meetingId: string;
+    title: string;
+    status: MeetingStatus;
+    startedAt: string;
+    location: { workspaceId: string; folderId: string | null; breadcrumb: string[] } | null;
+    matches: Array<{ field: string; label: string; excerpt: string }>;
+    href: `/meetings/${string}`;
+  }>;
+  hasMore: boolean;
+  summaryPendingCount: number;
+  index: {
+    status: "ready" | "partial" | "unavailable";
+    reasons: Array<"missing" | "stale" | "corrupt" | "io_error">;
+    reindexable: boolean;
+  };
+}
+```
+
 ## Local-only ingress·public boundary
 
 - 모든 current API route와 `/meetings/[id]` data-reading RSC는 params 해석·body read·filesystem/network/spawn보다 먼저 공통 guard를 통과한다. Host는 raw exact `127.0.0.1|localhost` + valid port만, API Fetch Metadata는 `same-origin`만 허용한다. Direct document navigation의 `Sec-Fetch-Site:none`은 page에서만 허용한다.

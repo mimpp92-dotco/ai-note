@@ -27,6 +27,7 @@ export const DATA_SURFACE_INVENTORY = [
   "/api/settings/llm",
   "/api/settings/llm/health",
   "/api/settings/profile",
+  "/api/search",
   "/api/summary-work",
   "/api/summarize",
   "/api/transcribe",

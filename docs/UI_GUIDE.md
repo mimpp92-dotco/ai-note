@@ -78,6 +78,9 @@
 ### 검색·질문
 
 - 기존 shared `Tabs`를 사용하고 `질문` 탭을 기본 진입으로 둔다. 비스트리밍 응답 중에는 확인할 수 없는 가짜 세부 진행 단계를 표시하지 않고 단일한 처리 중 상태만 알린다.
+- **검색 composition**: compact page heading 아래 검색 input과 명시적 dark `검색` primary action 하나를 둔다. Date/workspace/folder/status/action-item 조건은 기본 닫힌 native `필터` disclosure에 넣고, disclosure 밖에서도 active filter count와 `필터 초기화`를 확인할 수 있게 한다. 320px에서는 input/action과 filter field를 한 열로 쌓으며 Korean IME composition 중 Enter는 submit하지 않는다.
+- **검색 결과 hierarchy**: 결과는 card grid나 nested card가 아니라 위아래 divider를 공유하는 단일 column list다. 각 row는 live title → 날짜·live 위치·live 상태 한 metadata group → 최대 3개의 matched-field label/plain excerpt → 최소 44px `회의 열기` 순서다. `hasMore`는 “상위 N개 결과”와 검색어/필터를 좁히는 설명만 제공하고 다음/더 보기 control을 만들지 않는다.
+- Initial, 검색 중, 결과, 결과 없음, partial, unavailable, request error를 서로 다른 copy와 다음 행동으로 구분한다. 결과 없음은 검색어 축소와 filter reset을 안내하고, 요약 대기 회의는 제목·날짜·위치·참석자만 검색될 수 있음을 설명한다. Loading·request failure·재색인 중에도 이전 결과 surface와 현재 draft를 유지하고 결과 container에는 최소 높이를 둔다.
 - 프로필 미설정은 일반 검색·질문을 막는 오류가 아니다. ‘내 할 일’·상대 날짜처럼 자기 지칭 해석에 개인화 정보가 필요한 경우에만 비차단 설정 안내로 표시한다.
 - 근거가 있는 claim 바로 뒤에 inline `[n]` marker를 두고 답변 아래 reference list를 제공한다. 같은 meeting은 답변 안에서 stable number를 유지하며, 복사 결과에도 reference list를 포함한다. 번호·제목·link는 모델 출력이 아니라 서버가 검증한 meeting으로 생성한다.
 - **검색 데이터 상태**: ready는 별도 성공 배지를 만들지 않는다. Partial은 현재 결과·검색어·필터를 그대로 유지한 채 “일부 회의의 검색 데이터가 아직 최신 상태가 아닙니다” warning과 `검색 데이터 업데이트` CTA를 결과 위에 둔다. Unavailable은 입력한 검색어·필터를 보존하고 결과 영역에 복구 설명과 같은 CTA를 둔다. 내부 `missing`은 “아직 준비되지 않음”, `stale`은 “최신 내용 반영 필요”, `corrupt`는 “일부 검색 데이터를 읽을 수 없음”, I/O는 “로컬 검색 데이터에 접근할 수 없음”으로 바꾸며 `index`, `stale`, `corrupt`, raw path/error를 화면에 그대로 노출하지 않는다.
