@@ -19,10 +19,11 @@
 7. **단어 관리(단어장) + 좌측 네비게이션** — 도메인 용어와 '잘못 인식→올바른 표기' 교정쌍을 웹 **단어 관리** 탭에서 관리(LLM 교정 단계에 반영, whisper STT 아님). 좌측 사이드바로 회의·단어·설정을 오간다.
 8. **로컬 회의 라이브러리** — desktop rail/mobile drawer에서 workspace를 전환하고 모든 회의·미분류·최대 3단계 folder의 direct meeting을 bounded page로 본다. Workspace/folder 생성·이름 수정과 folder semantic color 편집을 제공한다. Meeting은 same/cross-workspace의 folder·미분류로 이동할 수 있고 folder subtree는 같은 workspace 안에서만 reparent한다. Folder 삭제는 direct meeting rehome+child 승격, workspace 삭제는 destination unfiled rehome이며 둘 다 preview 뒤 조직 metadata만 제거하고 meeting artifact를 보존한다. 중앙 `library.json` placement/tree metadata만 바꾸며 Meeting artifact는 안정적인 `data/meetings/{id}/`에 둔다. Workspace는 계정·팀·권한·암호화 또는 물리 저장 경계가 아니다. Registry degraded 시 last-good/global fallback을 읽기 전용으로 제공하고, corrupt에만 fingerprint 확인·원본 archive 보존형 명시적 재구축을 제공한다. Unsupported/I/O/conflict는 덮지 않는다.
 9. **단건 수동 재요약** — 요약 완료된 회의 상세의 **"다시 요약"** 버튼으로 그 회의 하나만 재생성(단어장 변경을 기존 회의에 반영). **자동·일괄 재요약은 비목표** — 단어장 저장은 재요약을 트리거하지 않고, 배경 워커는 요약된 회의를 다시 요약하지 않는다.
+10. **회의 지식 검색·질문 확장** — 파생 지식 카드와 corpus map으로 전체 회의를 검색하고, 로컬 AI 도구 호출형 챗봇이 서버가 검증한 근거만 사용해 claim-level inline citation과 reference list를 제공한다. 사용자 프로필은 선택적 개인화이며 미설정이어도 일반 검색·질문은 동작한다.
 
 ## MVP 제외 사항 (비목표)
 
-- 캘린더 연동, 데스크탑 앱, 시스템 오디오(Zoom/Meet) 캡처, AI 채팅 패널
+- 캘린더 연동, 데스크탑 앱, 시스템 오디오(Zoom/Meet) 캡처
 - 공유/협업·workspace 구성원/권한, cloud sync, 템플릿 관리 UI, 플랜/결제, MCP
 - 멀티유저·인증(단일 사용자 로컬 가정)
 - 화자 분리(diarization) — whisper 배치에 화자 정보 없음
