@@ -199,6 +199,7 @@ describe("data-surface inventory", () => {
       "/api/glossary",
       "/api/settings/llm",
       "/api/settings/llm/health",
+      "/api/settings/profile",
       "/api/whisper/health",
       "/meetings/[id]",
     ]));

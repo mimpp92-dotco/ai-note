@@ -81,7 +81,7 @@ function snapshotLabel(snapshot: SettingsSnapshot): string {
   return `${providerLabel(snapshot.provider)}${snapshot.model ? ` · ${snapshot.model}` : ""}`;
 }
 
-export function SettingsForm() {
+export function SettingsForm({ embedded = false }: { embedded?: boolean } = {}) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [savedSnapshot, setSavedSnapshot] = useState<SettingsSnapshot | null>(null);
   const [provider, setProvider] = useState<LlmProvider>("claude-cli");
@@ -242,10 +242,20 @@ export function SettingsForm() {
             ? "변경 사항을 먼저 저장하세요. 연결 테스트는 저장된 설정만 검사합니다."
             : "연결 테스트는 현재 저장된 설정을 검사합니다.";
 
+  const Root: "main" | "section" = embedded ? "section" : "main";
+
   return (
-    <main id="main" className="max-w-2xl space-y-8 px-4 py-12 sm:px-6">
+    <Root
+      id={embedded ? undefined : "main"}
+      aria-labelledby={embedded ? "llm-settings-heading" : undefined}
+      className={embedded ? "min-w-0 space-y-6" : "max-w-2xl space-y-8 px-4 py-12 sm:px-6"}
+    >
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-ink">요약 모델 설정</h1>
+        {embedded ? (
+          <h2 id="llm-settings-heading" className="text-[19px] font-bold tracking-tight text-ink">요약 모델</h2>
+        ) : (
+          <h1 className="text-2xl font-bold tracking-tight text-ink">요약 모델 설정</h1>
+        )}
         <p className="mt-2 text-[15px] leading-relaxed text-inkSoft">
           회의록 요약에 사용할 모델을 선택합니다. 녹음·전사는 모델 없이도 동작하며, 요약만 모델이 필요합니다.
         </p>
@@ -366,11 +376,11 @@ export function SettingsForm() {
             </label>
           )}
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap flex-col items-stretch gap-3 sm:flex-row sm:items-center">
             <button
               type="submit"
               disabled={!canSave}
-              className="min-h-11 rounded-full bg-ink px-5 text-[14px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50"
+              className="min-h-11 w-full rounded-full bg-ink px-5 text-[14px] font-semibold text-bg transition-colors hover:bg-accent disabled:opacity-50 sm:w-auto"
             >
               {saving ? "저장 중…" : "저장"}
             </button>
@@ -379,7 +389,7 @@ export function SettingsForm() {
               onClick={() => void test()}
               disabled={!canTest}
               aria-describedby="settings-test-reason"
-              className="min-h-11 rounded-full border border-line bg-panel px-5 text-[14px] font-semibold text-accent transition-colors hover:bg-soft disabled:opacity-50"
+              className="min-h-11 w-full rounded-full border border-line bg-panel px-5 text-[14px] font-semibold text-accent transition-colors hover:bg-soft disabled:opacity-50 sm:w-auto"
             >
               {testing ? "테스트 중…" : "연결 테스트"}
             </button>
@@ -403,7 +413,7 @@ export function SettingsForm() {
           </p>
         </form>
       )}
-    </main>
+    </Root>
   );
 }
 

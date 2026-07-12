@@ -16,6 +16,7 @@ scripts/               # check-links.mjs (링크 무결성 체커)
 data/meetings/{id}/    # 런타임 산출물(gitignore, fixtures 제외)
 data/meeting-tombstones/{id}.json # 영구 ID delete fence(app lifecycle writer)
 data/library.json      # workspace/folder/placement 중앙 registry(app-api 단일 writer)
+data/user-profile.json # optional 개인화 프로필(app-api 단일 writer, LLM settings와 분리)
 fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fallback
 ```
 
@@ -49,6 +50,7 @@ flowchart LR
 | `raw.md` + `segments.json` | whisper | 원본 불변 |
 | `transcript.md` + `summary.json` | **app summarize publisher만** | 재생성 가능. `summary.json`이 generation completion marker |
 | `data/library.json` | **library repository만** | workspace/folder/placement metadata. Meeting directory는 이동하지 않음 |
+| `data/user-profile.json` | **profile settings app-api만** | optional 표시 이름/별칭/시간 기준. `data/settings.json` LLM provider 설정과 분리 |
 | `.whisper-dispatch.json` | **whisper만** | audio identity + durable dispatch publication phase |
 | `meeting-tombstones/{id}.json` | **app lifecycle만** | 영구 logical-delete fence. 물리 cleanup 후에도 보존 |
 | `knowledge-card.json` | knowledge index repository | meeting별 검색 파생물. source summary/transcript SHA-256 포함, 삭제 후 재생성 가능 |
@@ -258,6 +260,13 @@ StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `re
 - health는 UI와 설정 화면의 readiness/test-connection 용도다. **CLI provider(claude/codex)의 `ok`는 바이너리 감지이지 인증 보장이 아니다(낙관적)** — 실제 인증·요약 가능 여부는 첫 요약에서 확인된다. 홈 배너와 상세 상태 카드는 `configured && ok`일 때만 “요약 자동 처리 중”으로 안내한다. 감지형 health는 로그인 깨짐을 요약 전에 못 잡으므로, 홈 배너는 전사됐지만 요약 안 된 회의를 **“처리 중 N”(에러 없음)과 “확인 필요 M”(`retry_summary` 에러)로 분리**해 거짓초록을 막는다. 배경 워커 후보 선정은 기존처럼 settings 존재 기반이며, 실제 실행 실패는 `runSummarize()`의 retryable error로 기록한다(claude는 미로그인 시 이유를 stdout으로 출력하므로 `exec.ts`가 stderr가 비면 stdout 꼬리를 에러에 싣는다).
 - Claude·Codex CLI health는 `claude --version`/`codex --version` 수준의 binary 감지다(인증 불요·즉시 반환이라 콜드 스타트 타임아웃 오탐이 없다). UI 문구는 둘 다 “감지됨”으로 표시하고 인증/실제 요약 가능 여부는 첫 요약 실행에서 확인한다.
 - **claude 요약 호출 격리(ADR 0010):** claude 생성 호출(`run()`)은 invocation별 `mkdtemp` 격리 cwd에서 인라인 MCP-off(`--strict-mcp-config --mcp-config '{"mcpServers":{}}'`)·slash-off(`--disable-slash-commands`)로 실행하고, 종료 뒤 temp를 best-effort cleanup한다. 자식 env에서 유료 청구 env(자격증명 `ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY` + 백엔드 리다이렉트 `ANTHROPIC_BASE_URL`·`CLAUDE_CODE_USE_BEDROCK`/`VERTEX`)를 스크럽한다(구독 OAuth와 `HOME`/`PATH`는 유지 → $0 유지). 프로젝트 디렉토리 밖에서 돌기 때문에 워크스페이스 `CLAUDE.md`/MCP 컨텍스트가 교정 출력에 새지 않는다(과거 오염 버그 제거). 전사(PII)는 stdin으로만 전달하며, 프롬프트·`summary.json` 스키마·`summarizeCore` 계약은 불변. 생성 타임아웃은 600초(위 참조).
+
+## User profile settings 계약
+
+- `GET /api/settings/profile`은 저장된 profile이 있으면 `{configured:true,profile}`을, 파일이 없으면 `{configured:false,defaults:{timezone,weekStartsOn:"monday"}}`을 반환한다. Missing read는 파일을 만들지 않으며 timezone default는 local runtime의 유효한 IANA 값이고 판정 불가할 때만 `UTC`다.
+- `POST /api/settings/profile`은 strict profile v1(`displayName`, normalized `aliases`, IANA `timezone`, `weekStartsOn`)만 32 KiB bounded JSON으로 받고 `data/user-profile.json`에 쓴다. 이 파일은 LLM provider용 `data/settings.json`과 shape·writer surface를 합치지 않는다.
+- Profile write도 temp→file fsync→rename→parent-directory fsync를 사용한다. Success는 normalized profile과 `durability:durable|best_effort|pending`을 반환하고 pending은 이미 logical commit된 상태라 rollback·blind retry하지 않는다. Corrupt/invalid stored profile은 unconfigured로 낮추지 않고 safe load error로 fail-closed한다.
+- Profile은 optional personalization context다. 미설정이어도 일반 검색과 개인화가 필요 없는 질문을 막지 않으며, ‘내 할 일’·상대 날짜처럼 자기 지칭 해석에 profile이 필요한 경우에만 비차단 설정 안내를 제공한다.
 
 ## 프롬프트 (교정·요약)
 

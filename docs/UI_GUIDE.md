@@ -78,7 +78,7 @@
 ### 검색·질문
 
 - 기존 shared `Tabs`를 사용하고 `질문` 탭을 기본 진입으로 둔다. 비스트리밍 응답 중에는 확인할 수 없는 가짜 세부 진행 단계를 표시하지 않고 단일한 처리 중 상태만 알린다.
-- 프로필 미설정은 일반 검색·질문을 막는 오류가 아니라 비차단 개인화 안내로 표시한다.
+- 프로필 미설정은 일반 검색·질문을 막는 오류가 아니다. ‘내 할 일’·상대 날짜처럼 자기 지칭 해석에 개인화 정보가 필요한 경우에만 비차단 설정 안내로 표시한다.
 - 근거가 있는 claim 바로 뒤에 inline `[n]` marker를 두고 답변 아래 reference list를 제공한다. 같은 meeting은 답변 안에서 stable number를 유지하며, 복사 결과에도 reference list를 포함한다. 번호·제목·link는 모델 출력이 아니라 서버가 검증한 meeting으로 생성한다.
 
 ### 녹음 화면
@@ -120,6 +120,13 @@
 - 저장 모델: **명시적 "저장" 버튼**(자동저장 아님). 두 탭은 로컬 state로 함께 편집되고 하단 단일 버튼으로 1회 저장. 변경 시 "변경됨", 저장 후 "저장됨", 실패 시 `role="status"` 인라인 에러(로컬 state 보존).
 - Initial GET은 `loading|ready|load_error`를 구분한다. Non-2xx·network·invalid body는 빈 단어장으로 낮추지 않고 editor/replace-save를 잠근 뒤 재시도를 제공한다. 저장은 `ready && dirty && !saving`에서만 가능하고 성공 body로 정규화하며 실패 시 draft를 보존한다.
 - 안내: "새 회의는 자동 반영 · 기존 회의는 상세의 '다시 요약'으로 갱신".
+
+### 설정 화면 · 내 정보
+
+- Settings page는 `<main>`과 `h1 "설정"`을 하나씩만 가진다. `내 정보`와 `요약 모델`은 같은 정보 단계의 중첩되지 않은 sibling section이며 각 section의 loading/load error/dirty/saving/saved/pending/save error는 다른 section의 편집과 상태를 가리거나 막지 않는다.
+- `내 정보`는 선택 설정이다. 제목 바로 아래에서 ‘내 할 일’·상대 날짜 개인화를 보완하지만 일반 검색/질문의 필수 조건은 아님을 설명한다. 표시 이름과 쉼표/줄바꿈 별칭은 첫 group에 보이고, timezone/주 시작 요일은 기본이 닫힌 native `날짜 기준` disclosure에 둔다. 사용자가 열었거나 검증 오류가 있는 disclosure를 저장/상태 갱신 때문에 임의로 닫지 않는다.
+- Missing profile의 timezone은 local runtime default 또는 판정 불가 시 `UTC`로 제안하되 `아직 저장되지 않음`을 함께 표시한다. IANA 값을 직접 입력할 수 있고 native datalist가 가능한 환경에서는 bounded suggestion만 제공한다. Pending durability는 실패/재저장 CTA가 아니라 `저장됨 · 디스크 동기화 확인 대기` committed warning으로 표시한다.
+- 320px에서는 두 section 모두 field와 action/status를 한 열로 reflow하고 timezone·별칭·CJK 장문이 action과 폭을 경쟁하거나 horizontal overflow를 만들지 않는다.
 
 ### 요약 모델 설정
 - Initial GET은 `loading|ready|load_error`를 구분한다. `{provider:null}`만 명시적 미설정 ready이며, read 실패를 기본 Claude 설정으로 가장하지 않고 editor/save를 잠근 뒤 재시도를 제공한다.
