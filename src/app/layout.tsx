@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense, type ReactNode } from "react";
 
+import { ChatPanel } from "@/components/ChatPanel";
 import { LibraryProvider } from "@/components/LibraryProvider";
 import { LibraryNavigation } from "@/components/LibraryNavigation";
 import { RecorderSessionProvider } from "@/components/RecorderSessionProvider";
@@ -29,6 +30,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <LibraryNavigation />
               </Suspense>
               <div id="app-content" className="min-w-0 flex-1">{children}</div>
+              <ChatPanel />
             </div>
           </RecorderSessionProvider>
         </LibraryProvider>
