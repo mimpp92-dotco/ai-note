@@ -39,6 +39,7 @@ import {
   type MeetingTombstoneObservation,
 } from "@/lib/meetingTombstone";
 import { dataRoot, meetingPaths } from "@/lib/paths";
+import { collectTranscriptCandidates } from "@/lib/transcriptSearch";
 import {
   readUserProfile,
   type UserProfileReadState,
@@ -109,6 +110,7 @@ export interface ChatToolBudgetUsage {
   summariesUsed: number;
   transcriptWindowsUsed: number;
   fullTranscriptsUsed: number;
+  transcriptScansUsed: number;
   aggregateToolOutputCharsUsed: number;
 }
 
@@ -316,6 +318,7 @@ export function createChatToolExecutor(options: ChatToolExecutorOptions): ChatTo
     summariesUsed: 0,
     transcriptWindowsUsed: 0,
     fullTranscriptsUsed: 0,
+    transcriptScansUsed: 0,
     aggregateToolOutputCharsUsed: 0,
   };
 
@@ -518,6 +521,74 @@ export function createChatToolExecutor(options: ChatToolExecutorOptions): ChatTo
     };
     return successResult(call, response, response.results.map((result) => ({
       meetingId: result.meetingId,
+      tier: "search" as const,
+      truncated: false,
+    })));
+  };
+
+  const handleSearchTranscripts = async (
+    call: Extract<ChatToolCall, { name: "search_transcripts" }>,
+  ) => {
+    let liveRead: SearchLiveSnapshotReadResult;
+    try {
+      liveRead = await dependencies.readLiveSnapshot();
+    } catch {
+      return errorResult(call, "index_unavailable");
+    }
+    if (liveRead.mode !== "ready") return errorResult(call, "index_unavailable");
+
+    // Only meetings past transcription can carry a transcript.md. Recent-first so
+    // that a scan bounded by transcriptScans favors the most likely answers.
+    const scannable = liveRead.snapshot.records
+      .filter((record) => record.status !== "recording" && record.status !== "recorded")
+      .sort((left, right) => (
+        Date.parse(right.startedAt) - Date.parse(left.startedAt)
+        || left.meetingId.localeCompare(right.meetingId, "en")
+      ));
+
+    const remaining = budget.transcriptScans - usage.transcriptScansUsed;
+    if (remaining <= 0) return errorResult(call, "budget_exhausted", true);
+    const targeted = scannable.slice(0, remaining);
+    usage.transcriptScansUsed += targeted.length;
+    const scanBudgetReached = scannable.length > targeted.length;
+
+    const metaById = new Map(targeted.map((record) => [record.meetingId, record]));
+    const inputs = await Promise.all(targeted.map(async (record) => {
+      const read = await artifactRead(
+        record.meetingId,
+        () => dependencies.readArtifactPair(record.meetingId),
+      );
+      const transcript = read.status === "ready" && read.value.state === "stable"
+        ? read.value.transcript
+        : null;
+      return { meetingId: record.meetingId, transcript };
+    }));
+
+    const discovery = collectTranscriptCandidates(inputs, call.arguments.query, {
+      limit: call.arguments.limit ?? 10,
+    });
+    if (scanBudgetReached || discovery.hasMore) addWarning("candidate_limit_reached");
+
+    const candidates = discovery.candidates.map((candidate) => {
+      const meta = metaById.get(candidate.meetingId)!;
+      checkedMeetings.add(candidate.meetingId);
+      return {
+        meetingId: candidate.meetingId,
+        title: meta.title,
+        startedAt: meta.startedAt,
+        matchedKeywords: candidate.matchedKeywords,
+        snippets: candidate.snippets,
+      };
+    });
+    // Discovery is not citation credit (ADR 0018): record only the non-read
+    // "search" tier so the model must re-read a meeting to ground a claim.
+    return successResult(call, {
+      query: call.arguments.query,
+      keywords: discovery.keywords,
+      candidates,
+      hasMore: discovery.hasMore,
+    }, candidates.map((candidate) => ({
+      meetingId: candidate.meetingId,
       tier: "search" as const,
       truncated: false,
     })));
@@ -763,6 +834,7 @@ export function createChatToolExecutor(options: ChatToolExecutorOptions): ChatTo
       switch (parsed.data.name) {
         case "get_user_profile": return await handleProfile(parsed.data);
         case "search_meetings": return await handleSearch(parsed.data);
+        case "search_transcripts": return await handleSearchTranscripts(parsed.data);
         case "read_knowledge_cards": return await handleCards(parsed.data);
         case "read_summaries": return await handleSummaries(parsed.data);
         case "read_transcript_chunks": return await handleTranscriptChunks(parsed.data);

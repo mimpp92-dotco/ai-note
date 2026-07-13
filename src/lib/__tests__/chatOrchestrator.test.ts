@@ -44,6 +44,7 @@ function snapshot(overrides: Partial<ChatEvidenceSnapshot> = {}): ChatEvidenceSn
       summariesUsed: 0,
       transcriptWindowsUsed: 0,
       fullTranscriptsUsed: 0,
+      transcriptScansUsed: 0,
       aggregateToolOutputCharsUsed: 0,
     },
     ...overrides,
@@ -522,5 +523,113 @@ describe("actionable orchestrator failures", () => {
       adapter: adapter([toolEnvelope([{ callId: "search", name: "search_meetings", arguments: { query: "로드맵" } }])]),
       toolExecutor: indexTools,
     })).rejects.toMatchObject({ code: "chat_index_unavailable" });
+  });
+});
+
+describe("transcript discovery grounds transcript-only proper-noun questions", () => {
+  const fenced = (obj: unknown) => ["다음 단계로 진행합니다.", "```json", JSON.stringify(obj), "```"].join("\n");
+
+  function routedExecutor(options: {
+    evidence: ChatEvidenceSnapshot["evidence"];
+    live: ChatLiveMeeting[];
+    onSearchMeetings: () => void;
+  }) {
+    const execute = vi.fn(async (input: unknown) => {
+      const value = input as { callId: string; name: string; arguments: Record<string, unknown> };
+      const base = { callId: value.callId, name: value.name, truncated: false, budgetExhausted: false };
+      if (value.name === "search_meetings") {
+        options.onSearchMeetings();
+        return {
+          ...base,
+          status: "ok" as const,
+          data: {
+            query: String(value.arguments.query ?? ""),
+            results: [],
+            hasMore: false,
+            summaryPendingCount: 0,
+            index: { status: "ready", reasons: [], reindexable: false },
+          },
+        };
+      }
+      if (value.name === "search_transcripts") {
+        return {
+          ...base,
+          status: "ok" as const,
+          data: {
+            query: String(value.arguments.query ?? ""),
+            keywords: [String(value.arguments.query ?? "")],
+            candidates: [{
+              meetingId: M1,
+              title: "현재 회의",
+              startedAt: "2026-07-11T00:00:00.000Z",
+              matchedKeywords: [String(value.arguments.query ?? "")],
+              snippets: [{ text: "관련 논의 스니펫" }],
+            }],
+            hasMore: false,
+          },
+        };
+      }
+      // read_summaries / read_transcript_chunks — the grounding read.
+      return { ...base, status: "ok" as const, data: { items: [{ meetingId: M1, status: "ready" }] } };
+    });
+    return executor({ execute: execute as ChatToolExecutor["execute"], evidence: options.evidence, live: options.live });
+  }
+
+  it.each([
+    ["라이드 회의 요약", "read_summaries", ["search", "summary"] as const],
+    ["고퀄 대표 액션 아이템", "read_transcript_chunks", ["search", "transcript_chunk"] as const],
+  ])("falls back to discovery for %s, then reads and cites", async (message, readTool, tiers) => {
+    let searchMeetingsCalls = 0;
+    const tools = routedExecutor({
+      evidence: [{ meetingId: M1, tiers: [...tiers], truncated: false }],
+      live: [live(M1, "현재 회의")],
+      onSearchMeetings: () => { searchMeetingsCalls += 1; },
+    });
+    const readArgs = readTool === "read_transcript_chunks"
+      ? { meetingId: M1, query: "키워드" }
+      : { meetingIds: [M1] };
+    const llm = adapter([
+      fenced({ type: "tool_calls", toolCalls: [{ callId: "s", name: "search_meetings", arguments: { query: message } }] }),
+      fenced({ type: "tool_calls", toolCalls: [{ callId: "t", name: "search_transcripts", arguments: { query: "키워드" } }] }),
+      fenced({ type: "tool_calls", toolCalls: [{ callId: "r", name: readTool, arguments: readArgs }] }),
+      fenced({ type: "final", answerSegments: [claim("전사에서 확인한 결정입니다.", [M1])], limitationFlags: [] }),
+    ]);
+
+    const result = await runChat({ message, mode: "normal", history: [] }, { adapter: llm, toolExecutor: tools });
+
+    expect(searchMeetingsCalls).toBe(1);
+    expect(tools.execute).toHaveBeenCalledWith(expect.objectContaining({ name: "search_transcripts" }));
+    expect(tools.execute).toHaveBeenCalledWith(expect.objectContaining({ name: readTool }));
+    expect(result.evidenceStatus).not.toBe("none");
+    expect(result.answerSegments[0]).toMatchObject({ kind: "claim", referenceNumbers: [1] });
+    expect(result.references[0]).toMatchObject({ meetingId: M1, href: `/meetings/${M1}` });
+  });
+
+  it("never credits a discovery-only meeting that was not re-read", async () => {
+    const execute = vi.fn(async (input: unknown) => {
+      const value = input as { callId: string; name: string };
+      return {
+        callId: value.callId,
+        name: value.name,
+        status: "ok" as const,
+        data: { candidates: [{ meetingId: M1 }] },
+        truncated: false,
+        budgetExhausted: false,
+      };
+    });
+    const tools = executor({
+      execute: execute as ChatToolExecutor["execute"],
+      evidence: [{ meetingId: M1, tiers: ["search"], truncated: false }],
+      live: [live(M1)],
+    });
+    const llm = adapter([
+      toolEnvelope([{ callId: "t", name: "search_transcripts", arguments: { query: "라이드" } }]),
+      finalEnvelope([claim("라이드 회의 결정입니다.", [M1])]),
+      finalEnvelope([claim("라이드 회의 결정입니다.", [M1])]),
+    ]);
+    const result = await runChat(request, { adapter: llm, toolExecutor: tools });
+    expect(result.evidenceStatus).toBe("none");
+    expect(result.references).toEqual([]);
+    expect(result.warnings).toContain("unsupported_claim_omitted");
   });
 });

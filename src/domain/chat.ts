@@ -24,6 +24,7 @@ export const CHAT_BUDGETS = {
     summaries: 8,
     transcriptWindows: 12,
     fullTranscripts: 2,
+    transcriptScans: 40,
     aggregateToolOutputChars: 120_000,
   },
   deep: {
@@ -33,6 +34,7 @@ export const CHAT_BUDGETS = {
     summaries: 16,
     transcriptWindows: 24,
     fullTranscripts: 4,
+    transcriptScans: 80,
     aggregateToolOutputChars: 240_000,
   },
 } as const;
@@ -40,6 +42,7 @@ export const CHAT_BUDGETS = {
 export const CHAT_TOOL_NAMES = [
   "get_user_profile",
   "search_meetings",
+  "search_transcripts",
   "read_knowledge_cards",
   "read_summaries",
   "read_transcript_chunks",
@@ -193,6 +196,15 @@ const searchMeetingsCallSchema = z.object({
   }).strict(),
 }).strict();
 
+const searchTranscriptsCallSchema = z.object({
+  callId: callIdSchema,
+  name: z.literal("search_transcripts"),
+  arguments: z.object({
+    query: z.string().min(1).max(500),
+    limit: z.number().int().min(1).max(20).optional(),
+  }).strict(),
+}).strict();
+
 const readKnowledgeCardsCallSchema = z.object({
   callId: callIdSchema,
   name: z.literal("read_knowledge_cards"),
@@ -225,6 +237,7 @@ const readFullTranscriptCallSchema = z.object({
 export const chatToolCallSchema = z.discriminatedUnion("name", [
   getUserProfileCallSchema,
   searchMeetingsCallSchema,
+  searchTranscriptsCallSchema,
   readKnowledgeCardsCallSchema,
   readSummariesCallSchema,
   readTranscriptChunksCallSchema,
