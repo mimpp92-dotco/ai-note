@@ -214,6 +214,35 @@ describe("chat tool loop", () => {
   });
 });
 
+describe("tolerant envelope parsing from real CLI output", () => {
+  // Local CLIs (claude -p / codex exec) return fenced or prose-wrapped JSON, not a
+  // bare object. The tool loop must still run end to end instead of collapsing to
+  // a no-evidence answer on the first turn (the runtime bug this phase fixes).
+  const fenced = (obj: unknown) => ["다음과 같이 진행하겠습니다.", "```json", JSON.stringify(obj), "```"].join("\n");
+  const trailing = (obj: unknown) => `${JSON.stringify(obj)}\n위 도구를 호출하겠습니다.`;
+
+  it("runs the tool loop when envelopes are wrapped in prose and code fences", async () => {
+    const tools = executor({
+      evidence: [{ meetingId: M1, tiers: ["search", "summary"], truncated: false }],
+      searchReplay: { query: "로드맵", filters: {}, limit: 20, resultCount: 1 },
+      live: [live(M1, "현재 로드맵 회의")],
+    });
+    const llm = adapter([
+      fenced({ type: "tool_calls", toolCalls: [{ callId: "search", name: "search_meetings", arguments: { query: "로드맵" } }] }),
+      trailing({ type: "tool_calls", toolCalls: [{ callId: "summary", name: "read_summaries", arguments: { meetingIds: [M1] } }] }),
+      fenced({ type: "final", answerSegments: [claim("로드맵 범위를 확정했습니다.", [M1])], limitationFlags: [] }),
+    ]);
+
+    const result = await runChat(request, { adapter: llm, toolExecutor: tools });
+
+    expect(llm.run).toHaveBeenCalledTimes(3);
+    expect(tools.execute).toHaveBeenCalledTimes(2);
+    expect(result.evidenceStatus).toBe("sufficient");
+    expect(result.answerSegments[0]).toMatchObject({ kind: "claim", referenceNumbers: [1] });
+    expect(result.references[0]).toMatchObject({ meetingId: M1, href: `/meetings/${M1}` });
+  });
+});
+
 describe("chat budgets", () => {
   it("stops at the normal model-turn budget", async () => {
     const tools = executor();

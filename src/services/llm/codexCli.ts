@@ -8,6 +8,10 @@ import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services
 // the model's final message. Auth is only verified on the first real summary, so
 // health() just confirms the binary exists. Run read-only in a temp cwd, and skip
 // the git-repo check so it works outside a repo.
+//
+// The `run` opts.json hint needs no extra flag here: codex's `--json` event stream
+// is always the structured output, and the salvaged final message is handed to the
+// caller's tolerant extractor (chatOrchestrator/summarizeCore) for envelope parsing.
 
 export class CodexCliAdapter implements LlmAdapter {
   readonly provider: LlmProvider = "codex-cli";

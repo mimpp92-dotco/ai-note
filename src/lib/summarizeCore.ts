@@ -118,7 +118,11 @@ function parseSummary(output: string, title: string): Summary | null {
   return result.success ? result.data : null;
 }
 
-function extractJsonObject(output: string): Record<string, unknown> | null {
+// Tolerant JSON-object salvage from free-form model output. Shared with the
+// chatbot envelope parser (chatOrchestrator): local CLIs emit fenced or
+// prose-wrapped JSON, so a bare JSON.parse on the whole output fails. Tries a
+// fenced block first, then a first-`{` to last-`}` scan.
+export function extractJsonObject(output: string): Record<string, unknown> | null {
   const t = output.trim();
   // attempt 1: a ```json { ... } ``` fenced block.
   const fence = t.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);

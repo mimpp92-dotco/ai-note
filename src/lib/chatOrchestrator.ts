@@ -20,6 +20,7 @@ import {
   type ChatLiveMeeting,
   type ChatToolExecutor,
 } from "@/lib/chatTools";
+import { extractJsonObject } from "@/lib/summarizeCore";
 import { getConfiguredAdapter } from "@/services/llm";
 import type { LlmAdapter } from "@/services/llm/types";
 
@@ -28,6 +29,7 @@ const PERSONALIZATION_TEXT = "내 정보를 설정하면 담당 항목을 더 �
 
 const CHAT_PROTOCOL = `당신은 로컬 회의 자료를 질의하는 도우미입니다.
 반드시 JSON 객체 하나만 반환하고 type은 tool_calls 또는 final이어야 합니다.
+코드펜스(\`\`\`)나 서두·후행 설명 없이 JSON 객체 본문만 출력하세요.
 허용 도구: get_user_profile, search_meetings, read_knowledge_cards, read_summaries, read_transcript_chunks, read_full_transcript.
 도구 인자에는 앱이 검증하는 meetingId와 검색어만 사용하며 path, filename, URL, command를 만들지 마세요.
 tool_calls는 {"type":"tool_calls","toolCalls":[{"callId":"...","name":"...","arguments":{...}}]} 형태입니다.
@@ -109,14 +111,14 @@ function needsPersonalization(message: string): boolean {
   return /(?:^|\s)(?:내|나의|저의|제가|저는|나는)\s*(?:할\s*일|담당|일정|회의|액션|해야|관련)|\bmy\s+(?:tasks?|meetings?|schedule)\b/iu.test(message);
 }
 
+// Local CLIs (claude -p / codex exec) return the envelope wrapped in code fences
+// or surrounding prose, so we salvage the JSON object first (shared with the
+// summarizer) and only then validate it against the strict envelope schema.
 function parseModelEnvelope(raw: string): ModelChatEnvelope | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    const envelope = modelChatEnvelopeSchema.safeParse(parsed);
-    return envelope.success ? envelope.data : null;
-  } catch {
-    return null;
-  }
+  const parsed = extractJsonObject(raw);
+  if (!parsed) return null;
+  const envelope = modelChatEnvelopeSchema.safeParse(parsed);
+  return envelope.success ? envelope.data : null;
 }
 
 function orderedWarnings(values: ReadonlySet<ChatWarning>): ChatWarning[] {
