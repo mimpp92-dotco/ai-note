@@ -26,7 +26,7 @@ const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
 // (observed "process timed out after 120000ms" on an 88-min meeting). Re-summarize
 // is async (fire-and-forget + client polling), so the user never blocks on this —
 // a generous fixed ceiling is cheap. Health checks keep their own short timeouts.
-export const LLM_GENERATION_TIMEOUT_MS = 600_000; // 10 minutes
+export const LLM_GENERATION_TIMEOUT_MS = 1_800_000; // 30 minutes
 
 export async function runProcess(
   file: string,
