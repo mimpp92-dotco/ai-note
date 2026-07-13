@@ -136,7 +136,11 @@ export default async function MeetingDetailPage({
       segments={transcription.state === "complete" ? readSegments(p.segments) : []}
       summary={parseSummary(pair.summary)}
       hasAudio={existsSync(p.play) || existsSync(p.audio)}
-      resummarizeInflight={isSummarizeInflight(id)}
+      // Unified inflight signal: the durable status.summarizeAttempt (same field the list
+      // DTO reads) OR the in-process lock. Sharing summarizeAttempt keeps list and detail in
+      // agreement even after a restart or orphaned lease, when the in-memory lock is gone but
+      // the attempt persists until reconciliation clears it (R6).
+      resummarizeInflight={isSummarizeInflight(id) || status.summarizeAttempt !== undefined}
       backHref={detailSource?.backHref ?? "/"}
       location={placement
         ? { workspaceId: placement.workspaceId, folderId: placement.folderId }

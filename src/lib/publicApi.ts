@@ -207,6 +207,13 @@ export interface PublicMeetingListItem {
   status: MeetingStatus;
   startedAt: string;
   error: PublicStatusError | null;
+  // True while a (re)summarize holds a durable acceptance receipt (status.summarizeAttempt) —
+  // the same persistent signal the detail view reads. deriveStatus keeps the row at
+  // `summarized` when an old summary.json survives a re-summarize, so this boolean lets the
+  // list overlay 요약 중 and agree with the detail during an in-flight run (R6). Read-only.
+  // Optional so existing ScopedMeetingRow constructors stay valid; toPublicMeetingListItem
+  // always emits a concrete boolean.
+  resummarizeInflight?: boolean;
 }
 
 export function toPublicMeetingListItem(status: StatusJson): PublicMeetingListItem {
@@ -216,6 +223,7 @@ export function toPublicMeetingListItem(status: StatusJson): PublicMeetingListIt
     status: status.status,
     startedAt: status.startedAt,
     error: publicStatusError(status.error),
+    resummarizeInflight: status.summarizeAttempt !== undefined,
   };
 }
 

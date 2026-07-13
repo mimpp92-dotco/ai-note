@@ -65,7 +65,25 @@ describe("public meeting DTO allowlist", () => {
         message: "요약을 완료하지 못했습니다. 설정을 확인한 뒤 다시 시도해 주세요",
         action: "retry_summary",
       },
+      resummarizeInflight: false,
     });
+  });
+
+  it("marks the list item in-flight from the durable summarizeAttempt signal", () => {
+    // A (re)summarize commits status.summarizeAttempt (the same persistent signal
+    // the detail view reads) before running. deriveStatus leaves an old summary.json
+    // at `summarized`, so this boolean is how list and detail agree on 요약 중 (R6).
+    const running: StatusJson = {
+      ...status(),
+      error: null,
+      summarizeAttempt: {
+        attemptId: "attempt-1",
+        kind: "resummarize",
+        startedAt: "2026-07-10T00:30:00.000Z",
+      },
+    };
+    expect(toPublicMeetingListItem(running).resummarizeInflight).toBe(true);
+    expect(toPublicMeetingListItem(status()).resummarizeInflight).toBe(false);
   });
 });
 
