@@ -12,6 +12,7 @@ import {
   resetPageWindowForVersion,
   resolveCanonicalLibraryScope,
   resolveDegradedClientModel,
+  scopedMeetingPageClientSchema,
   type PageWindow,
 } from "@/lib/libraryClient";
 
@@ -51,6 +52,34 @@ const LIBRARY: PublicLibraryView = {
     folders: [],
   },
 };
+
+describe("scoped meeting page client schema", () => {
+  const meetingPagePayload = (extra: Record<string, unknown> = {}) => ({
+    mode: "ready" as const,
+    version: { libraryId: "571fa0e8-fff7-4b4a-8104-9f07475319ef", revision: 22 },
+    meetings: [{
+      id: "c56ec2d9-c38b-40e3-a685-3038ccdc6254",
+      title: "회의",
+      status: "summarized" as const,
+      startedAt: "2026-07-13T02:49:01.222Z",
+      error: null,
+      ...extra,
+    }],
+    nextCursor: null,
+  });
+
+  it("accepts the resummarizeInflight list-DTO field so the meeting page renders", () => {
+    // Regression: the server list DTO carries resummarizeInflight (R6); the meeting object
+    // is strict, so omitting it here would throw at parse time and the list would silently
+    // render empty even though the server returns rows.
+    expect(scopedMeetingPageClientSchema.safeParse(meetingPagePayload({ resummarizeInflight: false })).success).toBe(true);
+    expect(scopedMeetingPageClientSchema.safeParse(meetingPagePayload()).success).toBe(true);
+  });
+
+  it("still rejects a genuinely unknown meeting key", () => {
+    expect(scopedMeetingPageClientSchema.safeParse(meetingPagePayload({ bogusField: 1 })).success).toBe(false);
+  });
+});
 
 describe("library client freshness", () => {
   const current = {
