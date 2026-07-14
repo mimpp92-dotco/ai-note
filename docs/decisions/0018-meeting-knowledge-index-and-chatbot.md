@@ -21,7 +21,11 @@ AI 없는 `GET /api/search`는 corpus/card 후보를 결정적인 NFKC·AND subs
 
 전체 회의 챗봇은 모델이 직접 전체 파일을 읽거나 링크를 만드는 방식이 아니라 검색·회의 조회 도구를 호출한다. 서버는 반환 직전 tombstone을 재검증하고, persisted index의 title/status/location/reviewParticipants snapshot을 public current truth로 쓰지 않으며 live status/library metadata를 결합한다.
 
-`POST /api/chat`는 기존 configured CLI/Ollama adapter를 재사용하는 bounded non-streaming JSON loop이며 `get_user_profile`, `search_meetings`, `read_knowledge_cards`, `read_summaries`, `read_transcript_chunks`, `read_full_transcript`만 허용한다. 새 provider/API-key surface, background chat job, 서버 영구 대화 저장소를 만들지 않는다. UI history는 현재 browser tab의 완결 4 turn만 유지한다.
+`POST /api/chat`는 기존 configured CLI/Ollama adapter를 재사용하는 bounded non-streaming JSON loop이며 `get_user_profile`, `search_meetings`, `search_transcripts`, `read_knowledge_cards`, `read_summaries`, `read_transcript_chunks`, `read_full_transcript`만 허용한다. 새 provider/API-key surface, background chat job, 서버 영구 대화 저장소를 만들지 않는다. UI history는 현재 browser tab의 완결 4 turn만 유지한다.
+
+`search_transcripts`는 요약 기반 `search_meetings`가 고유명사·별칭 의역으로 놓친 회의를 위한 discovery 전용 도구다. AI 없는 `GET /api/search`는 여전히 transcript 전문을 매 요청마다 읽지 않지만, 챗봇 도구 계층에는 bounded transcript discovery가 추가되어 `transcriptScans` budget 안에서 artifact read lease로 전사 본문을 훑고 bounded snippet만 반환한다. Discovery(`search_meetings`·`search_transcripts`) 결과는 citation credit을 만들지 않으며, 찾은 meetingId를 summary/card/transcript read 도구로 다시 읽어야만 claim 근거가 된다. Adapter가 코드블록·머리말·`--output-format json` wrapper로 감싼 응답을 돌려줘도 공유 `extractJsonObject` salvage로 첫 균형 JSON 객체를 뽑아 envelope로 해석하고, 그래도 실패할 때만 요청당 한 번의 repair를 소비한다.
+
+검색·질문 UI 진입은 별도 `/search` 탭 페이지가 아니라 앱 셸의 두 표면이다: 좌측 rail/모바일 drawer 최상단 돋보기 트리거가 여는 shared `SearchOverlay`(native top-layer `AppDialog`)와, 우측 접이식 `회의 도우미` 챗봇 패널(desktop `<aside>` · mobile `AppDrawer`). 두 표면은 같은 `useMeetingSearch`/`SearchPanel`과 hoisted `useChatController`/`ChatClient`를 재사용하며, 챗봇 답변의 검색 액션은 페이지 이동 없이 같은 오버레이를 열고 `searchReplay`를 한 번 재생한다. `/api/search`·`/api/chat` 서버 계약과 evidence ledger 규칙은 이 UI 재배치로 바뀌지 않는다.
 
 서버 evidence ledger가 모델에 제공한 validated meeting ID와 claim의 사용 관계를 기록한다. 응답은 claim-level inline citation과 `evidenceStatus`를 가지며, 이는 semantic entailment 판정이 아니라 provenance 검사다. 모델은 raw reference 번호·title·link를 생성하지 않는다. 서버가 실제 인용된 meeting에 한해 첫 등장 순서로 stable `[n]`을 부여하고 안전한 app-relative link와 reference list를 만든다.
 

@@ -5,30 +5,41 @@ import { useRef, useState } from "react";
 import { AppDrawer } from "@/components/AppDialog";
 import { ChatClient, useChatController } from "@/components/ChatClient";
 import { CloseIcon } from "@/components/InlineIcons";
-import { useGuardedRouter } from "@/components/RecorderNavigation";
+import { SearchOverlay } from "@/components/SearchOverlay";
+import type { ChatResponse } from "@/domain/chat";
 
 // The chatbot lives in the app shell as a collapsible right-hand column (desktop)
 // and a reused AppDrawer (mobile). The controller is hoisted here so the current
 // conversation and draft survive collapse/expand; a browser refresh still starts
 // fresh (the controller keeps state in React memory only, matching the tab policy).
+// Search stays in the app shell too: the answer's search actions open the shared
+// SearchOverlay (phase 3) rather than navigating to a standalone page.
 export function ChatPanel() {
   const chat = useChatController();
-  const router = useGuardedRouter();
   const [expanded, setExpanded] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchReplay, setSearchReplay] = useState<
+    NonNullable<ChatResponse["searchReplay"]> | null
+  >(null);
   const launcherRef = useRef<HTMLButtonElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
+  const searchTriggerRef = useRef<HTMLElement | null>(null);
 
-  const goToSearch = () => {
+  const openSearch = (replay: NonNullable<ChatResponse["searchReplay"]> | null) => {
+    searchTriggerRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     setMobileOpen(false);
-    router.push("/search");
+    setSearchReplay(replay);
+    setSearchOpen(true);
   };
 
   const view = (
     <ChatClient
       controller={chat}
-      onSearchReplay={goToSearch}
-      onSwitchToSearch={goToSearch}
+      onSearchReplay={(replay) => openSearch(replay)}
+      onSwitchToSearch={() => openSearch(null)}
     />
   );
 
@@ -104,6 +115,13 @@ export function ChatPanel() {
           )}
         </AppDrawer>
       )}
+
+      <SearchOverlay
+        open={searchOpen}
+        initialReplay={searchReplay}
+        onDismiss={() => setSearchOpen(false)}
+        returnFocus={searchTriggerRef.current}
+      />
     </>
   );
 }

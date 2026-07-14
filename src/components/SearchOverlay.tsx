@@ -5,6 +5,7 @@ import {
   type KeyboardEvent,
   type MutableRefObject,
   type RefObject,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -465,13 +466,29 @@ export function SearchOverlay({
   open,
   onDismiss,
   returnFocus = null,
+  initialReplay = null,
 }: {
   open: boolean;
   onDismiss: () => void;
   returnFocus?: HTMLElement | null;
+  initialReplay?: NonNullable<ChatResponse["searchReplay"]> | null;
 }) {
   const search = useMeetingSearch();
   const inputRef = useRef<HTMLInputElement>(null);
+  // Replay a chatbot-provided search exactly once per open. The ref resets when
+  // the overlay closes so a later open with a fresh replay runs again.
+  const replayRef = useRef(search.replay);
+  replayRef.current = search.replay;
+  const replayedRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      replayedRef.current = false;
+      return;
+    }
+    if (replayedRef.current || !initialReplay) return;
+    replayedRef.current = true;
+    replayRef.current(initialReplay);
+  }, [open, initialReplay]);
   return (
     <AppDialog
       open={open}

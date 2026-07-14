@@ -2,7 +2,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SearchClient } from "@/components/SearchClient";
+import { ChatPanel } from "@/components/ChatPanel";
+import { RecorderSessionProvider } from "@/components/RecorderSessionProvider";
 import type { LibraryProviderValue } from "@/components/LibraryProvider";
 import type { ChatRequest, ChatResponse } from "@/domain/chat";
 import type { MeetingSearchResponse } from "@/lib/meetingSearch";
@@ -23,7 +24,7 @@ vi.mock("next/link", () => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: () => navigation,
-  usePathname: () => "/search",
+  usePathname: () => "/",
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -156,6 +157,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+// The chatbot now lives in the app-shell ChatPanel (desktop aside), and its search
+// actions open the shared SearchOverlay instead of a /search tab. The harness mounts
+// ChatPanel inside RecorderSessionProvider so GuardedLink references resolve.
+function renderChat() {
+  return render(
+    <RecorderSessionProvider>
+      <ChatPanel />
+    </RecorderSessionProvider>,
+  );
+}
+
 function composer(): HTMLTextAreaElement {
   return screen.getByRole("textbox", { name: "회의에 질문" });
 }
@@ -184,7 +196,7 @@ afterEach(() => {
 describe("ChatClient", () => {
   it("submits normal questions with a visible 1-to-5-line composer and ignores Shift+Enter and IME Enter", async () => {
     const { chatBodies } = stubFetch(() => response(chatPayload()));
-    render(<SearchClient />);
+    renderChat();
 
     const input = composer();
     expect(input).toHaveAttribute("rows", "1");
@@ -206,26 +218,17 @@ describe("ChatClient", () => {
     expect(await screen.findByText(/9월 출시/)).toBeInTheDocument();
   });
 
-  it("shows one honest loading status and preserves the in-flight draft across tab round trips", async () => {
+  it("shows one honest loading status without fake progress steps and preserves the in-flight draft", async () => {
     const pending = deferred<Response>();
     stubFetch(() => pending.promise);
-    const view = render(<SearchClient />);
+    const view = renderChat();
 
     fireEvent.change(composer(), { target: { value: "보존할 질문" } });
     fireEvent.keyDown(composer(), { key: "Enter", code: "Enter" });
     expect(screen.getByRole("status")).toHaveTextContent("답변을 준비하고 있습니다");
     expect(view.container).not.toHaveTextContent(/지도 확인|요약 읽기|원문 확인/);
     expect(screen.getByRole("button", { name: "질문하기" })).toBeDisabled();
-
-    fireEvent.click(screen.getByRole("tab", { name: "검색" }));
-    const search = screen.getByRole("searchbox", { name: "회의 검색" });
-    fireEvent.change(search, { target: { value: "검색 초안" } });
-    fireEvent.click(screen.getByRole("tab", { name: "질문" }));
     expect(composer()).toHaveValue("보존할 질문");
-    expect(screen.getByText("답변을 준비하고 있습니다")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "검색" }));
-    expect(screen.getByRole("searchbox", { name: "회의 검색" })).toHaveValue("검색 초안");
-    fireEvent.click(screen.getByRole("tab", { name: "질문" }));
 
     await act(async () => pending.resolve(response(chatPayload())));
     expect(await screen.findByText(/9월 출시/)).toBeInTheDocument();
@@ -248,7 +251,7 @@ describe("ChatClient", () => {
         href: `/meetings/meeting-${index + 1}`,
       }],
     })));
-    render(<SearchClient />);
+    renderChat();
 
     for (let index = 1; index <= 6; index += 1) {
       await ask(`${index}번째 질문`);
@@ -289,7 +292,7 @@ describe("ChatClient", () => {
         href: `/meetings/long-meeting-${index + 1}`,
       }],
     })));
-    render(<SearchClient />);
+    renderChat();
 
     for (let index = 1; index <= 5; index += 1) {
       await ask(`${index}번째 긴 질문`);
@@ -317,7 +320,7 @@ describe("ChatClient", () => {
         { number: 2, meetingId: "meeting-b", currentTitle: "디자인 회의", startedAt: "2026-07-11T00:00:00.000Z", href: "/meetings/meeting-b" },
       ],
     })));
-    render(<SearchClient />);
+    renderChat();
     await ask("출시일과 남은 일은?");
 
     const answer = await screen.findByRole("article", { name: "질문 답변" });
@@ -357,7 +360,7 @@ describe("ChatClient", () => {
         references: [{ number: 1, meetingId: "meeting-second", currentTitle: "둘째 회의 최신 제목", startedAt: "2026-07-11T00:00:00.000Z", href: "/meetings/meeting-second" }],
       }));
     });
-    render(<SearchClient />);
+    renderChat();
     await ask("첫 질문");
     await screen.findByText("첫 답변입니다.");
     await ask("둘째 질문");
@@ -384,7 +387,7 @@ describe("ChatClient", () => {
           ...chatPayload(),
           answerSegments: [{ kind: "claim", format: "paragraph", text: "검증되지 않은 새 답변입니다.", referenceNumbers: [2] }],
         }));
-    render(<SearchClient />);
+    renderChat();
     await ask("첫 질문");
     expect(await screen.findByText(/9월 출시/)).toBeInTheDocument();
 
@@ -397,7 +400,7 @@ describe("ChatClient", () => {
   });
 
   it("shows personalization only when requested and provides actionable model and search-data recovery", async () => {
-    const first = render(<SearchClient />);
+    const first = renderChat();
     stubFetch(() => response(chatPayload()));
     await ask("일반 질문");
     expect(await screen.findByText(/9월 출시/)).toBeInTheDocument();
@@ -405,14 +408,14 @@ describe("ChatClient", () => {
     first.unmount();
 
     stubFetch(() => response(chatPayload({ warnings: ["personalization_needed"] })));
-    const personalized = render(<SearchClient />);
+    const personalized = renderChat();
     await ask("내 할 일은?");
     expect(await screen.findByText(/내 정보를 설정하면/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "내 정보 설정" })).toHaveAttribute("href", "/settings");
     personalized.unmount();
 
     stubFetch(() => response({ error: { code: "chat_llm_unconfigured" } }, 409));
-    const modelError = render(<SearchClient />);
+    const modelError = renderChat();
     fireEvent.change(composer(), { target: { value: "보존할 모델 질문" } });
     fireEvent.click(screen.getByRole("button", { name: "질문하기" }));
     expect(await screen.findByText(/요약 모델 설정이 필요합니다/)).toBeInTheDocument();
@@ -421,7 +424,7 @@ describe("ChatClient", () => {
     modelError.unmount();
 
     stubFetch(() => response({ error: { code: "chat_index_unavailable" } }, 503));
-    render(<SearchClient />);
+    renderChat();
     fireEvent.change(composer(), { target: { value: "보존할 검색 질문" } });
     fireEvent.click(screen.getByRole("button", { name: "질문하기" }));
     expect(await screen.findByText(/검색 데이터를 사용할 수 없어/)).toBeInTheDocument();
@@ -433,7 +436,7 @@ describe("ChatClient", () => {
     stubFetch((_body, index) => index === 0
       ? response(chatPayload())
       : response({ error: { code: "chat_llm_unavailable" } }, 503));
-    render(<SearchClient />);
+    renderChat();
     await ask("깊게 볼 질문");
     expect(await screen.findByText(/9월 출시/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "더 깊게 찾기" }));
@@ -444,7 +447,7 @@ describe("ChatClient", () => {
     expect(screen.getByRole("button", { name: "더 깊게 찾기" })).toBeEnabled();
   });
 
-  it("copies inline markers and safe references, then replays a server-built search in the Search tab", async () => {
+  it("copies inline markers and safe references, then replays a server-built search in the overlay", async () => {
     const writeText = vi.fn(async (text: string) => {
       void text;
     });
@@ -465,7 +468,7 @@ describe("ChatClient", () => {
         resultCount: 1,
       },
     })));
-    render(<SearchClient />);
+    renderChat();
     await ask("출시일은?");
     await screen.findByText(/두 회의에서/);
 
@@ -478,15 +481,16 @@ describe("ChatClient", () => {
     expect(copied).not.toMatch(/meeting-a|meeting-b|\/meetings\//);
 
     fireEvent.click(screen.getByRole("button", { name: "검색 결과로 보기" }));
-    expect(screen.getByRole("tab", { name: "검색" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("searchbox", { name: "회의 검색" })).toHaveValue("출시일");
-    expect(screen.getByLabelText("워크스페이스")).toHaveValue(WORKSPACE);
-    expect(screen.getByLabelText("상태")).toHaveValue("summarized");
+    const overlay = await screen.findByRole("dialog", { name: "회의 검색" });
+    expect(overlay).toHaveAttribute("open");
+    expect(within(overlay).getByRole("searchbox", { name: "회의 검색" })).toHaveValue("출시일");
+    expect(within(overlay).getByLabelText("워크스페이스")).toHaveValue(WORKSPACE);
+    expect(within(overlay).getByLabelText("상태")).toHaveValue("summarized");
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith("/api/search?"))).toBe(true));
   });
 
   it("distinguishes partial and no-source answers with user-facing recovery copy only", async () => {
-    const view = render(<SearchClient />);
+    const view = renderChat();
     stubFetch((_body, index) => index === 0
       ? response(chatPayload({
           evidenceStatus: "partial",

@@ -31,6 +31,24 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+function searchResponse(query: string): unknown {
+  return {
+    query,
+    results: [{
+      meetingId: "meeting-1",
+      title: "제품 로드맵 회의",
+      status: "summarized",
+      startedAt: "2026-07-12T00:00:00.000Z",
+      location: null,
+      matches: [],
+      href: "/meetings/meeting-1",
+    }],
+    hasMore: false,
+    summaryPendingCount: 0,
+    index: { status: "ready", reasons: [], reindexable: true },
+  };
+}
+
 function chatPayload(overrides: Partial<ChatResponse> = {}): ChatResponse {
   return {
     answerSegments: [{
@@ -161,5 +179,64 @@ describe("ChatPanel", () => {
     const reopen = screen.getByRole("button", { name: "회의 도우미 펼치기" });
     expect(reopen.className).toContain("top-1/2");
     expect(reopen.className).not.toContain("bottom-4");
+  });
+
+  it("opens the in-shell search overlay for a chat search replay instead of navigating to a page", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/api/search")) return response(searchResponse("제품 로드맵"));
+      return response(chatPayload({
+        searchReplay: {
+          query: "제품 로드맵",
+          filters: {},
+          limit: 20,
+          resultCount: 1,
+        },
+      }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel();
+
+    fireEvent.change(desktopComposer(), { target: { value: "로드맵 결정은?" } });
+    const aside = screen.getByRole("complementary", { name: "회의 도우미" });
+    fireEvent.click(within(aside).getByRole("button", { name: "질문하기" }));
+
+    const replayButton = await screen.findByRole("button", { name: "검색 결과로 보기" });
+    fireEvent.click(replayButton);
+
+    const overlay = await screen.findByRole("dialog", { name: "회의 검색" });
+    expect(overlay).toHaveAttribute("open");
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/search"),
+        expect.anything(),
+      ),
+    );
+    expect(navigation.push).not.toHaveBeenCalled();
+  });
+
+  it("opens the in-shell search overlay when the answer has no replay to run", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(chatPayload({
+      answerSegments: [{
+        kind: "limitation",
+        format: "paragraph",
+        text: "관련 회의를 찾지 못했습니다.",
+        referenceNumbers: [],
+      }],
+      references: [],
+      evidenceStatus: "none",
+    }))));
+    renderPanel();
+
+    fireEvent.change(desktopComposer(), { target: { value: "로드맵 결정은?" } });
+    const aside = screen.getByRole("complementary", { name: "회의 도우미" });
+    fireEvent.click(within(aside).getByRole("button", { name: "질문하기" }));
+
+    const switchButton = await screen.findByRole("button", { name: "검색에서 찾아보기" });
+    fireEvent.click(switchButton);
+
+    const overlay = await screen.findByRole("dialog", { name: "회의 검색" });
+    expect(overlay).toHaveAttribute("open");
+    expect(navigation.push).not.toHaveBeenCalled();
   });
 });
