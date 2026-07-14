@@ -54,7 +54,7 @@
 | 본문 | ~14–15px, line-height 1.6, `#6B6158` |
 
 ## 레이아웃
-- **앱 셸**: desktop `lg` 이상은 약 272px library rail(`border-r border-line`, `bg-chrome`) + 콘텐츠(`flex-1 min-w-0`) + 우측 접이식 회의 도우미 `<aside>`(`border-l border-line`, `bg-chrome`, 약 380px)로 이루어진 3열 flex 셸이다. 회의 도우미는 layout의 세 번째 flex child이며 접으면 우측 세로 `회의 도우미` 재열기 토글만 남는다(§검색·질문 참조). Mobile/tablet은 64px top bar와 `h-dvh` modal drawer를 사용하고, 회의 도우미는 좌하단 launcher가 여는 `AppDrawer`로 제공한다. Modal dialog/drawer는 native `<dialog>.showModal()` browser top layer를 사용해 background inert와 focus containment를 얻고, app-level ref-count scroll lock으로 body 스크롤을 막는다. Native dialog가 아닌 popup만 별도 layer를 쓴다.
+- **앱 셸**: desktop `lg` 이상은 약 272px library rail(`border-r border-line`, `bg-chrome`) + 콘텐츠(`flex-1 min-w-0`)를 기본으로 하며, 회의 도우미가 활성일 때 우측 접이식 회의 도우미 `<aside>`(`border-l border-line`, `bg-chrome`, 약 380px)가 세 번째 flex child로 붙어 3열 flex 셸이 된다. **회의 도우미(챗봇)는 현재 dormant다** — `MEETING_ASSISTANT_ENABLED`(`src/lib/features.ts`, 기본 `false`)가 `true`일 때만 `layout.tsx`가 이 `<aside>`(및 mobile launcher)를 마운트하며, dormant 상태에서는 셸이 2열로만 렌더된다(ADR 0019, §검색·질문 참조). 활성 시 aside는 접으면 우측 세로 `회의 도우미` 재열기 토글만 남는다. Mobile/tablet은 64px top bar와 `h-dvh` modal drawer를 사용하고, 활성 시 회의 도우미는 좌하단 launcher가 여는 `AppDrawer`로 제공한다. Modal dialog/drawer는 native `<dialog>.showModal()` browser top layer를 사용해 background inert와 focus containment를 얻고, app-level ref-count scroll lock으로 body 스크롤을 막는다. Native dialog가 아닌 popup만 별도 layer를 쓴다.
 - **Library rail 구조**: identity → workspace switcher/create/rename → 돋보기 `검색` 트리거 → `모든 회의`/`미분류` → 독립 scroll folder section → 위치 저장 대기/단어 관리/설정 → shared 전사·요약 health. 진입 순서는 검색 → 모든 회의 → 폴더다. `검색` 트리거는 shared `SearchOverlay`(native top-layer `AppDialog`)를 열며 별도 `/search` 페이지는 없다. 프로필/팀/권한/템플릿/사용량 위젯은 없다.
 - **Folder tree**: nested `ul/li`를 쓰고 disclosure, scope link, edit/create-child trigger를 분리한다. 구현하지 않은 full ARIA tree role은 선언하지 않는다. Active ancestor는 자동 expand하며 depth 3에서는 child create를 노출하지 않고 최대 깊이 이유를 제공한다. 색상은 dot만 쓰지 않고 브라운/샌드/앰버/올리브/세이지 label과 selected shape/text를 함께 쓴다.
 - **Navigation active state**: 활성 scope/link는 `aria-current="page"`, `bg-soft`, `text-ink`, 더 선명한 weight를 함께 사용한다. Canonicalization은 old list 대신 skeleton과 한 번의 `aria-live` reason을 보인다.
@@ -76,6 +76,8 @@
 ## 화면 스펙 (상태별)
 
 ### 검색·질문
+
+> **현재 dormant 안내(ADR [0019](decisions/0019-meeting-assistant-dormant.md)):** 이 절의 **질문(회의 도우미 챗봇)** 표면은 build-time flag `MEETING_ASSISTANT_ENABLED`(기본 `false`)로 마운트가 차단돼 사용자에게 노출되지 않는다. 아래 질문·답변·챗봇 관련 스펙은 챗봇을 되살릴 때(flag=`true`)의 목표 디자인이며 코드·`/api/chat`은 보존된다. **검색(SearchOverlay)** 표면과 그 스펙은 dormant와 무관하게 그대로 유효하다.
 
 - **두 표면 구조(정본)**: 검색과 질문은 하나의 `/search` 탭 페이지가 아니라 앱 셸의 두 진입점으로 나뉜다. **검색**은 좌측 rail/모바일 drawer 최상단의 돋보기 `검색` 트리거가 여는 shared `SearchOverlay`(native top-layer `AppDialog`)이고, **질문(챗봇)**은 우측 접이식 `회의 도우미` 패널(desktop `<aside>` · mobile `AppDrawer`)이다. 두 표면은 같은 `useMeetingSearch`/`SearchPanel`(검색)과 hoisted `useChatController`/`ChatClient`(질문) 로직을 재사용한다. 챗봇 답변의 `검색 결과로 보기`/`검색에서 찾아보기` 액션은 페이지 이동 없이 같은 `SearchOverlay`를 열며, `searchReplay`가 있으면 열림과 동시에 서버가 만든 검색을 한 번 재생한다. 별도 탭 전환·`질문`/`검색` Tabs·기본 진입 탭 개념은 없다.
 - 비스트리밍 응답 중에는 확인할 수 없는 가짜 세부 진행 단계를 표시하지 않고 단일한 처리 중 상태만 알린다.

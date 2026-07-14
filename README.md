@@ -30,13 +30,15 @@ record (browser mic) → local Whisper (STT) → configured AI summary (worker) 
 3. A background worker feeds the transcript to your configured model and writes a corrected transcript (`transcript.md`) + structured summary (`summary.json`) — automatically, even if you close the tab.
 4. Organize meetings in local workspaces and up to three folder levels, then
    review and **copy / download / reveal the folder**.
-5. Use **검색/질문 (Search/Questions)** to find a meeting without AI or ask across meetings with inline, server-validated references.
+5. Use **검색 (Search)** to find a meeting without AI. (Asking across meetings — the **질문/회의 도우미 (Questions/Meeting assistant)** chatbot — is currently on hold; see below.)
 
 ## Find and ask across meetings
 
+> **Note — the 질문 (Questions) chatbot is currently dormant.** The **회의 도우미 (Meeting assistant)** surface is held behind a build-time flag (`MEETING_ASSISTANT_ENABLED`, default off) and is not mounted in the app while its local-CLI agent loop is reworked. Its code, the `/api/chat` route, and the shared knowledge index are preserved, not removed. Plain **검색 (Search)** below keeps working. See [decisions/0019](docs/decisions/0019-meeting-assistant-dormant.md).
+
 Open **검색/질문** from the library navigation. The **검색 (Search)** tab performs deterministic, AI-free text matching over derived local search data, supports date/workspace/folder/status/action-item filters, and links each match back to the current live meeting. It does not scan every full transcript on every request.
 
-The default **질문 (Questions)** tab reuses your configured summarizer through a bounded set of meeting-search and meeting-read tools. AI NOTE publishes a factual claim only when its cited meeting was actually read and is still live, assigns stable `[n]` numbers on the server, and lists the referenced meetings below the answer. This validates source provenance rather than automatically proving the model's interpretation, so important conclusions should still be checked against the linked meeting.
+The **질문 (Questions)** surface — currently dormant (see the note above) — reuses your configured summarizer through a bounded set of meeting-search and meeting-read tools. AI NOTE publishes a factual claim only when its cited meeting was actually read and is still live, assigns stable `[n]` numbers on the server, and lists the referenced meetings below the answer. This validates source provenance rather than automatically proving the model's interpretation, so important conclusions should still be checked against the linked meeting.
 
 Conversation context is limited to four complete turns in the current browser tab and is never written to a chat-history file; refresh clears it. The optional **내 정보 (My information)** section in Settings can add a display name, aliases, timezone, and week-start preference for questions such as “my action items,” but leaving it unset does not block ordinary search or questions. If search data is incomplete, the page keeps the current query/answer visible and offers a synchronous **검색 데이터 업데이트 (Update search data)** action.
 

@@ -32,3 +32,4 @@ $EDITOR docs/decisions/0019-내-결정.md   # 5칸 채우고 아래 목록에 �
 | [0016](0016-atomic-finalize-directory-publication.md) | Finalize는 receipt를 포함한 directory rename으로 publish | 채택됨 |
 | [0017](0017-corrupt-library-rebuild-and-generation-reset.md) | Corrupt library 원본 보존형 재구축과 client generation reset | 채택됨 |
 | [0018](0018-meeting-knowledge-index-and-chatbot.md) | 파생 지식 인덱스와 근거 기반 회의 챗봇 | 채택됨 |
+| [0019](0019-meeting-assistant-dormant.md) | 회의 도우미(챗봇) UI를 flag로 dormant, 코드·계약 보존(0018 유지) | 채택됨 |
