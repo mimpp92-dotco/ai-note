@@ -76,6 +76,10 @@ export const scopedMeetingPageClientSchema = z.object({
     status: z.enum(["recording", "recorded", "transcribing", "transcribed", "summarizing", "summarized"]),
     startedAt: clientTimestamp,
     error: clientStatusError,
+    // Durable re-summarize signal added to the list DTO (R6). The meeting object is
+    // strict, so the client schema must accept it or every meeting page parse throws
+    // and the list silently renders empty.
+    resummarizeInflight: z.boolean().optional(),
     location: z.object({
       workspaceId: z.string().uuid(),
       folderId: z.string().uuid().nullable(),
