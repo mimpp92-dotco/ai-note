@@ -5,6 +5,7 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { LibraryProvider } from "@/components/LibraryProvider";
 import { LibraryNavigation } from "@/components/LibraryNavigation";
 import { RecorderSessionProvider } from "@/components/RecorderSessionProvider";
+import { MEETING_ASSISTANT_ENABLED } from "@/lib/features";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -30,7 +31,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <LibraryNavigation />
               </Suspense>
               <div id="app-content" className="min-w-0 flex-1">{children}</div>
-              <ChatPanel />
+              {MEETING_ASSISTANT_ENABLED && <ChatPanel />}
             </div>
           </RecorderSessionProvider>
         </LibraryProvider>

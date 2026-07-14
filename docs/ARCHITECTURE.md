@@ -72,7 +72,7 @@ Card write는 caller의 meeting operation owner 아래 `safe meeting ID → tomb
 
 Library/classification snapshot과 card snapshot 사이의 최신성 경쟁은 허용하되 commit sequence가 더 새 corpus commit을 이전 snapshot으로 덮지 못하게 한다. `summary-work` read, library read/queue, per-meeting artifact lease, corpus queue는 중첩하지 않고 `snapshot → lease/queue release → corpus commit` 순서를 지킨다. Snapshot 뒤 title/review/location/delete가 바뀔 수 있으므로 corpus를 current truth로 간주하지 않으며 public consumer가 응답 직전 live join과 tombstone fence를 다시 수행한다.
 
-인덱스의 title/status/location/reviewParticipants 같은 mutable metadata snapshot은 public current truth가 아니다. Public projection은 persisted semantic fields만 선택하고 title/status/location/reviewParticipants를 query-time live status/library 입력에서 별도로 결합하며, 응답 직전 tombstone을 재검증한다. Title/review/move/delete lifecycle route에는 corpus fan-out hook을 추가하지 않는다. 챗봇은 검색·회의 조회 도구를 호출하며 서버 evidence ledger가 claim-level citation provenance를 검증한다. 모델은 번호/title/link를 만들지 않고 서버가 실제 인용된 validated meeting ID에 첫 등장 순서 stable 번호와 app-relative link를 부여한다. 상세 결정은 ADR [0018](decisions/0018-meeting-knowledge-index-and-chatbot.md)을 따른다.
+인덱스의 title/status/location/reviewParticipants 같은 mutable metadata snapshot은 public current truth가 아니다. Public projection은 persisted semantic fields만 선택하고 title/status/location/reviewParticipants를 query-time live status/library 입력에서 별도로 결합하며, 응답 직전 tombstone을 재검증한다. Title/review/move/delete lifecycle route에는 corpus fan-out hook을 추가하지 않는다. 챗봇은 검색·회의 조회 도구를 호출하며 서버 evidence ledger가 claim-level citation provenance를 검증한다. 모델은 번호/title/link를 만들지 않고 서버가 실제 인용된 validated meeting ID에 첫 등장 순서 stable 번호와 app-relative link를 부여한다. 상세 결정은 ADR [0018](decisions/0018-meeting-knowledge-index-and-chatbot.md)을 따른다. 챗봇 UI 진입점은 현재 dormant이며(ADR [0019](decisions/0019-meeting-assistant-dormant.md)) 이 인덱스 계약과 라우트는 보존된다.
 
 ### AI 없는 단순 검색 계약
 
@@ -109,6 +109,8 @@ Date/workspace/folder/status/action-item filter는 score 계산 전에 적용한
 ```
 
 ### 전체 회의 챗봇 tool protocol
+
+> **현재 dormant(ADR [0019](decisions/0019-meeting-assistant-dormant.md)):** 우측 `회의 도우미` UI 진입점은 build-time flag `MEETING_ASSISTANT_ENABLED`(기본 `false`)로 차단돼 사용자에게 노출되지 않는다. 아래 `POST /api/chat` tool protocol·budget·evidence ledger 계약과 라우트·오케스트레이터·테스트·공유 지식 인덱스는 **그대로 보존**한다(삭제 아님). 되살리는 법은 flag를 `true`로. 0018의 서버 계약은 유효하며 UI만 gated다.
 
 `POST /api/chat`는 Node dynamic·non-streaming route다. Local request guard를 body read, 설정 조회, filesystem, adapter 실행보다 먼저 적용하고 exact JSON을 128 KiB에서 제한한다. 요청은 strict `{message,mode:"normal"|"deep",history?}`이며 message는 4,000자, history는 완결된 `user → assistant` pair 최대 4개(8 item), item당 8,000자·합계 24,000자다. Assistant history의 optional `referenceMap`은 turn-local unique `{number:1..20,meetingId}`만 보존하고 title/href/path를 받지 않는다. History는 현재 요청 prompt 문맥에만 사용하며 서버 파일이나 별도 대화 저장소에 영구 저장하지 않는다.
 
@@ -150,6 +152,8 @@ Surviving claim의 meeting은 첫 등장 순서로 `1..N` 번호를 서버가 �
 `evidenceStatus`는 surviving claim이 없으면 `none`, card-only source 또는 unsupported/stale/truncated/budget/candidate/index/personalization degradation이 있으면 `partial`, 모든 cited source가 summary/transcript tier이고 degradation이 없을 때만 `sufficient`다. Model confidence는 public DTO에 없다. Public success는 no-store `{answerSegments,references,evidenceStatus,checkedScope,warnings,searchReplay?}`이며 reference 번호는 contiguous·meeting ID는 unique·모든 reference는 최소 한 claim에서 사용되어야 한다. Actionable failure는 같은 static envelope `{error:{code,message}}`로 `chat_llm_unconfigured`(409), `chat_llm_unavailable`(503), `chat_timeout`(504), `chat_index_unavailable`(503)을 반환하고 prompt, raw model/provider output, tool trace, absolute path를 응답이나 로그에 포함하지 않는다.
 
 ## 검색·질문의 persistence·provider 경계
+
+> **챗봇 관련 항목은 현재 dormant(ADR [0019](decisions/0019-meeting-assistant-dormant.md)):** 아래 `POST /api/chat`·chat UI history 경계는 보존되는 계약이며 UI 진입점만 flag로 차단된다. 단순 `GET /api/search`와 검색 표면은 dormant와 무관하게 계속 동작한다.
 
 - `data/user-profile.json`, meeting별 `knowledge-card.json`, `data/knowledge/corpus-map.json`은 gitignored local 파생/설정 데이터다. 프로필은 LLM provider 설정과 별도 writer를 가지며 API key를 포함하지 않는다. 단순 `GET /api/search`는 LLM이나 외부 network를 호출하지 않는다.
 - Chat UI는 완결 4 turn만 현재 browser tab의 React memory에 보존하고 새로고침 뒤 복원하지 않는다. Server는 요청의 bounded `history`를 prompt context로만 사용하며 chat session/file/database를 만들지 않는다.
