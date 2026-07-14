@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { summarySchema } from "@/domain/summarySchema";
-import { summarizeCore } from "@/lib/summarizeCore";
+import { extractJsonObject, summarizeCore } from "@/lib/summarizeCore";
 
 // raw.md-style transcript: one segment per line.
 const RAW = [
@@ -142,5 +142,37 @@ describe("summarizeCore", () => {
     });
 
     expect(result.transcript).toBe(corrected);
+  });
+});
+
+// The tolerant extractor is shared with the chatbot envelope parser (phase 1):
+// local CLIs (claude -p / codex exec) emit fenced or prose-wrapped JSON, so both
+// the summary and the chat paths must salvage the JSON object rather than doing a
+// bare JSON.parse on the whole output.
+describe("extractJsonObject — tolerant JSON extraction", () => {
+  const envelope = {
+    type: "tool_calls",
+    toolCalls: [{ callId: "a", name: "search_meetings", arguments: { query: "로드맵" } }],
+  };
+  const json = JSON.stringify(envelope);
+
+  it("(a) extracts an envelope from a ```json fenced block", () => {
+    expect(extractJsonObject(["```json", json, "```"].join("\n"))).toEqual(envelope);
+  });
+
+  it("(b) extracts JSON that follows leading prose", () => {
+    expect(extractJsonObject(`네, 다음과 같이 검색하겠습니다\n${json}`)).toEqual(envelope);
+  });
+
+  it("(c) extracts JSON that has trailing text after it", () => {
+    expect(extractJsonObject(`${json}\n위와 같이 도구를 호출합니다.`)).toEqual(envelope);
+  });
+
+  it("(d) parses pure JSON with no wrappers", () => {
+    expect(extractJsonObject(json)).toEqual(envelope);
+  });
+
+  it("returns null when there is no JSON object to salvage", () => {
+    expect(extractJsonObject("죄송합니다, 답변을 생성하지 못했습니다.")).toBeNull();
   });
 });

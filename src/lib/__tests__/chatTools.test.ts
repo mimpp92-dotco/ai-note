@@ -362,3 +362,59 @@ describe("request-fixed profile context", () => {
       .resolves.toMatchObject({ status: "ok", data: { results: [{ meetingId: MEETING }] } });
   });
 });
+
+describe("transcript discovery tool", () => {
+  it("discovers a meeting whose transcript carries a summary-lost proper noun", async () => {
+    const deps = dependencies({
+      readArtifactPair: vi.fn(async (id: string) => ({
+        transcript: id === MEETING
+          ? "오늘 라이드 프로젝트 일정과 예산을 확정했습니다."
+          : "무관한 재무 회의 내용입니다.",
+        summary: "{}",
+        state: "stable" as const,
+      })),
+      readLiveSnapshot: vi.fn().mockResolvedValue({
+        mode: "ready",
+        snapshot: {
+          generation: { libraryId: "library-1", revision: 1 },
+          records: [liveRecord(MEETING), liveRecord("meeting-2")],
+          invalidRecords: [],
+        },
+      }),
+    });
+    const executor = createChatToolExecutor({ mode: "normal", dependencies: deps });
+    const result = await executor.execute(call("search_transcripts", { query: "라이드" }));
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected ok");
+    const data = result.data as {
+      candidates: Array<{ meetingId: string; snippets: Array<{ text: string }> }>;
+    };
+    expect(data.candidates.map((candidate) => candidate.meetingId)).toEqual([MEETING]);
+    expect(data.candidates[0].snippets[0].text).toContain("라이드");
+  });
+
+  it("records only a non-read search tier so discovery grants no citation credit", async () => {
+    const deps = dependencies({
+      readArtifactPair: vi.fn(async () => ({ transcript: "라이드 회의록입니다.", summary: "{}", state: "stable" as const })),
+    });
+    const executor = createChatToolExecutor({ mode: "normal", dependencies: deps });
+    await executor.execute(call("search_transcripts", { query: "라이드" }));
+    const entry = executor.snapshot().evidence.find((item) => item.meetingId === MEETING);
+    expect(entry?.tiers).toEqual(["search"]);
+  });
+
+  it("excludes tombstoned meetings from discovery", async () => {
+    const deps = dependencies({
+      readArtifactPair: vi.fn(async () => ({ transcript: "라이드 회의록입니다.", summary: "{}", state: "stable" as const })),
+      inspectTombstone: vi.fn().mockResolvedValue({
+        state: "deleted",
+        tombstone: { id: MEETING, deletedAt: "2026-07-12T00:00:00.000Z" },
+      }),
+    });
+    const executor = createChatToolExecutor({ mode: "normal", dependencies: deps });
+    const result = await executor.execute(call("search_transcripts", { query: "라이드" }));
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected ok");
+    expect((result.data as { candidates: unknown[] }).candidates).toEqual([]);
+  });
+});

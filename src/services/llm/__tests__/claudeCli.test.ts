@@ -18,8 +18,8 @@ const runProcessMock = vi.mocked(runProcess);
 describe("ClaudeCliAdapter.run — isolated invocation", () => {
   beforeEach(() => runProcessMock.mockClear());
 
-  it("passes the 10-minute LLM generation timeout (not the 120s default)", async () => {
-    expect(LLM_GENERATION_TIMEOUT_MS).toBe(600_000);
+  it("passes the 30-minute LLM generation timeout (not the 120s default)", async () => {
+    expect(LLM_GENERATION_TIMEOUT_MS).toBe(1_800_000);
 
     await new ClaudeCliAdapter({ provider: "claude-cli" }).run("프롬프트");
 
@@ -109,6 +109,43 @@ describe("ClaudeCliAdapter.run — isolated invocation", () => {
     const args = runProcessMock.mock.calls[0]?.[1] ?? [];
     expect(args).toContain("--model");
     expect(args[args.indexOf("--model") + 1]).toBe("sonnet");
+  });
+});
+
+describe("ClaudeCliAdapter.run — json output contract", () => {
+  beforeEach(() => runProcessMock.mockClear());
+
+  it("requests structured output and unwraps the result envelope when json:true", async () => {
+    const answer = '{"type":"final","answerSegments":[],"limitationFlags":[]}';
+    runProcessMock.mockResolvedValueOnce({
+      stdout: JSON.stringify({ type: "result", subtype: "success", is_error: false, result: answer }),
+      stderr: "",
+    });
+
+    const out = await new ClaudeCliAdapter({ provider: "claude-cli" }).run("p", { json: true });
+
+    const args = runProcessMock.mock.calls[0]?.[1] ?? [];
+    expect(args).toContain("--output-format");
+    expect(args[args.indexOf("--output-format") + 1]).toBe("json");
+    // The wrapper's `result` field is the model's actual answer text.
+    expect(out).toBe(answer);
+  });
+
+  it("falls back to raw stdout when json output is not the result envelope (safety net)", async () => {
+    const fenced = '```json\n{"type":"final","answerSegments":[],"limitationFlags":[]}\n```';
+    runProcessMock.mockResolvedValueOnce({ stdout: fenced, stderr: "" });
+
+    const out = await new ClaudeCliAdapter({ provider: "claude-cli" }).run("p", { json: true });
+
+    // The orchestrator's tolerant extractor still receives the fenced payload intact.
+    expect(out).toBe(fenced);
+  });
+
+  it("does not request json output for a plain (correction) call", async () => {
+    await new ClaudeCliAdapter({ provider: "claude-cli" }).run("p");
+
+    const args = runProcessMock.mock.calls[0]?.[1] ?? [];
+    expect(args).not.toContain("--output-format");
   });
 });
 

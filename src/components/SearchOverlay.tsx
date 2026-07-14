@@ -3,16 +3,19 @@
 import {
   type FormEvent,
   type KeyboardEvent,
+  type MutableRefObject,
+  type RefObject,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 
-import { ChatClient, useChatController } from "@/components/ChatClient";
+import { AppDialog } from "@/components/AppDialog";
 import { useOptionalLibrary } from "@/components/LibraryProvider";
 import { SearchResults } from "@/components/SearchResults";
-import { Tabs } from "@/components/Tabs";
 import type { ChatResponse, ChatSearchFilters } from "@/domain/chat";
+import type { LibraryFolder, LibraryWorkspace } from "@/domain/library";
 import type { MeetingStatus } from "@/domain/meeting";
 import type { MeetingSearchResponse } from "@/lib/meetingSearch";
 
@@ -45,7 +48,6 @@ const STATUS_OPTIONS: Array<{ value: MeetingStatus; label: string }> = [
 
 type RequestPhase = "initial" | "loading" | "ready" | "request_error";
 type ReindexPhase = "idle" | "running" | "success" | "error";
-type SearchTab = "question" | "search";
 
 function activeFilterCount(filters: SearchFilterDraft): number {
   return [
@@ -102,10 +104,31 @@ function isSearchResponse(value: unknown): value is MeetingSearchResponse {
   ));
 }
 
-export function SearchClient() {
+export interface MeetingSearch {
+  query: string;
+  filters: SearchFilterDraft;
+  count: number;
+  phase: RequestPhase;
+  response: MeetingSearchResponse | null;
+  requestError: string | null;
+  reindexPhase: ReindexPhase;
+  showDataUpdate: boolean;
+  workspaces: LibraryWorkspace[];
+  availableFolders: LibraryFolder[];
+  compositionRef: MutableRefObject<boolean>;
+  onQueryChange(value: string): void;
+  onCompositionEnd(value: string): void;
+  updateFilter<Key extends keyof SearchFilterDraft>(key: Key, value: SearchFilterDraft[Key]): void;
+  setWorkspaceFilter(workspaceId: string): void;
+  submitSearch(): void;
+  onQueryKeyDown(event: KeyboardEvent<HTMLInputElement>): void;
+  resetFilters(): void;
+  reindex(): Promise<void>;
+  replay(replay: NonNullable<ChatResponse["searchReplay"]>): void;
+}
+
+export function useMeetingSearch(): MeetingSearch {
   const libraryState = useOptionalLibrary();
-  const [tab, setTab] = useState<SearchTab>("question");
-  const chat = useChatController();
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<SearchFilterDraft>(EMPTY_FILTERS);
   const [phase, setPhase] = useState<RequestPhase>("initial");
@@ -163,11 +186,6 @@ export function SearchClient() {
     void runSearch(query, { ...filters });
   };
 
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    submitSearch();
-  };
-
   const onQueryKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
@@ -203,34 +221,84 @@ export function SearchClient() {
     }
   };
 
-  const replayFromChat = (replay: NonNullable<ChatResponse["searchReplay"]>) => {
+  const replay = (replay: NonNullable<ChatResponse["searchReplay"]>) => {
     const replayFilters = filtersFromReplay(replay.filters);
-    setTab("search");
     setQuery(replay.query);
     setFilters(replayFilters);
     setReindexPhase("idle");
     void runSearch(replay.query, replayFilters);
   };
 
-  const showDataUpdate = response?.index.status !== "ready" && response?.index.reindexable;
+  const showDataUpdate = response?.index.status !== "ready" && !!response?.index.reindexable;
 
-  const searchPanel = (
+  return {
+    query,
+    filters,
+    count,
+    phase,
+    response,
+    requestError,
+    reindexPhase,
+    showDataUpdate,
+    workspaces: libraryState?.library?.workspaces ?? [],
+    availableFolders,
+    compositionRef,
+    onQueryChange: (value) => { setQuery(value); setReindexPhase("idle"); },
+    onCompositionEnd: (value) => { compositionRef.current = false; setQuery(value); },
+    updateFilter,
+    setWorkspaceFilter: (workspaceId) => {
+      setFilters((current) => ({ ...current, workspaceId, folderId: "" }));
+      setReindexPhase("idle");
+    },
+    submitSearch,
+    onQueryKeyDown,
+    resetFilters,
+    reindex,
+    replay,
+  };
+}
+
+export function SearchPanel({
+  search,
+  inputRef,
+}: {
+  search: MeetingSearch;
+  inputRef?: RefObject<HTMLInputElement>;
+}) {
+  const {
+    query,
+    filters,
+    count,
+    phase,
+    response,
+    requestError,
+    reindexPhase,
+    showDataUpdate,
+    workspaces,
+    availableFolders,
+    compositionRef,
+  } = search;
+
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    search.submitSearch();
+  };
+
+  return (
     <>
       <form onSubmit={onSubmit} aria-busy={phase === "loading"} className="max-w-3xl space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
           <label className="min-w-0 flex-1 text-[13px] font-semibold text-ink">
             회의 검색
             <input
+              ref={inputRef}
               type="search"
               value={query}
               maxLength={500}
-              onChange={(event) => { setQuery(event.currentTarget.value); setReindexPhase("idle"); }}
+              onChange={(event) => search.onQueryChange(event.currentTarget.value)}
               onCompositionStart={() => { compositionRef.current = true; }}
-              onCompositionEnd={(event) => {
-                compositionRef.current = false;
-                setQuery(event.currentTarget.value);
-              }}
-              onKeyDown={onQueryKeyDown}
+              onCompositionEnd={(event) => search.onCompositionEnd(event.currentTarget.value)}
+              onKeyDown={search.onQueryKeyDown}
               placeholder="예: 다음 분기 로드맵"
               className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-panel px-3 text-[15px] text-ink placeholder:text-inkSoft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             />
@@ -255,7 +323,7 @@ export function SearchClient() {
               <input
                 type="date"
                 value={filters.dateFrom}
-                onChange={(event) => updateFilter("dateFrom", event.currentTarget.value)}
+                onChange={(event) => search.updateFilter("dateFrom", event.currentTarget.value)}
                 className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               />
             </label>
@@ -264,7 +332,7 @@ export function SearchClient() {
               <input
                 type="date"
                 value={filters.dateTo}
-                onChange={(event) => updateFilter("dateTo", event.currentTarget.value)}
+                onChange={(event) => search.updateFilter("dateTo", event.currentTarget.value)}
                 className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               />
             </label>
@@ -272,15 +340,11 @@ export function SearchClient() {
               워크스페이스
               <select
                 value={filters.workspaceId}
-                onChange={(event) => {
-                  const workspaceId = event.currentTarget.value;
-                  setFilters((current) => ({ ...current, workspaceId, folderId: "" }));
-                  setReindexPhase("idle");
-                }}
+                onChange={(event) => search.setWorkspaceFilter(event.currentTarget.value)}
                 className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 <option value="">전체 워크스페이스</option>
-                {libraryState?.library?.workspaces.map((workspace) => (
+                {workspaces.map((workspace) => (
                   <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
                 ))}
               </select>
@@ -290,7 +354,7 @@ export function SearchClient() {
               <select
                 value={filters.folderId}
                 disabled={!filters.workspaceId}
-                onChange={(event) => updateFilter("folderId", event.currentTarget.value)}
+                onChange={(event) => search.updateFilter("folderId", event.currentTarget.value)}
                 className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
               >
                 <option value="">전체 폴더</option>
@@ -304,7 +368,7 @@ export function SearchClient() {
               상태
               <select
                 value={filters.status}
-                onChange={(event) => updateFilter("status", event.currentTarget.value as SearchFilterDraft["status"])}
+                onChange={(event) => search.updateFilter("status", event.currentTarget.value as SearchFilterDraft["status"])}
                 className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-inkFaint bg-bg px-3 text-[14px] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 <option value="">전체 상태</option>
@@ -317,7 +381,7 @@ export function SearchClient() {
               <input
                 type="checkbox"
                 checked={filters.hasActionItem}
-                onChange={(event) => updateFilter("hasActionItem", event.currentTarget.checked)}
+                onChange={(event) => search.updateFilter("hasActionItem", event.currentTarget.checked)}
                 className="h-4 w-4 accent-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               />
               할 일이 있는 회의만
@@ -327,7 +391,7 @@ export function SearchClient() {
         <button
           type="button"
           disabled={count === 0}
-          onClick={resetFilters}
+          onClick={search.resetFilters}
           className="min-h-11 rounded-lg px-3 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:text-inkSoft disabled:opacity-50"
         >
           필터 초기화
@@ -372,7 +436,7 @@ export function SearchClient() {
             <button
               type="button"
               aria-disabled={reindexPhase === "running"}
-              onClick={() => void reindex()}
+              onClick={() => void search.reindex()}
               className="min-h-11 rounded-lg border border-inkFaint bg-panel px-4 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent aria-disabled:opacity-50"
             >
               {reindexPhase === "running" ? "업데이트 중…" : "검색 데이터 업데이트"}
@@ -390,43 +454,52 @@ export function SearchClient() {
           <SearchResults
             response={response}
             activeFilterCount={count}
-            onResetFilters={resetFilters}
+            onResetFilters={search.resetFilters}
           />
         )}
       </div>
     </>
   );
+}
 
+export function SearchOverlay({
+  open,
+  onDismiss,
+  returnFocus = null,
+  initialReplay = null,
+}: {
+  open: boolean;
+  onDismiss: () => void;
+  returnFocus?: HTMLElement | null;
+  initialReplay?: NonNullable<ChatResponse["searchReplay"]> | null;
+}) {
+  const search = useMeetingSearch();
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Replay a chatbot-provided search exactly once per open. The ref resets when
+  // the overlay closes so a later open with a fresh replay runs again.
+  const replayRef = useRef(search.replay);
+  replayRef.current = search.replay;
+  const replayedRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      replayedRef.current = false;
+      return;
+    }
+    if (replayedRef.current || !initialReplay) return;
+    replayedRef.current = true;
+    replayRef.current(initialReplay);
+  }, [open, initialReplay]);
   return (
-    <main id="main" className="w-full max-w-5xl space-y-7 px-4 py-12 sm:px-6">
-      <header className="max-w-2xl">
-        <h1 className="text-2xl font-bold tracking-tight text-ink">검색/질문</h1>
-        <p className="mt-2 text-[14px] leading-relaxed text-inkSoft">
-          여러 회의에 질문해 출처와 함께 답을 확인하거나, 회의를 직접 검색합니다.
-        </p>
-      </header>
-
-      <Tabs<SearchTab>
-        id="search-question-tabs"
-        ariaLabel="회의 질문과 검색"
-        value={tab}
-        onValueChange={setTab}
-        panelClassName="pt-6"
-        items={[
-          {
-            value: "question",
-            label: "질문",
-            content: (
-              <ChatClient
-                controller={chat}
-                onSearchReplay={replayFromChat}
-                onSwitchToSearch={() => setTab("search")}
-              />
-            ),
-          },
-          { value: "search", label: "검색", content: searchPanel },
-        ]}
-      />
-    </main>
+    <AppDialog
+      open={open}
+      title="회의 검색"
+      onDismiss={onDismiss}
+      initialFocusRef={inputRef}
+      returnFocus={returnFocus}
+      className="max-w-2xl"
+      panelClassName="max-h-[calc(100dvh-2rem)] overflow-y-auto space-y-6 p-6"
+    >
+      <SearchPanel search={search} inputRef={inputRef} />
+    </AppDialog>
   );
 }

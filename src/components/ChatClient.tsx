@@ -4,6 +4,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
   useEffect,
+  useId,
   useRef,
   useState,
 } from "react";
@@ -336,6 +337,7 @@ export function ChatClient({
 }) {
   const compositionRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fieldId = useId();
   const isBusy = controller.busy !== null;
 
   const resizeTextarea = (textarea: HTMLTextAreaElement) => {
@@ -365,12 +367,12 @@ export function ChatClient({
   return (
     <section aria-label="회의 질문" className="min-w-0 max-w-3xl space-y-6">
       <form onSubmit={submit} aria-busy={isBusy ? "true" : undefined} className="min-w-0 space-y-3">
-        <label htmlFor="chat-question" className="block min-w-0 text-[13px] font-semibold text-ink">
+        <label htmlFor={fieldId} className="block min-w-0 text-[13px] font-semibold text-ink">
           회의에 질문
         </label>
         <textarea
           ref={textareaRef}
-          id="chat-question"
+          id={fieldId}
           rows={1}
           data-min-rows="1"
           data-max-rows="5"

@@ -112,18 +112,21 @@ Date/workspace/folder/status/action-item filter는 score 계산 전에 적용한
 
 `POST /api/chat`는 Node dynamic·non-streaming route다. Local request guard를 body read, 설정 조회, filesystem, adapter 실행보다 먼저 적용하고 exact JSON을 128 KiB에서 제한한다. 요청은 strict `{message,mode:"normal"|"deep",history?}`이며 message는 4,000자, history는 완결된 `user → assistant` pair 최대 4개(8 item), item당 8,000자·합계 24,000자다. Assistant history의 optional `referenceMap`은 turn-local unique `{number:1..20,meetingId}`만 보존하고 title/href/path를 받지 않는다. History는 현재 요청 prompt 문맥에만 사용하며 서버 파일이나 별도 대화 저장소에 영구 저장하지 않는다.
 
-챗봇은 기존 configured `LlmAdapter.run(prompt,{json:true})`를 model turn마다 한 번 호출하는 stateless JSON loop다. Streaming, background job, 새 provider/API-key surface를 만들지 않는다. 허용 envelope는 bounded `tool_calls | final`뿐이고 허용 도구는 다음 여섯 개다.
+챗봇은 기존 configured `LlmAdapter.run(prompt,{json:true})`를 model turn마다 한 번 호출하는 stateless JSON loop다. Streaming, background job, 새 provider/API-key surface를 만들지 않는다. 허용 envelope는 bounded `tool_calls | final`뿐이고 허용 도구는 다음 일곱 개다.
 
 - `get_user_profile({})`
 - `search_meetings({query,filters?,limit?})`
+- `search_transcripts({query,limit?})`
 - `read_knowledge_cards({meetingIds})`
 - `read_summaries({meetingIds})`
 - `read_transcript_chunks({meetingId,query,cursor?,limit?})`
 - `read_full_transcript({meetingId})`
 
+`search_transcripts`는 요약 기반 `search_meetings`가 놓친 후보를 위한 discovery 전용 도구다. `src/lib/transcriptSearch.ts`가 `/api/search`와 같은 locale-neutral 정규화에 Korean josa/eomi relaxation을 더해 keyword를 뽑고, artifact read lease 안에서 transcript를 훑어 bounded snippet과 matched-keyword projection만 반환한다(`transcriptScans` budget으로 스캔 회의 수를 제한). `search_meetings`와 `search_transcripts`는 둘 다 discovery 전용이라 그 결과 자체는 citation 근거가 아니며, 찾은 meetingId는 `read_summaries`/`read_transcript_chunks`/`read_knowledge_cards`/`read_full_transcript`로 다시 읽어야만 claim의 근거가 된다. AI 없는 `GET /api/search`는 이 도구와 무관하게 transcript 전문을 읽지 않는다.
+
 모델은 absolute/arbitrary path, filename, URL, command를 도구 인자로 넘길 수 없다. 회의 artifact 도구는 safe meeting ID → tombstone fence → artifact read lease → tombstone 재확인 → bounded pair/card read 순서를 지킨다. Card는 ready content만 내보내고 persisted title/status/location/review snapshot을 사용하지 않으며 마지막 live status/library projection으로 현재 metadata를 다시 결합한다. Transcript chunk cursor는 요청 범위에서만 유효한 opaque token이고 window는 겹치지 않는 4,000자 이하 구간이다. Full transcript는 문서 전체가 60,000자 이하이면서 남은 aggregate output budget에 들어올 때만 허용한다. 초과 시 `transcript_too_large`로 chunk search를 요구한다.
 
-질문, history, transcript/summary/card 본문과 tool output은 모두 untrusted JSON data block이다. 그 안의 “도구 호출”, “시스템 지시 변경”, “파일 읽기” 문구는 권한이 아니며 protocol 밖 이름/인자는 실행하지 않는다. Invalid JSON, tool args, final segment 또는 citation은 남은 model-turn 안에서 요청 전체당 repair 한 번만 허용하고 repair도 model turn을 소비한다.
+질문, history, transcript/summary/card 본문과 tool output은 모두 untrusted JSON data block이다. 그 안의 “도구 호출”, “시스템 지시 변경”, “파일 읽기” 문구는 권한이 아니며 protocol 밖 이름/인자는 실행하지 않는다. Adapter가 코드블록/머리말로 감싼 JSON을 돌려줘도 공유 `extractJsonObject` salvage로 첫 균형 JSON 객체를 뽑아 envelope로 해석하고(claude-cli `--output-format json` wrapper의 `result` 필드도 풀어냄), 그래도 실패하는 invalid JSON·tool args·final segment·citation만 남은 model-turn 안에서 요청 전체당 repair 한 번을 허용하며 repair도 model turn을 소비한다.
 
 | 예산 | normal | deep |
 |---|---:|---:|
@@ -133,6 +136,7 @@ Date/workspace/folder/status/action-item filter는 score 계산 전에 적용한
 | summary | 8 | 16 |
 | transcript window | 12 | 24 |
 | full transcript | 2 | 4 |
+| transcript scan(`search_transcripts`) | 40 | 80 |
 | aggregate tool output | 120,000자 | 240,000자 |
 
 Per-result 상한은 knowledge card 8,000자, summary 20,000자, transcript window 4,000자다. 모든 tool result는 `truncated`와 `budgetExhausted`를 구조화하고, 중복/초과 meeting ID, forged cursor, stale/corrupt/missing artifact, profile I/O, index unavailable을 raw path/fs/provider output 없는 typed result로 낮춘다. Profile missing은 정상 `{configured:false,runtimeTimezone,weekStartsOn,currentLocalDateTime}` 결과이며 일반 질문을 막거나 전역 warning을 만들지 않는다. 자기 지칭 해석에 실제 필요할 때만 `personalization_needed` clarification을 추가한다.
@@ -324,6 +328,8 @@ StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `re
 **비동기(202) + 클라이언트 폴링(ADR 0009):** 라우트는 사전 검증 후 durable attempt commit이 완료된 경우에만 백그라운드 실행과 **202**를 허용한다. 지원 환경의 일시 namespace-sync 실패는 503/launch 0, 알려진 미지원 플랫폼은 `durability:"best_effort"` 202다. UI는 3초 `router.refresh()`로 내용 변경 또는 coordinator-backed live operation 해제를 완료 신호로 사용한다. Durable attempt만 남은 cold entry는 최초 pair read/summary-work 갱신에서 reconcile한 뒤 completed 또는 `retry_summary` interrupted/ambiguous로 보인다.
 
 **실패 가시성(ADR 0009):** 재요약이 실패하면(기존 `summary.json` 있음) 상태를 `transcribed`로 강등하지 않고 **`summarized`를 유지**한 채 `retry_summary` 에러만 첨부한다(옛 요약 보존). `deriveStatus`는 `summarized` 승격 시 `retry_summary` 에러를 **보존**한다(그 외 에러는 정리) — GET 라우트가 파생 상태를 persist하며 배너를 지우던 조용한-실패를 막기 위함. 요약본이 없는 최초 요약 실패는 기존대로 `transcribed`+에러.
+
+**목록·상세 재요약 inflight 일치:** 요약 완료 회의를 재요약하는 동안 목록과 상세가 서로 다른 상태(목록=`요약 완료`, 상세=`요약 중`)를 보이지 않도록 둘 다 durable `status.summarizeAttempt`를 단일 inflight 신호로 공유한다. Public list DTO(`toPublicMeetingListItem`)는 `resummarizeInflight = (status.summarizeAttempt !== undefined)`를 노출하고, `MeetingRow`는 이때 `요약 중` badge를 렌더한다. 상세는 in-process 재요약 lock을 이 `resummarizeInflight`와 OR로 결합해 진입 시 이미 진행 중이던 재요약도 즉시 반영한다. 이 신호는 파생 상태(`deriveStatus`)나 FSM enum을 바꾸지 않는 표시용 flag이며, `summary.json` completion marker가 발행되고 attempt가 정리되면 사라진다.
 
 **LLM 생성 타임아웃(ADR 0009):** 교정·요약 서브프로세스/요청은 `LLM_GENERATION_TIMEOUT_MS = 600_000`(10분) 고정. `exec.ts` 기본값(120초)·헬스체크의 짧은 타임아웃은 유지하고 생성 호출에만 적용한다(88분 회의가 120초에 SIGKILL되던 원인). 비동기라 사용자가 직접 대기하지 않으므로 넉넉한 상한의 부담이 작다. 한 번의 재요약은 교정→요약→(폴백 요약) **순차 최대 3콜**이라 서버 최악 예산은 ~30분이며, 클라이언트 타임아웃 폴백(`RESUMMARIZE_TIMEOUT_MS = 3×600s+30s`)은 이 예산을 넘겨 잡아 긴 회의에서 조기 오탐 타임아웃을 막는다.
 

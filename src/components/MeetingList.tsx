@@ -10,6 +10,9 @@ export interface MeetingListItem {
   startedAt: string;
   error: StatusError | null;
   location?: { workspaceId: string; folderId: string | null; breadcrumb: string[] };
+  // Durable re-summarize signal (status.summarizeAttempt), surfaced by the list DTO. When
+  // set, the row shows 요약 중 even though deriveStatus reports `summarized` (R6).
+  resummarizeInflight?: boolean;
 }
 
 // Meeting cards (title · date · status label). Rendered inside the client

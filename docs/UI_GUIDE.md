@@ -54,8 +54,8 @@
 | 본문 | ~14–15px, line-height 1.6, `#6B6158` |
 
 ## 레이아웃
-- **앱 셸**: desktop `lg` 이상은 약 272px library rail(`border-r border-line`, `bg-chrome`) + 콘텐츠(`flex-1 min-w-0`). Mobile/tablet은 64px top bar와 `h-dvh` modal drawer를 사용한다. Modal dialog/drawer는 native `<dialog>.showModal()` browser top layer를 사용해 background inert와 focus containment를 얻고, app-level ref-count scroll lock으로 body 스크롤을 막는다. Native dialog가 아닌 popup만 별도 layer를 쓴다.
-- **Library rail 구조**: identity → workspace switcher/create/rename → `모든 회의`/`미분류` → 독립 scroll folder section → 위치 저장 대기/단어 관리/설정 → shared 전사·요약 health. 프로필/팀/권한/템플릿/사용량 위젯은 없다.
+- **앱 셸**: desktop `lg` 이상은 약 272px library rail(`border-r border-line`, `bg-chrome`) + 콘텐츠(`flex-1 min-w-0`) + 우측 접이식 회의 도우미 `<aside>`(`border-l border-line`, `bg-chrome`, 약 380px)로 이루어진 3열 flex 셸이다. 회의 도우미는 layout의 세 번째 flex child이며 접으면 우측 세로 `회의 도우미` 재열기 토글만 남는다(§검색·질문 참조). Mobile/tablet은 64px top bar와 `h-dvh` modal drawer를 사용하고, 회의 도우미는 좌하단 launcher가 여는 `AppDrawer`로 제공한다. Modal dialog/drawer는 native `<dialog>.showModal()` browser top layer를 사용해 background inert와 focus containment를 얻고, app-level ref-count scroll lock으로 body 스크롤을 막는다. Native dialog가 아닌 popup만 별도 layer를 쓴다.
+- **Library rail 구조**: identity → workspace switcher/create/rename → 돋보기 `검색` 트리거 → `모든 회의`/`미분류` → 독립 scroll folder section → 위치 저장 대기/단어 관리/설정 → shared 전사·요약 health. 진입 순서는 검색 → 모든 회의 → 폴더다. `검색` 트리거는 shared `SearchOverlay`(native top-layer `AppDialog`)를 열며 별도 `/search` 페이지는 없다. 프로필/팀/권한/템플릿/사용량 위젯은 없다.
 - **Folder tree**: nested `ul/li`를 쓰고 disclosure, scope link, edit/create-child trigger를 분리한다. 구현하지 않은 full ARIA tree role은 선언하지 않는다. Active ancestor는 자동 expand하며 depth 3에서는 child create를 노출하지 않고 최대 깊이 이유를 제공한다. 색상은 dot만 쓰지 않고 브라운/샌드/앰버/올리브/세이지 label과 selected shape/text를 함께 쓴다.
 - **Navigation active state**: 활성 scope/link는 `aria-current="page"`, `bg-soft`, `text-ink`, 더 선명한 weight를 함께 사용한다. Canonicalization은 old list 대신 skeleton과 한 번의 `aria-live` reason을 보인다.
 - 각 페이지는 자체 `<main id="main">`을 **좌측 정렬**로 소유(`mx-auto` 없이 `max-w-5xl`/`max-w-2xl` + mobile `px-4`, `sm` 이상 `px-6`, 기본 `py-12`). Root의 `overflow-x-hidden`으로 오류를 가리지 않고 각 content owner가 `min-w-0`, wrap/truncate와 element-level boundary를 책임진다.
@@ -77,7 +77,8 @@
 
 ### 검색·질문
 
-- 기존 shared `Tabs`를 사용하고 `질문` 탭을 기본 진입으로 둔다. 비스트리밍 응답 중에는 확인할 수 없는 가짜 세부 진행 단계를 표시하지 않고 단일한 처리 중 상태만 알린다.
+- **두 표면 구조(정본)**: 검색과 질문은 하나의 `/search` 탭 페이지가 아니라 앱 셸의 두 진입점으로 나뉜다. **검색**은 좌측 rail/모바일 drawer 최상단의 돋보기 `검색` 트리거가 여는 shared `SearchOverlay`(native top-layer `AppDialog`)이고, **질문(챗봇)**은 우측 접이식 `회의 도우미` 패널(desktop `<aside>` · mobile `AppDrawer`)이다. 두 표면은 같은 `useMeetingSearch`/`SearchPanel`(검색)과 hoisted `useChatController`/`ChatClient`(질문) 로직을 재사용한다. 챗봇 답변의 `검색 결과로 보기`/`검색에서 찾아보기` 액션은 페이지 이동 없이 같은 `SearchOverlay`를 열며, `searchReplay`가 있으면 열림과 동시에 서버가 만든 검색을 한 번 재생한다. 별도 탭 전환·`질문`/`검색` Tabs·기본 진입 탭 개념은 없다.
+- 비스트리밍 응답 중에는 확인할 수 없는 가짜 세부 진행 단계를 표시하지 않고 단일한 처리 중 상태만 알린다.
 - **검색 composition**: compact page heading 아래 검색 input과 명시적 dark `검색` primary action 하나를 둔다. Date/workspace/folder/status/action-item 조건은 기본 닫힌 native `필터` disclosure에 넣고, disclosure 밖에서도 active filter count와 `필터 초기화`를 확인할 수 있게 한다. 320px에서는 input/action과 filter field를 한 열로 쌓으며 Korean IME composition 중 Enter는 submit하지 않는다.
 - **검색 결과 hierarchy**: 결과는 card grid나 nested card가 아니라 위아래 divider를 공유하는 단일 column list다. 각 row는 live title → 날짜·live 위치·live 상태 한 metadata group → 최대 3개의 matched-field label/plain excerpt → 최소 44px `회의 열기` 순서다. `hasMore`는 “상위 N개 결과”와 검색어/필터를 좁히는 설명만 제공하고 다음/더 보기 control을 만들지 않는다.
 - Initial, 검색 중, 결과, 결과 없음, partial, unavailable, request error를 서로 다른 copy와 다음 행동으로 구분한다. 결과 없음은 검색어 축소와 filter reset을 안내하고, 요약 대기 회의는 제목·날짜·위치·참석자만 검색될 수 있음을 설명한다. Loading·request failure·재색인 중에도 이전 결과 surface와 현재 draft를 유지하고 결과 container에는 최소 높이를 둔다.
@@ -92,7 +93,7 @@
 |---|---|
 | 사용자 상황 | 혼자 여러 회의 사이의 결정·할 일·출처를 반복해서 찾는 사용자이며 긴 제목·답변과 불완전한 검색 데이터가 정상 상태다. |
 | 시각 register | Product / restrained / earned familiarity. Assistant persona, avatar, marketing hero, chat bubble, nested card를 만들지 않는다. |
-| 화면 순서 | 24px page heading → shared `질문`/`검색` Tabs → 선택한 입력 하나 → 상태와 결과. 한 탭에는 dark primary action을 하나만 둔다. |
+| 화면 순서 | 검색 오버레이는 `회의 검색` dialog heading → 검색 input + dark `검색` primary action 하나 → 필터 disclosure → 상태와 결과. 질문 패널은 `회의 도우미` heading → 대화(질문 heading + assistant `article`) → 질문 composer 순서다. 각 표면에는 dark primary action을 하나만 둔다(검색=`검색`, 질문=`질문하기`). |
 | 읽기 폭·간격 | 답변은 16px, line-height 1.6~1.7, 약 65~72ch로 제한한다. related gap은 8/12/16px, section gap은 24/32px의 기존 scale을 사용한다. |
 | 색·면·motion | 기존 warm palette와 system sans만 사용한다. 성공을 큰 배지로 만들지 않고 warning/error에만 필요한 semantic surface를 쓴다. 장식 motion·gradient·glass·glow를 추가하지 않는다. |
 
@@ -102,7 +103,7 @@
 - 읽기 순서는 claim과 inline `[n]` → 해당할 때 출처·검색 데이터·개인화 복구 안내 → divider형 `참고 회의` ordered list → deep 실패 안내 → 답변 action → 기본 닫힌 `확인한 범위`다. 같은 답변의 같은 회의는 같은 번호를 재사용하고, 각 assistant turn은 독립 fragment ID를 사용한다.
 - 답변 action은 최대 `더 깊게 찾기`, `검색 결과로 보기`, `답변 복사` 세 개다. `더 깊게 찾기`만 deep 재실행을 만들고, 실패하면 기존 답변을 유지한다. 복사 결과에는 inline 번호와 현재 제목·날짜의 참고 회의 목록을 포함하되 local href나 meeting ID는 넣지 않는다.
 - 답변 완료는 focus를 옮기지 않는다. Inline marker를 활성화했을 때만 연결된 reference row를 scroll하고 programmatic focus한다. 독립 control은 44px target과 visible focus를 유지한다.
-- 외부 디자인 레퍼런스는 검토 절차의 참고일 뿐 runtime/install dependency가 아니다. AI NOTE의 기존 palette, type, Tabs, control grammar가 항상 우선한다.
+- 외부 디자인 레퍼런스는 검토 절차의 참고일 뿐 runtime/install dependency가 아니다. AI NOTE의 기존 palette, type, `AppDialog`/`AppDrawer`, control grammar가 항상 우선한다.
 
 #### 검색·질문 상태 matrix
 

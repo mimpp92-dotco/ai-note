@@ -28,7 +28,11 @@ export class ClaudeCliAdapter implements LlmAdapter {
 
   constructor(private readonly settings: LlmSettings) {}
 
-  // `opts.json` is ignored: summarizeCore extracts JSON from plain text output.
+  // `opts.json` requests structured output: `claude -p --output-format json` wraps
+  // the answer in a result envelope ({"type":"result","result":"<text>",...}) that
+  // we unwrap back to the raw text. This makes the chatbot's JSON envelope parseable
+  // even when a free-form `claude -p` prepends CLI chatter; the caller's tolerant
+  // extractor stays the final safety net. Plain (correction) calls keep text output.
   //
   // Isolated + self-contained (aligned with codexCli's `-C tmpdir()` pattern):
   // run in a temp cwd, never the project directory, so no workspace CLAUDE.md /
@@ -37,10 +41,11 @@ export class ClaudeCliAdapter implements LlmAdapter {
   // env vars are scrubbed (PAID_BILLING_ENV_VARS) so a subscription-OAuth CLI is
   // never silently metered to a paid API ($0 invariant); HOME/PATH stay so OAuth
   // keychain access and binary lookup still work. The transcript goes via stdin
-  // only (never argv: `ps` exposure + ARG_MAX). Generation timeout stays at 600s.
-  async run(prompt: string): Promise<string> {
+  // only (never argv: `ps` exposure + ARG_MAX).
+  async run(prompt: string, opts?: { json?: boolean }): Promise<string> {
     const args = [
       "-p",
+      ...(opts?.json ? ["--output-format", "json"] : []),
       "--strict-mcp-config",
       "--mcp-config",
       '{"mcpServers":{}}',
@@ -57,7 +62,7 @@ export class ClaudeCliAdapter implements LlmAdapter {
         cwd,
         env,
       });
-      return stdout.trim();
+      return opts?.json ? unwrapResultEnvelope(stdout) : stdout.trim();
     } finally {
       // Cleanup is deliberately best-effort: a generated result remains valid
       // even when antivirus/indexer timing prevents immediate temp removal.
@@ -79,6 +84,23 @@ export class ClaudeCliAdapter implements LlmAdapter {
       return { ok: false, detail: "claude CLI error" };
     }
   }
+}
+
+// Unwrap the `--output-format json` result envelope to its `result` text. Falls
+// back to the untouched stdout when the envelope is absent or unparseable, so the
+// caller's tolerant extractor still gets a chance at whatever the CLI produced.
+function unwrapResultEnvelope(stdout: string): string {
+  const trimmed = stdout.trim();
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const result = (parsed as Record<string, unknown>).result;
+      if (typeof result === "string") return result.trim();
+    }
+  } catch {
+    // not the JSON envelope — hand back raw stdout unchanged.
+  }
+  return trimmed;
 }
 
 function isEnoent(err: unknown): boolean {

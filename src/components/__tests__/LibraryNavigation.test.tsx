@@ -256,14 +256,49 @@ describe("activated library navigation", () => {
     expect(within(nav).getByRole("link", { name: /모든 회의/ })).not.toHaveAttribute("aria-current");
   });
 
-  it("links to 검색/질문 and marks the search route active", () => {
-    navigation.pathname = "/search";
+  it("renders a search trigger above 모든 회의 and opens the search overlay from the rail", async () => {
     renderShell();
     const nav = screen.getByRole("navigation", { name: "라이브러리" });
-    const searchLink = within(nav).getByRole("link", { name: "검색/질문" });
-    expect(searchLink).toHaveAttribute("href", "/search");
-    expect(searchLink).toHaveAttribute("aria-current", "page");
-    expect(within(nav).getByRole("link", { name: /모든 회의/ })).not.toHaveAttribute("aria-current");
+    expect(within(nav).queryByRole("link", { name: "검색/질문" })).not.toBeInTheDocument();
+
+    const trigger = within(nav).getByRole("button", { name: "회의 검색" });
+    expect(trigger).toHaveClass("min-h-11");
+    expect(trigger.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+
+    const allLink = within(nav).getByRole("link", { name: /모든 회의/ });
+    const folderLink = within(nav).getByRole("link", { name: /프로젝트/ });
+    expect(trigger.compareDocumentPosition(allLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(allLink.compareDocumentPosition(folderLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    expect(screen.getAllByRole("navigation", { name: "라이브러리" })).toHaveLength(1);
+    expect(screen.queryByRole("dialog", { name: "회의 검색" })).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("dialog", { name: "회의 검색" })).toBeInTheDocument();
+  });
+
+  it("shows the search trigger in the mobile drawer and opens the overlay", async () => {
+    renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "라이브러리 메뉴 열기" }));
+    const drawer = screen.getByRole("dialog", { name: "라이브러리 메뉴" });
+    const trigger = within(drawer).getByRole("button", { name: "회의 검색" });
+    expect(trigger).toHaveClass("min-h-11");
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("dialog", { name: "회의 검색" })).toBeInTheDocument();
+  });
+
+  it("renders the search trigger above 모든 회의 in the fallback navigation", () => {
+    libraryState = readyState({ library: null });
+    render(
+      <RecorderSessionProvider>
+        <LibraryNavigation />
+        <main id="main">본문</main>
+      </RecorderSessionProvider>,
+    );
+    const nav = screen.getByRole("navigation", { name: "라이브러리" });
+    expect(within(nav).queryByRole("link", { name: "검색/질문" })).not.toBeInTheDocument();
+    const trigger = within(nav).getByRole("button", { name: "회의 검색" });
+    const allLink = within(nav).getByRole("link", { name: "모든 회의" });
+    expect(trigger.compareDocumentPosition(allLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("updates polite system rows only when the visible health label actually changes", () => {

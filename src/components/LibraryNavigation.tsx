@@ -18,7 +18,9 @@ import {
   KebabVerticalIcon,
   MenuIcon,
   PlusIcon,
+  SearchIcon,
 } from "@/components/InlineIcons";
+import { SearchOverlay } from "@/components/SearchOverlay";
 import {
   ContainerDeleteDialog,
   type ContainerDeleteCommitResult,
@@ -62,6 +64,8 @@ export function LibraryNavigation() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [folderMoveMessage, setFolderMoveMessage] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchTrigger, setSearchTrigger] = useState<HTMLElement | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
   const generationEpochRef = useRef(library.generationEpoch);
@@ -106,6 +110,10 @@ export function LibraryNavigation() {
     setDrawerOpen(false);
     window.sessionStorage.setItem("ai-note-focus-scope", "1");
   };
+  const openSearch = (trigger: HTMLElement) => {
+    setSearchTrigger(trigger);
+    setSearchOpen(true);
+  };
   const finishContainerDelete = (
     result: ContainerDeleteCommitResult,
     deleted: Editor,
@@ -145,6 +153,7 @@ export function LibraryNavigation() {
       setDrawerOpen(false);
       setEditor(null);
       setFolderMoveMessage(null);
+      setSearchOpen(false);
       window.sessionStorage.setItem("ai-note-focus-scope", "1");
       generationEpochRef.current = library.generationEpoch;
     }
@@ -178,6 +187,7 @@ export function LibraryNavigation() {
       toggleFolder={library.toggleFolder}
       onEdit={setEditor}
       onNavigationCommitted={navigationCommitted}
+      onOpenSearch={openSearch}
     />
   ) : (
     <FallbackNavigation
@@ -185,6 +195,7 @@ export function LibraryNavigation() {
       whisper={whisper}
       llm={llm}
       onNavigationCommitted={navigationCommitted}
+      onOpenSearch={openSearch}
     />
   );
 
@@ -279,6 +290,11 @@ export function LibraryNavigation() {
         />
       )}
       {folderMoveMessage && <span className="sr-only" role="status" aria-live="polite">{folderMoveMessage}</span>}
+      <SearchOverlay
+        open={searchOpen}
+        onDismiss={() => setSearchOpen(false)}
+        returnFocus={searchTrigger}
+      />
     </nav>
   );
 }
@@ -296,6 +312,7 @@ function NavigationContents({
   toggleFolder,
   onEdit,
   onNavigationCommitted,
+  onOpenSearch,
 }: {
   library: NonNullable<LibraryProviderValueLike["library"]>;
   currentWorkspaceId: string | null;
@@ -309,6 +326,7 @@ function NavigationContents({
   toggleFolder: (id: string) => void;
   onEdit: (editor: Editor) => void;
   onNavigationCommitted: () => void;
+  onOpenSearch: (trigger: HTMLElement) => void;
 }) {
   const router = useGuardedRouter();
   const workspace = library.workspaces.find((candidate) => candidate.id === currentWorkspaceId)
@@ -354,6 +372,7 @@ function NavigationContents({
       </div>
 
       <div className="space-y-1 px-3 py-3">
+        <SearchTrigger onOpenSearch={onOpenSearch} />
         <NavigationRow
           href={`/?workspace=${workspace.id}`}
           active={pathname === "/" && currentView === "all"}
@@ -405,7 +424,6 @@ function NavigationContents({
             <span>위치 저장 대기</span><span>{library.counts.organizationPendingCount}</span>
           </GuardedLink>
         )}
-        <NavigationRow href="/search" active={pathname.startsWith("/search")} label="검색/질문" onNavigationCommitted={onNavigationCommitted} />
         <NavigationRow href="/glossary" active={pathname.startsWith("/glossary")} label="단어 관리" onNavigationCommitted={onNavigationCommitted} />
         <NavigationRow href="/settings" active={pathname.startsWith("/settings")} label="설정" onNavigationCommitted={onNavigationCommitted} />
       </div>
@@ -421,23 +439,39 @@ function FallbackNavigation({
   whisper,
   llm,
   onNavigationCommitted,
+  onOpenSearch,
 }: {
   pathname: string;
   whisper: WhisperHealthState | null;
   llm: LlmHealthState | null;
   onNavigationCommitted: () => void;
+  onOpenSearch: (trigger: HTMLElement) => void;
 }) {
   return (
     <div className="flex h-full flex-col p-3">
       <GuardedLink href="/" className="px-3 py-3 text-[15px] font-bold text-ink" onNavigationCommitted={onNavigationCommitted}>AI NOTE</GuardedLink>
+      <SearchTrigger onOpenSearch={onOpenSearch} />
       <NavigationRow href="/" active={pathname === "/"} label="모든 회의" onNavigationCommitted={onNavigationCommitted} />
       <div className="mt-auto">
-        <NavigationRow href="/search" active={pathname.startsWith("/search")} label="검색/질문" onNavigationCommitted={onNavigationCommitted} />
         <NavigationRow href="/glossary" active={pathname.startsWith("/glossary")} label="단어 관리" onNavigationCommitted={onNavigationCommitted} />
         <NavigationRow href="/settings" active={pathname.startsWith("/settings")} label="설정" onNavigationCommitted={onNavigationCommitted} />
         <SystemRows whisper={whisper} llm={llm} />
       </div>
     </div>
+  );
+}
+
+function SearchTrigger({ onOpenSearch }: { onOpenSearch: (trigger: HTMLElement) => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="회의 검색"
+      onClick={(event) => onOpenSearch(event.currentTarget)}
+      className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-[14px] font-medium text-inkSoft hover:bg-panel hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+    >
+      <SearchIcon className="h-[18px] w-[18px] shrink-0" />
+      <span>검색</span>
+    </button>
   );
 }
 

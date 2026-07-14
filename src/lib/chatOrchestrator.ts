@@ -20,6 +20,7 @@ import {
   type ChatLiveMeeting,
   type ChatToolExecutor,
 } from "@/lib/chatTools";
+import { extractJsonObject } from "@/lib/summarizeCore";
 import { getConfiguredAdapter } from "@/services/llm";
 import type { LlmAdapter } from "@/services/llm/types";
 
@@ -28,7 +29,11 @@ const PERSONALIZATION_TEXT = "내 정보를 설정하면 담당 항목을 더 �
 
 const CHAT_PROTOCOL = `당신은 로컬 회의 자료를 질의하는 도우미입니다.
 반드시 JSON 객체 하나만 반환하고 type은 tool_calls 또는 final이어야 합니다.
-허용 도구: get_user_profile, search_meetings, read_knowledge_cards, read_summaries, read_transcript_chunks, read_full_transcript.
+코드펜스(\`\`\`)나 서두·후행 설명 없이 JSON 객체 본문만 출력하세요.
+허용 도구: get_user_profile, search_meetings, search_transcripts, read_knowledge_cards, read_summaries, read_transcript_chunks, read_full_transcript.
+search_meetings는 요약본 기반이라 고유명사·별칭이 의역으로 사라졌을 수 있습니다. 요약본 검색이 0건이거나 부족하면 search_transcripts로 전사 본문을 탐색해 후보 회의를 찾으세요.
+search_transcripts와 search_meetings는 discovery 전용이라 그 결과 자체는 근거가 아닙니다. discovery로 찾은 meetingId는 read_summaries·read_transcript_chunks·read_knowledge_cards·read_full_transcript로 다시 읽어야만 claim의 근거가 됩니다.
+검색어에는 조사·어미 없이 핵심 키워드·고유명사만 넣으세요(예: "라이드를"이 아니라 "라이드").
 도구 인자에는 앱이 검증하는 meetingId와 검색어만 사용하며 path, filename, URL, command를 만들지 마세요.
 tool_calls는 {"type":"tool_calls","toolCalls":[{"callId":"...","name":"...","arguments":{...}}]} 형태입니다.
 final은 {"type":"final","answerSegments":[...],"limitationFlags":[]} 형태입니다.
@@ -109,14 +114,14 @@ function needsPersonalization(message: string): boolean {
   return /(?:^|\s)(?:내|나의|저의|제가|저는|나는)\s*(?:할\s*일|담당|일정|회의|액션|해야|관련)|\bmy\s+(?:tasks?|meetings?|schedule)\b/iu.test(message);
 }
 
+// Local CLIs (claude -p / codex exec) return the envelope wrapped in code fences
+// or surrounding prose, so we salvage the JSON object first (shared with the
+// summarizer) and only then validate it against the strict envelope schema.
 function parseModelEnvelope(raw: string): ModelChatEnvelope | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    const envelope = modelChatEnvelopeSchema.safeParse(parsed);
-    return envelope.success ? envelope.data : null;
-  } catch {
-    return null;
-  }
+  const parsed = extractJsonObject(raw);
+  if (!parsed) return null;
+  const envelope = modelChatEnvelopeSchema.safeParse(parsed);
+  return envelope.success ? envelope.data : null;
 }
 
 function orderedWarnings(values: ReadonlySet<ChatWarning>): ChatWarning[] {

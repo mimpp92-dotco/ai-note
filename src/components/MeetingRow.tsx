@@ -118,7 +118,11 @@ export function MeetingRow({
             </span>
           )}
         </span>
-        <StatusBadge status={meeting.status} error={meeting.error} />
+        <StatusBadge
+          status={meeting.status}
+          error={meeting.error}
+          inflight={meeting.resummarizeInflight ?? false}
+        />
       </Link>
 
       <div className="absolute right-2 top-1/2 -translate-y-1/2 sm:right-3">
@@ -222,17 +226,19 @@ export function MeetingRow({
   );
 }
 
-function StatusBadge({ status, error }: { status: MeetingStatus; error: StatusError | null }) {
-  if (error?.action === "retry_summary") {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-error/10 px-3 py-1 text-[12px] font-medium text-error">
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-error" aria-hidden="true" />
-        요약 실패
-      </span>
-    );
-  }
-
-  if (status === "summarizing") {
+function StatusBadge({
+  status,
+  error,
+  inflight,
+}: {
+  status: MeetingStatus;
+  error: StatusError | null;
+  inflight: boolean;
+}) {
+  // A durable re-summarize (status.summarizeAttempt) wins over the file-derived status: while
+  // it runs the old summary.json survives, so deriveStatus reports `summarized` and would
+  // otherwise mask the run. This is the same signal the detail view reads (R6).
+  if (inflight || status === "summarizing") {
     return (
       <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
         <span
@@ -240,6 +246,15 @@ function StatusBadge({ status, error }: { status: MeetingStatus; error: StatusEr
           aria-hidden="true"
         />
         요약 중
+      </span>
+    );
+  }
+
+  if (error?.action === "retry_summary") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-error/10 px-3 py-1 text-[12px] font-medium text-error">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-error" aria-hidden="true" />
+        요약 실패
       </span>
     );
   }
