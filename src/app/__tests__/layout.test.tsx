@@ -45,7 +45,7 @@ describe("RootLayout responsive shell", () => {
     expect(shell?.classList.contains("overflow-x-hidden")).toBe(false);
   });
 
-  it("renders the chat panel as the third flex child after the content region", () => {
+  it("does not render the chat panel while the meeting assistant is dormant", () => {
     const markup = renderToStaticMarkup(
       <RootLayout>
         <main>본문</main>
@@ -55,13 +55,11 @@ describe("RootLayout responsive shell", () => {
     const shell = document.getElementById("app-content")?.parentElement;
     const children = shell ? [...shell.children] : [];
 
-    const contentIndex = children.findIndex((child) => child.id === "app-content");
     const chatIndex = children.findIndex(
       (child) => child.getAttribute("aria-label") === "회의 도우미",
     );
-    expect(chatIndex).toBeGreaterThan(contentIndex);
-    expect(children.at(-1)?.getAttribute("aria-label")).toBe("회의 도우미");
-    expect(children.at(-1)?.tagName).toBe("ASIDE");
+    expect(chatIndex).toBe(-1);
+    expect(children.at(-1)?.id).toBe("app-content");
   });
 
   it("keeps a single nav landmark and the skip -> nav -> main DOM order", () => {
@@ -82,5 +80,27 @@ describe("RootLayout responsive shell", () => {
     const following = Node.DOCUMENT_POSITION_FOLLOWING;
     expect(skip!.compareDocumentPosition(nav!) & following).toBeTruthy();
     expect(nav!.compareDocumentPosition(content!) & following).toBeTruthy();
+  });
+
+  it("renders the chat panel as the last flex child when the flag is on", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/features", () => ({ MEETING_ASSISTANT_ENABLED: true }));
+    try {
+      const { default: FlaggedLayout } = await import("@/app/layout");
+      const markup = renderToStaticMarkup(
+        <FlaggedLayout>
+          <main>본문</main>
+        </FlaggedLayout>,
+      );
+      const document = new DOMParser().parseFromString(markup, "text/html");
+      const shell = document.getElementById("app-content")?.parentElement;
+      const children = shell ? [...shell.children] : [];
+
+      expect(children.at(-1)?.getAttribute("aria-label")).toBe("회의 도우미");
+      expect(children.at(-1)?.tagName).toBe("ASIDE");
+    } finally {
+      vi.doUnmock("@/lib/features");
+      vi.resetModules();
+    }
   });
 });
