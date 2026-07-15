@@ -9,9 +9,21 @@ function section(heading: string, lines: string[]): string {
   return `## ${heading}\n${lines.map((l) => `- ${l}`).join("\n")}\n`;
 }
 
-export function formatSummaryMarkdown(summary: Summary, participants: string[] = []): string {
+export interface SummaryMarkdownOptions {
+  summaryOutdated?: boolean;
+}
+
+const OUTDATED_SUMMARY_WARNING =
+  "> ⚠️ 현재 스크립트 변경 후 회의록 요약이 갱신되지 않음";
+
+export function formatSummaryMarkdown(
+  summary: Summary,
+  participants: string[] = [],
+  options: SummaryMarkdownOptions = {},
+): string {
   const parts: string[] = [`# ${summary.title}`];
 
+  if (options.summaryOutdated === true) parts.push(OUTDATED_SUMMARY_WARNING);
   if (summary.oneLine) parts.push(`> ${summary.oneLine}`);
 
   const meta: string[] = [];
@@ -41,9 +53,10 @@ export function formatMeetingMarkdown(
   summary: Summary,
   transcript: string,
   participants: string[] = [],
+  options: SummaryMarkdownOptions = {},
 ): string {
   return (
-    formatSummaryMarkdown(summary, participants) +
+    formatSummaryMarkdown(summary, participants, options) +
     `\n## 전체 전사\n\n${transcript.trim()}\n`
   );
 }

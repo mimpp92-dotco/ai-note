@@ -47,6 +47,7 @@ describe("public meeting DTO allowlist", () => {
       whisper: { progress: 0.5 },
       review: { participants: ["딜런"] },
       error: { code: "summary_failed", action: "retry_summary" },
+      contentOperation: null,
     });
     const serialized = JSON.stringify(dto);
     for (const sentinel of ["/Users", "internal-job-id", "summarizeAttempts", "secret-dispatch", "token@example.com"]) {
@@ -65,6 +66,7 @@ describe("public meeting DTO allowlist", () => {
         message: "요약을 완료하지 못했습니다. 설정을 확인한 뒤 다시 시도해 주세요",
         action: "retry_summary",
       },
+      contentOperation: null,
       resummarizeInflight: false,
     });
   });
@@ -87,12 +89,12 @@ describe("public meeting DTO allowlist", () => {
   });
 
   it.each([
-    ["initial", true],
-    ["resummarize", true],
-    ["transcript_regenerate", true],
-    ["summary_regenerate", true],
-    ["manual_edit", false],
-  ] as const)("maps %s to the legacy generation-only inflight boolean", (kind, expected) => {
+    ["initial", "initial", true],
+    ["resummarize", "summary", true],
+    ["transcript_regenerate", "transcript", false],
+    ["summary_regenerate", "summary", true],
+    ["manual_edit", null, false],
+  ] as const)("maps %s to its public content operation", (kind, operation, legacyInflight) => {
     const intendedContentRevision = {
       transcript: {
         source: "generated" as const,
@@ -115,7 +117,11 @@ describe("public meeting DTO allowlist", () => {
         ...(["initial", "resummarize"].includes(kind) ? {} : { intendedContentRevision }),
       },
     } as StatusJson;
-    expect(toPublicMeetingListItem(running).resummarizeInflight).toBe(expected);
+    expect(toPublicMeeting(running).contentOperation).toBe(operation);
+    expect(toPublicMeetingListItem(running)).toMatchObject({
+      contentOperation: operation,
+      resummarizeInflight: legacyInflight,
+    });
   });
 
   it("preserves the transcript-generation retry action without treating it as retry_summary", () => {

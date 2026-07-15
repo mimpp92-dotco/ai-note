@@ -17,7 +17,7 @@ import {
   type ChatToolResult,
   type ChatWarning,
 } from "@/domain/chat";
-import type { MeetingStatus } from "@/domain/meeting";
+import type { ContentRevision, MeetingStatus } from "@/domain/meeting";
 import type { KnowledgeCardReadResult } from "@/lib/knowledgeIndexRepository";
 import { createKnowledgeIndexRepository } from "@/lib/knowledgeIndexRepository";
 import {
@@ -39,6 +39,7 @@ import {
   type MeetingTombstoneObservation,
 } from "@/lib/meetingTombstone";
 import { dataRoot, meetingPaths } from "@/lib/paths";
+import { readStatus } from "@/lib/status";
 import { collectTranscriptCandidates } from "@/lib/transcriptSearch";
 import {
   readUserProfile,
@@ -207,7 +208,12 @@ function errnoCode(error: unknown): string | undefined {
     : undefined;
 }
 
-async function readBoundedText(path: string): Promise<string | null> {
+interface BoundedTextArtifact {
+  bytes: Uint8Array;
+  text: string;
+}
+
+async function readBoundedText(path: string): Promise<BoundedTextArtifact | null> {
   let handle: Awaited<ReturnType<typeof open>> | null = null;
   try {
     const info = await lstat(path);
@@ -217,7 +223,10 @@ async function readBoundedText(path: string): Promise<string | null> {
     handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     const bytes = await handle.readFile();
     if (bytes.byteLength > MAX_INTERNAL_ARTIFACT_BYTES) throw new Error("unsafe_artifact");
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return {
+      bytes,
+      text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    };
   } catch (error) {
     if (errnoCode(error) === "ENOENT") return null;
     throw error;
@@ -229,11 +238,100 @@ async function readBoundedText(path: string): Promise<string | null> {
 async function readPairUnderHeldLease(meetingId: string): Promise<ArtifactPairReadResult> {
   try {
     const paths = meetingPaths(meetingId);
-    const transcript = await readBoundedText(paths.transcript);
-    const summary = await readBoundedText(paths.summary);
-    return { transcript, summary, state: "stable" };
+    const transcriptArtifact = await readBoundedText(paths.transcript);
+    const summaryArtifact = await readBoundedText(paths.summary);
+    if (transcriptArtifact === null && summaryArtifact === null) {
+      return {
+        transcript: null,
+        summary: null,
+        state: "missing",
+        revision: null,
+        contentRevision: null,
+        summaryOutdated: null,
+      };
+    }
+    if (transcriptArtifact === null || summaryArtifact === null) {
+      return {
+        transcript: null,
+        summary: null,
+        state: "ambiguous",
+        revision: null,
+        contentRevision: null,
+        summaryOutdated: null,
+      };
+    }
+    const revision = {
+      transcriptSha256: createHash("sha256").update(transcriptArtifact.bytes).digest("hex"),
+      summarySha256: createHash("sha256").update(summaryArtifact.bytes).digest("hex"),
+    };
+    const status = await readStatus(meetingId);
+    if (!status) {
+      return {
+        transcript: null,
+        summary: null,
+        state: "ambiguous",
+        revision,
+        contentRevision: null,
+        summaryOutdated: null,
+      };
+    }
+    const contentRevision: ContentRevision = status.contentRevision ?? {
+      transcript: {
+        source: "generated",
+        sha256: revision.transcriptSha256,
+        updatedAt: status.updatedAt,
+      },
+      summary: {
+        source: "generated",
+        sha256: revision.summarySha256,
+        basedOnTranscriptSha256: revision.transcriptSha256,
+        updatedAt: status.updatedAt,
+      },
+    };
+    if (
+      contentRevision.transcript.sha256 !== revision.transcriptSha256
+      || contentRevision.summary.sha256 !== revision.summarySha256
+    ) {
+      return {
+        transcript: null,
+        summary: null,
+        state: "source_conflict",
+        revision,
+        contentRevision: null,
+        summaryOutdated: null,
+      };
+    }
+    if (status.summarizeAttempt !== undefined) {
+      return {
+        transcript: null,
+        summary: null,
+        state: "active",
+        revision,
+        contentRevision,
+        summaryOutdated:
+          contentRevision.summary.basedOnTranscriptSha256
+          !== contentRevision.transcript.sha256,
+      };
+    }
+    return {
+      transcript: transcriptArtifact.text,
+      summary: summaryArtifact.text,
+      state: "stable",
+      revision,
+      contentRevision,
+      summaryOutdated:
+        contentRevision.summary.basedOnTranscriptSha256
+        !== contentRevision.transcript.sha256,
+    };
   } catch {
-    return { transcript: null, summary: null, state: "ambiguous" };
+    return {
+      transcript: null,
+      summary: null,
+      state: "ambiguous",
+      revision: null,
+      contentRevision: null,
+      summaryOutdated: null,
+    };
   }
 }
 
@@ -561,8 +659,18 @@ export function createChatToolExecutor(options: ChatToolExecutorOptions): ChatTo
       const transcript = read.status === "ready" && read.value.state === "stable"
         ? read.value.transcript
         : null;
-      return { meetingId: record.meetingId, transcript };
+      return {
+        meetingId: record.meetingId,
+        transcript,
+        summaryOutdated: read.status === "ready" && read.value.state === "stable"
+          ? read.value.summaryOutdated === true
+          : false,
+      };
     }));
+
+    if (inputs.some((input) => input.transcript !== null && input.summaryOutdated)) {
+      addWarning("stale_evidence");
+    }
 
     const discovery = collectTranscriptCandidates(inputs, call.arguments.query, {
       limit: call.arguments.limit ?? 10,
@@ -657,12 +765,19 @@ export function createChatToolExecutor(options: ChatToolExecutorOptions): ChatTo
       if (read.status === "unavailable") {
         return { meetingId, status: "unavailable" as const, reason: read.reason };
       }
+      if (read.value.state === "missing") {
+        return { meetingId, status: "unavailable" as const, reason: "artifact_missing" as const };
+      }
       if (read.value.state !== "stable") {
         addWarning("stale_evidence");
         return { meetingId, status: "unavailable" as const, reason: "artifact_unavailable" as const };
       }
       if (read.value.summary === null) {
         return { meetingId, status: "unavailable" as const, reason: "artifact_missing" as const };
+      }
+      if (read.value.summaryOutdated === true) {
+        addWarning("stale_evidence");
+        return { meetingId, status: "unavailable" as const, reason: "card_stale" as const };
       }
       const metadata = live.get(meetingId);
       if (!metadata) return { meetingId, status: "unavailable" as const, reason: "artifact_unavailable" as const };
@@ -737,11 +852,13 @@ export function createChatToolExecutor(options: ChatToolExecutorOptions): ChatTo
       () => dependencies.readArtifactPair(call.arguments.meetingId),
     );
     if (read.status === "unavailable") return errorResult(call, read.reason);
+    if (read.value.state === "missing") return errorResult(call, "artifact_missing");
     if (read.value.state !== "stable") {
       addWarning("stale_evidence");
       return errorResult(call, "artifact_unavailable");
     }
     if (read.value.transcript === null) return errorResult(call, "artifact_missing");
+    if (read.value.summaryOutdated === true) addWarning("stale_evidence");
     const allWindows = transcriptWindows(read.value.transcript, call.arguments.query);
     const windows = allWindows.slice(startWindow, startWindow + limit);
     let next: string | undefined;
@@ -781,11 +898,13 @@ export function createChatToolExecutor(options: ChatToolExecutorOptions): ChatTo
       () => dependencies.readArtifactPair(call.arguments.meetingId),
     );
     if (read.status === "unavailable") return errorResult(call, read.reason);
+    if (read.value.state === "missing") return errorResult(call, "artifact_missing");
     if (read.value.state !== "stable") {
       addWarning("stale_evidence");
       return errorResult(call, "artifact_unavailable");
     }
     if (read.value.transcript === null) return errorResult(call, "artifact_missing");
+    if (read.value.summaryOutdated === true) addWarning("stale_evidence");
     if (characterLength(read.value.transcript) > CHAT_RESULT_LIMITS.fullTranscriptChars) {
       return errorResult(call, "transcript_too_large");
     }

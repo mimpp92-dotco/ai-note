@@ -449,6 +449,107 @@ describe("title edit / delete / export overlay", () => {
     const md = await (await exportGET(appRequest(`http://t/api/meetings/${id}/export?fmt=md`), ctx(id))).text();
     expect(md).toContain("# 데일리 스크럼 2026-07-05"); // the AI title shown in the UI
     expect(md).not.toMatch(/^# 회의 /m); // never the "회의 YYYY-MM-DD HH:MM" placeholder
+    expect(md).not.toContain("현재 스크립트 변경 후 회의록 요약이 갱신되지 않음");
+  });
+
+  it("exports the current transcript with a stale-summary warning while keeping JSON schema unchanged", async () => {
+    const id = "m-export-stale";
+    await seedSummarized(id);
+    await titlePOST(titleReq(id, { title: "현재 표시 제목" }), ctx(id));
+    await reviewPOST(appRequest(`/api/meetings/${id}/review`, {
+      method: "POST",
+      body: JSON.stringify({ participants: ["현재 참석자"] }),
+    }), ctx(id));
+    const current = await (await contentGET(
+      appRequest(`/api/meetings/${id}/content`),
+      ctx(id),
+    )).json();
+    const saved = await transcriptPATCH(appRequest(`/api/meetings/${id}/transcript`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expectedRevision: current.revision,
+        transcript: "사용자가 수정한 현재 스크립트\n",
+      }),
+    }), ctx(id));
+    expect(saved.status).toBe(200);
+
+    const mdResponse = await exportGET(
+      appRequest(`/api/meetings/${id}/export?fmt=md`),
+      ctx(id),
+    );
+    expect(mdResponse.status).toBe(200);
+    const md = await mdResponse.text();
+    expect(md).toContain("# 현재 표시 제목");
+    expect(md).toContain("**참석자:** 현재 참석자");
+    expect(md).toContain("사용자가 수정한 현재 스크립트");
+    expect(md).toContain("현재 스크립트 변경 후 회의록 요약이 갱신되지 않음");
+
+    const jsonResponse = await exportGET(
+      appRequest(`/api/meetings/${id}/export?fmt=json`),
+      ctx(id),
+    );
+    expect(jsonResponse.status).toBe(200);
+    const exported = await jsonResponse.json();
+    expect(Object.keys(exported).sort()).toEqual([
+      "actionItems",
+      "decisions",
+      "discussion",
+      "followups",
+      "highlights",
+      "oneLine",
+      "participants",
+      "purpose",
+      "risks",
+      "title",
+      "topicSlug",
+    ]);
+    expect(exported).not.toHaveProperty("summaryOutdated");
+  });
+
+  it("fails closed instead of exporting ambiguous or source-conflicted pairs", async () => {
+    const sourceConflictId = "m-export-source-conflict";
+    await seedSummarized(sourceConflictId);
+    const current = await (await contentGET(
+      appRequest(`/api/meetings/${sourceConflictId}/content`),
+      ctx(sourceConflictId),
+    )).json();
+    const sourceConflictPaths = meetingPaths(sourceConflictId);
+    const sourceConflictStatus = JSON.parse(readFileSync(sourceConflictPaths.status, "utf8"));
+    sourceConflictStatus.contentRevision = {
+      transcript: {
+        source: "manual",
+        sha256: "0".repeat(64),
+        updatedAt: "2026-07-10T00:00:00.000Z",
+      },
+      summary: {
+        source: "generated",
+        sha256: current.revision.summarySha256,
+        basedOnTranscriptSha256: "0".repeat(64),
+        updatedAt: "2026-07-10T00:00:00.000Z",
+      },
+    };
+    writeFileSync(sourceConflictPaths.status, `${JSON.stringify(sourceConflictStatus)}\n`);
+
+    const conflicted = await exportGET(
+      appRequest(`/api/meetings/${sourceConflictId}/export?fmt=md`),
+      ctx(sourceConflictId),
+    );
+    expect(conflicted.status).toBe(409);
+    await expect(conflicted.json()).resolves.toMatchObject({
+      error: { code: "content_source_conflict" },
+    });
+
+    const ambiguousId = "m-export-ambiguous";
+    await seedSummarized(ambiguousId);
+    rmSync(meetingPaths(ambiguousId).transcript);
+    const ambiguous = await exportGET(
+      appRequest(`/api/meetings/${ambiguousId}/export?fmt=md`),
+      ctx(ambiguousId),
+    );
+    expect(ambiguous.status).toBe(409);
+    await expect(ambiguous.json()).resolves.toMatchObject({
+      error: { code: "content_state_ambiguous" },
+    });
   });
 
   it("DELETE tombstones and removes the folder (200), is idempotent (200), and 400s a bad id", async () => {

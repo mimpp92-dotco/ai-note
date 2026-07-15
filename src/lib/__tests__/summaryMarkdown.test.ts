@@ -23,6 +23,17 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
 }
 
 describe("formatSummaryMarkdown", () => {
+  it("keeps the default fresh output byte-compatible", () => {
+    expect(formatSummaryMarkdown(makeSummary(), ["딜런"])).toBe(
+      "# 주간 회의 2026-07-08\n\n"
+      + "> 이번 주 우선순위를 정렬했다.\n\n"
+      + "**목적:** 우선순위 정렬\n**참석자:** 딜런\n\n"
+      + "## 핵심\n- 온보딩 개선 착수\n- 재고 견적 완료\n\n\n"
+      + "## 결정사항\n- 온보딩을 최우선으로 진행한다.\n\n\n"
+      + "## 액션 아이템\n- [ ] 초안 작성 — 딜런 (2026-07-10)\n",
+    );
+  });
+
   it("omits empty sections and renders non-empty ones as bullets", () => {
     const md = formatSummaryMarkdown(makeSummary());
 
@@ -49,6 +60,18 @@ describe("formatSummaryMarkdown", () => {
     expect(formatSummaryMarkdown(makeSummary())).not.toContain("**참석자:**");
     expect(formatSummaryMarkdown(makeSummary(), [])).not.toContain("**참석자:**");
   });
+
+  it("adds an explicit freshness warning only for an outdated summary", () => {
+    const fresh = formatSummaryMarkdown(makeSummary(), ["딜런"]);
+    const outdated = formatSummaryMarkdown(makeSummary(), ["딜런"], {
+      summaryOutdated: true,
+    });
+    const warning = "현재 스크립트 변경 후 회의록 요약이 갱신되지 않음";
+
+    expect(fresh).not.toContain(warning);
+    expect(outdated).toContain(warning);
+    expect(outdated.indexOf(warning)).toBeLessThan(outdated.indexOf("이번 주 우선순위를 정렬했다."));
+  });
 });
 
 describe("formatMeetingMarkdown", () => {
@@ -63,5 +86,15 @@ describe("formatMeetingMarkdown", () => {
     // transcript section is appended verbatim
     expect(md).toContain("## 전체 전사");
     expect(md).toContain(transcript);
+  });
+
+  it("places an outdated warning immediately after the combined document title", () => {
+    const md = formatMeetingMarkdown(makeSummary(), "현재 전사", ["딜런"], {
+      summaryOutdated: true,
+    });
+    expect(md).toMatch(
+      /^# 주간 회의 2026-07-08\n\n> ⚠️ 현재 스크립트 변경 후 회의록 요약이 갱신되지 않음/u,
+    );
+    expect(md).toContain("## 전체 전사\n\n현재 전사\n");
   });
 });

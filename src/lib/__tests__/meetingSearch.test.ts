@@ -61,6 +61,7 @@ function live(
     },
     reviewParticipants: ["현재 참석자"],
     summarizeAttemptPending: false,
+    summaryOutdated: false,
     ...overrides,
   };
 }
@@ -323,6 +324,29 @@ describe("deterministic meeting search", () => {
       snapshots: [snapshot(records)],
     }));
     expect(semantic.results).toEqual([]);
+  });
+
+  it("keeps outdated summary semantics unavailable while preserving safe live metadata matches", async () => {
+    const outdated = live("outdated", {
+      title: "현재 메타데이터 제목",
+      summaryOutdated: true,
+    });
+    const sources = () => makeSources({
+      cards: { outdated: { mode: "ready", card: card("outdated") } },
+      snapshots: [snapshot([outdated])],
+    });
+
+    const semantic = await searchMeetings({ query: "검색 가능한" }, sources());
+    expect(semantic.results).toEqual([]);
+    expect(semantic.index).toEqual({
+      status: "partial",
+      reasons: ["stale"],
+      reindexable: true,
+    });
+
+    const metadata = await searchMeetings({ query: "현재 메타데이터" }, sources());
+    expect(metadata.results.map((item) => item.meetingId)).toEqual(["outdated"]);
+    expect(metadata.index.reasons).toContain("stale");
   });
 
   it("uses current title, location, status, and review participants instead of persisted snapshots", async () => {

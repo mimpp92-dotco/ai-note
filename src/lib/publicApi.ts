@@ -186,8 +186,21 @@ const publicMeetingSchema = z.object({
   audioMime: z.string(),
   whisper: z.object({ progress: z.number() }),
   review: z.object({ participants: z.array(z.string()) }),
+  contentOperation: z.enum(["initial", "transcript", "summary"]).nullable(),
   updatedAt: z.string(),
 }).strict();
+
+export type PublicContentOperation = "initial" | "transcript" | "summary";
+
+export function contentOperationForStatus(
+  status: StatusJson,
+): PublicContentOperation | null {
+  const kind = status.summarizeAttempt?.kind;
+  if (kind === "initial") return "initial";
+  if (kind === "transcript_regenerate") return "transcript";
+  if (kind === "resummarize" || kind === "summary_regenerate") return "summary";
+  return null;
+}
 
 export interface PublicMeeting {
   id: string;
@@ -201,6 +214,7 @@ export interface PublicMeeting {
   audioMime: string;
   whisper: { progress: number };
   review: { participants: string[] };
+  contentOperation?: PublicContentOperation | null;
   updatedAt: string;
 }
 
@@ -217,6 +231,7 @@ export function toPublicMeeting(status: StatusJson): PublicMeeting {
     audioMime: status.audioMime,
     whisper: { progress: status.whisper.progress },
     review: { participants: [...status.review.participants] },
+    contentOperation: contentOperationForStatus(status),
     updatedAt: status.updatedAt,
   }) as PublicMeeting;
 }
@@ -227,25 +242,24 @@ export interface PublicMeetingListItem {
   status: MeetingStatus;
   startedAt: string;
   error: PublicStatusError | null;
-  // True while a (re)summarize holds a durable acceptance receipt (status.summarizeAttempt) —
-  // the same persistent signal the detail view reads. deriveStatus keeps the row at
-  // `summarized` when an old summary.json survives a re-summarize, so this boolean lets the
-  // list overlay 요약 중 and agree with the detail during an in-flight run (R6). Read-only.
-  // Optional so existing ScopedMeetingRow constructors stay valid; toPublicMeetingListItem
-  // always emits a concrete boolean.
+  // Durable content generation kind. `manual_edit` is intentionally null: a
+  // save is not presented as transcript/summary generation.
+  contentOperation?: PublicContentOperation | null;
+  // Legacy summary-only compatibility signal. Transcript generation must not be
+  // collapsed into this boolean; new consumers use contentOperation instead.
   resummarizeInflight?: boolean;
 }
 
 export function toPublicMeetingListItem(status: StatusJson): PublicMeetingListItem {
+  const contentOperation = contentOperationForStatus(status);
   return {
     id: status.id,
     title: status.title,
     status: status.status,
     startedAt: status.startedAt,
     error: publicStatusError(status.error),
-    resummarizeInflight:
-      status.summarizeAttempt !== undefined
-      && status.summarizeAttempt.kind !== "manual_edit",
+    contentOperation,
+    resummarizeInflight: contentOperation === "initial" || contentOperation === "summary",
   };
 }
 

@@ -29,8 +29,31 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const pair = await readArtifactPair(id);
   const refenced = await meetingFenceResponse(id);
   if (refenced) return refenced;
+  if (pair.state === "source_conflict") {
+    return publicErrorResponse("content_source_conflict", 409, {
+      meetingId: id,
+      action: "export",
+    });
+  }
   if (pair.state === "ambiguous") {
-    return publicErrorResponse("summary_failed", 409, { meetingId: id, action: "reveal" });
+    return publicErrorResponse("content_state_ambiguous", 409, {
+      meetingId: id,
+      action: "export",
+    });
+  }
+  if (
+    pair.state === "active"
+    && (
+      !pair.revision
+      || !pair.contentRevision
+      || pair.revision.transcriptSha256 !== pair.contentRevision.transcript.sha256
+      || pair.revision.summarySha256 !== pair.contentRevision.summary.sha256
+    )
+  ) {
+    return publicErrorResponse("content_operation_in_progress", 409, {
+      meetingId: id,
+      operation: "content_mutation",
+    });
   }
   if (pair.summary === null) {
     return publicErrorResponse("meeting_not_found", 404, { meetingId: id });
@@ -64,6 +87,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     { ...summary, title: effectiveTitle },
     transcript,
     status?.review.participants ?? [],
+    { summaryOutdated: pair.summaryOutdated === true },
   );
 
   return new Response(md, {

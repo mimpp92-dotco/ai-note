@@ -65,7 +65,11 @@ export const publicLibraryClientSchema = z.object({
 const clientStatusError = z.object({
   code: z.string(),
   message: z.string(),
-  action: z.enum(["retry_transcription", "retry_summary"]),
+  action: z.enum([
+    "retry_transcription",
+    "retry_transcript_generation",
+    "retry_summary",
+  ]),
 }).passthrough().nullable();
 export const scopedMeetingPageClientSchema = z.object({
   mode: z.enum(["ready", "degraded_last_good", "degraded_fallback"]),
@@ -76,9 +80,9 @@ export const scopedMeetingPageClientSchema = z.object({
     status: z.enum(["recording", "recorded", "transcribing", "transcribed", "summarizing", "summarized"]),
     startedAt: clientTimestamp,
     error: clientStatusError,
-    // Durable re-summarize signal added to the list DTO (R6). The meeting object is
-    // strict, so the client schema must accept it or every meeting page parse throws
-    // and the list silently renders empty.
+    contentOperation: z.enum(["initial", "transcript", "summary"]).nullable().optional(),
+    // Legacy payloads may still carry the summary-only boolean. New payloads use
+    // contentOperation so transcript generation is not rendered as summary work.
     resummarizeInflight: z.boolean().optional(),
     location: z.object({
       workspaceId: z.string().uuid(),
@@ -93,7 +97,11 @@ export const summaryWorkClientSchema = z.object({
   summaryWork: z.object({
     processing: z.number().int().nonnegative(),
     needsAttention: z.number().int().nonnegative(),
-    attention: z.object({ meetingId: z.string(), cursor: z.string() }).strict().nullable(),
+    attention: z.object({
+      meetingId: z.string(),
+      cursor: z.string(),
+      action: z.enum(["retry_transcript_generation", "retry_summary"]).optional(),
+    }).strict().nullable(),
   }).strict(),
   observedAt: clientTimestamp,
 }).strict();
@@ -106,6 +114,8 @@ export const organizationPendingClientSchema = z.object({
     status: z.enum(["recording", "recorded", "transcribing", "transcribed", "summarizing", "summarized"]),
     startedAt: clientTimestamp,
     error: clientStatusError,
+    contentOperation: z.enum(["initial", "transcript", "summary"]).nullable().optional(),
+    resummarizeInflight: z.boolean().optional(),
     organizationPending: z.literal(true),
     resolution: z.enum(["pending", "unavailable"]),
     requested: z.object({
