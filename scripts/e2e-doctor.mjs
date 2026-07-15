@@ -1,12 +1,16 @@
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { chromium } from "@playwright/test";
 
+import { resolveE2eNodeModules } from "./e2e-harness.mjs";
+
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const expectedVersion = packageJson.devDependencies?.["@playwright/test"];
+const nodeModules = await resolveE2eNodeModules(new URL("..", import.meta.url), expectedVersion);
 const installedPackage = JSON.parse(
-  await readFile(new URL("../node_modules/@playwright/test/package.json", import.meta.url), "utf8"),
+  await readFile(join(nodeModules, "@playwright", "test", "package.json"), "utf8"),
 );
 const nodeMajor = Number(process.versions.node.split(".")[0]);
 

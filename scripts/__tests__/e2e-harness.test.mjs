@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import {
   buildE2eServerEnv,
   parseE2ePort,
   resolveE2eSnapshotRoot,
+  resolveE2eNodeModules,
   shouldCopyE2eSource,
 } from "../e2e-harness.mjs";
 
@@ -137,5 +138,54 @@ describe("E2E harness isolation", () => {
     expect(resolveE2eSnapshotRoot("/tmp/ai-note-e2e-owned")).toBe("/tmp/ai-note-e2e-owned");
     expect(() => resolveE2eSnapshotRoot("ai-note-e2e-relative")).toThrow("snapshot root");
     expect(() => resolveE2eSnapshotRoot("/tmp/unrelated")).toThrow("snapshot root");
+  });
+
+  it("resolves exact Playwright dependencies from the parent repository for nested execute worktrees", async () => {
+    const root = await tempRoot();
+    const nestedWorktree = join(root, ".ai-execute", "worktrees", "plan", "run", "phase-1");
+    const nodeModules = join(root, "node_modules");
+    await mkdir(join(nodeModules, "@playwright", "test"), { recursive: true });
+    await mkdir(nestedWorktree, { recursive: true });
+    await writeFile(
+      join(nodeModules, "@playwright", "test", "package.json"),
+      JSON.stringify({ version: "1.61.1" }),
+    );
+
+    await expect(resolveE2eNodeModules(nestedWorktree, "1.61.1")).resolves.toBe(
+      await realpath(nodeModules),
+    );
+  });
+
+  it("fails closed when the nearest Playwright dependency version does not match", async () => {
+    const root = await tempRoot();
+    const nestedWorktree = join(root, ".ai-execute", "worktrees", "phase-1");
+    const nodeModules = join(root, "node_modules");
+    await mkdir(join(nodeModules, "@playwright", "test"), { recursive: true });
+    await mkdir(nestedWorktree, { recursive: true });
+    await writeFile(
+      join(nodeModules, "@playwright", "test", "package.json"),
+      JSON.stringify({ version: "1.60.0" }),
+    );
+
+    await expect(resolveE2eNodeModules(nestedWorktree, "1.61.1")).rejects.toThrow(
+      "version mismatch",
+    );
+  });
+
+  it("does not accept a symlinked parent node_modules dependency root", async () => {
+    const root = await tempRoot();
+    const nestedWorktree = join(root, ".ai-execute", "worktrees", "phase-1");
+    const realModules = join(root, "real-modules");
+    await mkdir(join(realModules, "@playwright", "test"), { recursive: true });
+    await mkdir(nestedWorktree, { recursive: true });
+    await writeFile(
+      join(realModules, "@playwright", "test", "package.json"),
+      JSON.stringify({ version: "1.61.1" }),
+    );
+    await symlink(realModules, join(root, "node_modules"));
+
+    await expect(resolveE2eNodeModules(nestedWorktree, "1.61.1")).rejects.toThrow(
+      "must be a real directory",
+    );
   });
 });

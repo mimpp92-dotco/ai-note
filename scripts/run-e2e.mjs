@@ -1,10 +1,10 @@
 import { createServer } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-import { buildE2eRunnerEnv } from "./e2e-harness.mjs";
+import { buildE2eRunnerEnv, resolveE2eNodeModules } from "./e2e-harness.mjs";
 
 function allocateLoopbackPort() {
   return new Promise((resolvePort, reject) => {
@@ -22,9 +22,11 @@ function allocateLoopbackPort() {
   });
 }
 
+const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+const nodeModules = await resolveE2eNodeModules(process.cwd(), packageJson.devDependencies?.["@playwright/test"]);
+const cli = join(nodeModules, "@playwright", "test", "cli.js");
 const port = await allocateLoopbackPort();
 const snapshotRoot = await mkdtemp(join(tmpdir(), "ai-note-e2e-"));
-const cli = resolve("node_modules/@playwright/test/cli.js");
 const child = spawn(process.execPath, [cli, "test", ...process.argv.slice(2)], {
   cwd: process.cwd(),
   stdio: "inherit",

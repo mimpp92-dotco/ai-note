@@ -4,6 +4,7 @@ import {
   access,
   cp,
   mkdir,
+  readFile,
   readdir,
   realpath,
   symlink,
@@ -16,6 +17,7 @@ import {
   assertRegularTree,
   buildE2eServerEnv,
   parseE2ePort,
+  resolveE2eNodeModules,
   resolveE2eSnapshotRoot,
   shouldCopyE2eSource,
 } from "./e2e-harness.mjs";
@@ -47,8 +49,11 @@ async function copyAllowedEntry(entry) {
 for (const entry of E2E_SNAPSHOT_ENTRIES) await copyAllowedEntry(entry);
 await mkdir(join(snapshotRoot, "data"), { mode: 0o700 });
 
-const nodeModules = resolve(sourceRoot, "node_modules");
-await assertRealDirectory(nodeModules, "node_modules");
+const packageJson = JSON.parse(await readFile(join(sourceRoot, "package.json"), "utf8"));
+const nodeModules = await resolveE2eNodeModules(
+  sourceRoot,
+  packageJson.devDependencies?.["@playwright/test"],
+);
 await symlink(nodeModules, join(snapshotRoot, "node_modules"), process.platform === "win32" ? "junction" : "dir");
 
 const childEnv = buildE2eServerEnv(process.env, snapshotRoot, String(port));

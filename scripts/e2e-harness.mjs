@@ -1,5 +1,5 @@
-import { lstat, readdir, readlink } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { lstat, readFile, readdir, readlink, realpath } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 export const E2E_SNAPSHOT_ENTRIES = [
   "src",
@@ -36,6 +36,42 @@ export async function assertRealDirectory(path, label) {
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new Error(`E2E ${label} must be a real directory: ${path}`);
   }
+}
+
+export async function resolveE2eNodeModules(startRoot, expectedPlaywrightVersion) {
+  if (typeof expectedPlaywrightVersion !== "string" || expectedPlaywrightVersion.length === 0) {
+    throw new Error("E2E expected Playwright version is required");
+  }
+  let current = await realpath(startRoot);
+  while (true) {
+    const nodeModules = join(current, "node_modules");
+    const packagePath = join(nodeModules, "@playwright", "test", "package.json");
+    let packageText;
+    try {
+      packageText = await readFile(packagePath, "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") throw error;
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+      continue;
+    }
+
+    await assertRealDirectory(nodeModules, "node_modules");
+    let installed;
+    try {
+      installed = JSON.parse(packageText);
+    } catch {
+      throw new Error(`E2E Playwright package metadata is invalid: ${packagePath}`);
+    }
+    if (installed?.version !== expectedPlaywrightVersion) {
+      throw new Error(
+        `E2E Playwright version mismatch: expected ${expectedPlaywrightVersion}, found ${installed?.version ?? "unknown"}`,
+      );
+    }
+    return realpath(nodeModules);
+  }
+  throw new Error(`E2E node_modules with @playwright/test ${expectedPlaywrightVersion} was not found`);
 }
 
 export function buildE2eServerEnv(sourceEnv, syntheticHome, appPort) {
