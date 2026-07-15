@@ -11,6 +11,23 @@ export const actionItemSchema = z.object({
   due: z.string(),
 });
 
+const editableText = z.string().trim();
+const editableListItem = z.string().trim().min(1);
+
+// Exact public/manual-edit projection. Internal canonical fields
+// (title/topicSlug/participants) are deliberately absent and unknown fields
+// fail instead of being silently stripped.
+export const editableSummarySchema = z.object({
+  oneLine: editableText,
+  purpose: editableText,
+  highlights: z.array(editableListItem),
+  discussion: z.array(editableListItem),
+  decisions: z.array(editableListItem),
+  actionItems: z.array(actionItemSchema.strict()),
+  risks: z.array(editableListItem),
+  followups: z.array(editableListItem),
+}).strict();
+
 export const summarySchema = z.object({
   title: z.string(),
   topicSlug: z.string(),

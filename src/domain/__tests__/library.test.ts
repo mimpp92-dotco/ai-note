@@ -246,6 +246,94 @@ describe("runtime StatusJson contract", () => {
     expect(() => parseStatusJson({ ...status(), durationMs: -1 }, "meeting-1")).toThrow();
     expect(() => parseStatusJson(status("meeting-2"), "meeting-1")).toThrow();
   });
+
+  it("accepts strict content revisions and keeps legacy status virtual metadata-free", () => {
+    const shaA = "a".repeat(64);
+    const shaB = "b".repeat(64);
+    const revision = {
+      transcript: {
+        source: "manual" as const,
+        sha256: shaA,
+        updatedAt: "2026-07-10T02:01:00.000Z",
+      },
+      summary: {
+        source: "generated" as const,
+        sha256: shaB,
+        basedOnTranscriptSha256: shaA,
+        updatedAt: "2026-07-10T02:02:00.000Z",
+      },
+    };
+
+    expect(parseStatusJson({ ...status(), contentRevision: revision }).contentRevision)
+      .toEqual(revision);
+    expect(parseStatusJson(status()).contentRevision).toBeUndefined();
+
+    for (const malformed of [
+      { ...revision, transcript: { ...revision.transcript, source: "inferred" } },
+      { ...revision, transcript: { ...revision.transcript, sha256: "short" } },
+      { ...revision, summary: { ...revision.summary, basedOnTranscriptSha256: "BAD" } },
+      { ...revision, summary: { ...revision.summary, internal: true } },
+    ]) {
+      expect(() => parseStatusJson({ ...status(), contentRevision: malformed })).toThrow();
+    }
+  });
+
+  it("accepts legacy and new attempt kinds but requires intended revision for new kinds", () => {
+    const shared = {
+      attemptId: "00000000-0000-4000-8000-000000000010",
+      startedAt: "2026-07-10T02:03:00.000Z",
+    };
+    const intendedContentRevision = {
+      transcript: {
+        source: "manual" as const,
+        sha256: "a".repeat(64),
+        updatedAt: "2026-07-10T02:03:00.000Z",
+      },
+      summary: {
+        source: "generated" as const,
+        sha256: "b".repeat(64),
+        basedOnTranscriptSha256: "a".repeat(64),
+        updatedAt: "2026-07-10T02:03:00.000Z",
+      },
+    };
+
+    for (const kind of ["initial", "resummarize"] as const) {
+      expect(parseStatusJson({
+        ...status(),
+        summarizeAttempt: { ...shared, kind },
+      }).summarizeAttempt?.kind).toBe(kind);
+    }
+    for (const kind of ["manual_edit", "transcript_regenerate", "summary_regenerate"] as const) {
+      expect(parseStatusJson({
+        ...status(),
+        summarizeAttempt: { ...shared, kind, intendedContentRevision },
+      }).summarizeAttempt?.kind).toBe(kind);
+      expect(() => parseStatusJson({
+        ...status(),
+        summarizeAttempt: { ...shared, kind },
+      })).toThrow();
+    }
+    expect(() => parseStatusJson({
+      ...status(),
+      summarizeAttempt: { ...shared, kind: "unknown", intendedContentRevision },
+    })).toThrow();
+  });
+
+  it("round-trips retry_transcript_generation and rejects unknown recovery actions", () => {
+    const parsed = parseStatusJson({
+      ...status(),
+      error: {
+        code: "transcript_generation_failed",
+        message: "internal detail",
+        action: "retry_transcript_generation",
+      },
+    });
+    expect(parsed.error?.action).toBe("retry_transcript_generation");
+    expect(() => parseStatusJson({
+      ...status(),
+      error: { message: "bad", action: "retry_everything" },
+    })).toThrow();
+  });
 });
 
 describe("meeting record classifier", () => {

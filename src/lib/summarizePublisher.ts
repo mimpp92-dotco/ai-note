@@ -4,7 +4,11 @@ import { join } from "node:path";
 
 import { z } from "zod";
 
-import type { StatusJson, SummarizeAttempt } from "@/domain/meeting";
+import type {
+  ContentRevision,
+  StatusJson,
+  SummarizeAttempt,
+} from "@/domain/meeting";
 import { acquireArtifactWriteLease } from "@/lib/artifactLease";
 import {
   createDirectorySyncCapability,
@@ -39,13 +43,34 @@ interface SummarizeManifest {
   preTranscriptHash: string | null;
   preSummaryHash: string | null;
   preimage: null | { present: false; hash: null } | { present: true; hash: string };
+  intendedContentRevision?: ContentRevision;
 }
+
+const contentRevisionSchema = z.object({
+  transcript: z.object({
+    source: z.enum(["generated", "manual"]),
+    sha256: z.string().regex(SHA256),
+    updatedAt: z.string().datetime({ offset: true }),
+  }).strict(),
+  summary: z.object({
+    source: z.enum(["generated", "manual"]),
+    sha256: z.string().regex(SHA256),
+    basedOnTranscriptSha256: z.string().regex(SHA256),
+    updatedAt: z.string().datetime({ offset: true }),
+  }).strict(),
+}).strict();
 
 const manifestSchema = z.object({
   schemaVersion: z.literal(MANIFEST_VERSION),
   meetingId: z.string().min(1),
   attemptId: z.string().uuid(),
-  kind: z.enum(["initial", "resummarize"]),
+  kind: z.enum([
+    "initial",
+    "resummarize",
+    "manual_edit",
+    "transcript_regenerate",
+    "summary_regenerate",
+  ]),
   phase: z.enum(["prepared", "preimage_durable", "transcript_published", "summary_published"]),
   intendedTranscriptHash: z.string().regex(SHA256),
   intendedSummaryHash: z.string().regex(SHA256),
@@ -56,7 +81,20 @@ const manifestSchema = z.object({
     z.object({ present: z.literal(false), hash: z.null() }).strict(),
     z.object({ present: z.literal(true), hash: z.string().regex(SHA256) }).strict(),
   ]),
-}).strict();
+  intendedContentRevision: contentRevisionSchema.optional(),
+}).strict().superRefine((manifest, context) => {
+  if (
+    manifest.kind !== "initial"
+    && manifest.kind !== "resummarize"
+    && manifest.intendedContentRevision === undefined
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["intendedContentRevision"],
+      message: "content mutation manifests require intended revision metadata",
+    });
+  }
+});
 
 export interface SummarizeAttemptPaths {
   dir: string;
@@ -218,18 +256,80 @@ function manifestFor(
   transcript: string,
   summary: string,
 ): SummarizeManifest {
+  const intendedTranscriptHash = sha256(transcript);
+  const intendedSummaryHash = sha256(summary);
+  const intendedContentRevision = attempt.intendedContentRevision ?? {
+    transcript: {
+      source: "generated" as const,
+      sha256: intendedTranscriptHash,
+      updatedAt: attempt.startedAt,
+    },
+    summary: {
+      source: "generated" as const,
+      sha256: intendedSummaryHash,
+      basedOnTranscriptSha256: intendedTranscriptHash,
+      updatedAt: attempt.startedAt,
+    },
+  };
+  if (
+    intendedContentRevision.transcript.sha256 !== intendedTranscriptHash
+    || intendedContentRevision.summary.sha256 !== intendedSummaryHash
+  ) throw new SummarizePublishError("summarize_ambiguous");
   return {
     schemaVersion: MANIFEST_VERSION,
     meetingId: id,
     attemptId: attempt.attemptId,
     kind: attempt.kind,
     phase: "prepared",
-    intendedTranscriptHash: sha256(transcript),
-    intendedSummaryHash: sha256(summary),
+    intendedTranscriptHash,
+    intendedSummaryHash,
     preTranscriptHash: attempt.preTranscriptHash ?? null,
     preSummaryHash: attempt.preSummaryHash ?? null,
     preimage: null,
+    intendedContentRevision,
   };
+}
+
+function intendedRevisionForManifest(
+  manifest: SummarizeManifest,
+  attempt: SummarizeAttempt,
+): ContentRevision {
+  if (manifest.intendedContentRevision) {
+    if (
+      manifest.intendedContentRevision.transcript.sha256 !== manifest.intendedTranscriptHash
+      || manifest.intendedContentRevision.summary.sha256 !== manifest.intendedSummaryHash
+    ) throw new SummarizePublishError("summarize_ambiguous");
+    return manifest.intendedContentRevision;
+  }
+  if (manifest.kind !== "initial" && manifest.kind !== "resummarize") {
+    throw new SummarizePublishError("summarize_ambiguous");
+  }
+  return {
+    transcript: {
+      source: "generated",
+      sha256: manifest.intendedTranscriptHash,
+      updatedAt: attempt.startedAt,
+    },
+    summary: {
+      source: "generated",
+      sha256: manifest.intendedSummaryHash,
+      basedOnTranscriptSha256: manifest.intendedTranscriptHash,
+      updatedAt: attempt.startedAt,
+    },
+  };
+}
+
+function contentRevisionsEqual(
+  left: ContentRevision,
+  right: ContentRevision,
+): boolean {
+  return left.transcript.source === right.transcript.source
+    && left.transcript.sha256 === right.transcript.sha256
+    && left.transcript.updatedAt === right.transcript.updatedAt
+    && left.summary.source === right.summary.source
+    && left.summary.sha256 === right.summary.sha256
+    && left.summary.basedOnTranscriptSha256 === right.summary.basedOnTranscriptSha256
+    && left.summary.updatedAt === right.summary.updatedAt;
 }
 
 async function verifyPreSummary(
@@ -424,6 +524,7 @@ async function clearSuccessfulAttempt(
   id: string,
   ownerToken: string,
   attemptId: string,
+  contentRevision: ContentRevision,
 ): Promise<"durable" | "best_effort" | "pending" | "mismatch"> {
   let matched = false;
   const result = await updateStatus(id, ownerToken, (latest) => {
@@ -434,6 +535,7 @@ async function clearSuccessfulAttempt(
       status: "summarized",
       error: null,
       summarizeAttempts: 0,
+      contentRevision,
     };
   });
   if (!matched) return "mismatch";
@@ -450,6 +552,7 @@ async function clearInterruptedAttempt(
 ): Promise<void> {
   await updateStatus(id, ownerToken, (latest) => {
     if (latest.summarizeAttempt?.attemptId !== attempt.attemptId) return latest;
+    if (attempt.kind === "manual_edit") return withoutAttempt(latest);
     return {
       ...withoutAttempt(latest),
       status: attempt.preSummaryHash ? "summarized" : "transcribed",
@@ -535,6 +638,13 @@ export async function publishSummarizeAttempt(
   if (current?.summarizeAttempt?.attemptId !== input.attempt.attemptId) {
     throw new SummarizePublishError("summarize_ambiguous");
   }
+  const initialManifest = manifestFor(
+    input.id,
+    input.attempt,
+    input.transcript,
+    input.summary,
+  );
+  const intendedContentRevision = initialManifest.intendedContentRevision!;
 
   let artifactDurability: "durable" | "best_effort" = "durable";
   const lease = await acquireArtifactWriteLease(input.id, input.ownerToken);
@@ -565,7 +675,7 @@ export async function publishSummarizeAttempt(
       }),
       `${input.id}:stage-summary`,
     ));
-    let manifest = manifestFor(input.id, input.attempt, input.transcript, input.summary);
+    let manifest = initialManifest;
     artifactDurability = mergeDurability(
       artifactDurability,
       await writeManifest(input.id, paths.manifest, manifest, fileOps, capability),
@@ -598,6 +708,7 @@ export async function publishSummarizeAttempt(
     input.id,
     input.ownerToken,
     input.attempt.attemptId,
+    intendedContentRevision,
   );
   if (statusDurability === "mismatch") throw new SummarizePublishError("summarize_ambiguous");
   await options.barrier?.("after_status_clear");
@@ -605,6 +716,16 @@ export async function publishSummarizeAttempt(
     await cleanupAttempt(input.id, input.ownerToken, paths, fileOps, capability).catch(() => {});
   }
   return { state: "published", artifactDurability, statusDurability };
+}
+
+export async function publishManualMeetingContentAttempt(
+  input: PublishSummarizeAttemptInput,
+  options: SummarizePublisherOptions = {},
+): ReturnType<typeof publishSummarizeAttempt> {
+  if (input.attempt.kind !== "manual_edit") {
+    throw new SummarizePublishError("summarize_ambiguous");
+  }
+  return publishSummarizeAttempt(input, options);
 }
 
 async function readManifest(
@@ -637,6 +758,7 @@ export async function reconcileSummarizeAttempt(
   const paths = summarizeAttemptPaths(id, attempt.attemptId);
   let action: SummarizeReconciliationAction = "ambiguous";
   let manifest: SummarizeManifest | null = null;
+  let intendedContentRevision: ContentRevision | null = null;
 
   const lease = await acquireArtifactWriteLease(id, ownerToken);
   try {
@@ -660,6 +782,14 @@ export async function reconcileSummarizeAttempt(
     ) {
       action = "ambiguous";
     } else {
+      intendedContentRevision = intendedRevisionForManifest(manifest, attempt);
+      if (
+        attempt.intendedContentRevision
+        && !contentRevisionsEqual(
+          attempt.intendedContentRevision,
+          intendedContentRevision,
+        )
+      ) throw new SummarizePublishError("summarize_ambiguous");
       const intended = {
         transcript: manifest.intendedTranscriptHash,
         summary: manifest.intendedSummaryHash,
@@ -694,7 +824,19 @@ export async function reconcileSummarizeAttempt(
   }
 
   if (action === "completed") {
-    const durability = await clearSuccessfulAttempt(id, ownerToken, attempt.attemptId);
+    if (!intendedContentRevision && manifest) {
+      intendedContentRevision = intendedRevisionForManifest(manifest, attempt);
+    }
+    if (!intendedContentRevision) {
+      await markAmbiguousAttempt(id, ownerToken, attempt.attemptId).catch(() => {});
+      return { state: "ambiguous" };
+    }
+    const durability = await clearSuccessfulAttempt(
+      id,
+      ownerToken,
+      attempt.attemptId,
+      intendedContentRevision,
+    );
     if (durability === "mismatch") return { state: "ambiguous" };
     if (durability !== "pending") {
       await cleanupAttempt(id, ownerToken, paths, fileOps, capability).catch(() => {});

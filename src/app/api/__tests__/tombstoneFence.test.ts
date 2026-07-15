@@ -7,10 +7,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { GET as audioGET } from "@/app/api/meetings/[id]/audio/route";
+import { GET as contentGET } from "@/app/api/meetings/[id]/content/route";
 import { GET as exportGET } from "@/app/api/meetings/[id]/export/route";
 import { POST as finalizePOST } from "@/app/api/meetings/[id]/finalize/route";
 import { DELETE as deleteMeeting, GET as meetingGET } from "@/app/api/meetings/[id]/route";
 import { POST as titlePOST } from "@/app/api/meetings/[id]/title/route";
+import { PATCH as summaryPATCH } from "@/app/api/meetings/[id]/summary/route";
+import { PATCH as transcriptPATCH } from "@/app/api/meetings/[id]/transcript/route";
 import { classifyMeetingRecord } from "@/domain/library";
 import { scanMeetingRecordObservations } from "@/lib/library";
 import { resetMeetingLifecycleForTests } from "@/lib/meetingLifecycle";
@@ -135,5 +138,55 @@ describe("global meeting tombstone fence", () => {
       preservePlacement: true,
     });
     expect(existsSync(meetingPaths(id).dir)).toBe(true);
+  });
+
+  it.each([
+    ["content GET", (id: string, req: Request) => contentGET(req, ctx(id)), "GET"],
+    ["transcript PATCH", (id: string, req: Request) => transcriptPATCH(req, ctx(id)), "PATCH"],
+    ["summary PATCH", (id: string, req: Request) => summaryPATCH(req, ctx(id)), "PATCH"],
+  ] as const)("fences %s before observing a request body", async (_name, call, method) => {
+    const id = `content-fenced-${method.toLowerCase()}-${_name.split(" ")[0]}`;
+    await seed(id);
+    await getMeetingTombstoneStore().create(id);
+    let bodyObserved = false;
+    const req = request(`/api/meetings/${id}/${_name.startsWith("content") ? "content" : _name.split(" ")[0]}`, {
+      method,
+      ...(method === "PATCH" ? { body: "{}" } : {}),
+    });
+    Object.defineProperty(req, "body", {
+      get() {
+        bodyObserved = true;
+        throw new Error("body must not be observed");
+      },
+    });
+
+    expect((await call(id, req)).status).toBe(410);
+    expect(bodyObserved).toBe(false);
+  });
+
+  it.each([
+    ["content", (id: string, req: Request) => contentGET(req, ctx(id)), "GET"],
+    ["transcript", (id: string, req: Request) => transcriptPATCH(req, ctx(id)), "PATCH"],
+    ["summary", (id: string, req: Request) => summaryPATCH(req, ctx(id)), "PATCH"],
+  ] as const)("fails closed on an ambiguous tombstone for %s", async (surface, call, method) => {
+    const id = `content-ambiguous-${surface}`;
+    await seed(id);
+    const directory = join(dataRoot(), "meeting-tombstones");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, `${id}.json`), "{broken");
+    let bodyObserved = false;
+    const req = request(`/api/meetings/${id}/${surface}`, {
+      method,
+      ...(method === "PATCH" ? { body: "{}" } : {}),
+    });
+    Object.defineProperty(req, "body", {
+      get() {
+        bodyObserved = true;
+        throw new Error("body must not be observed");
+      },
+    });
+
+    expect((await call(id, req)).status).toBe(409);
+    expect(bodyObserved).toBe(false);
   });
 });

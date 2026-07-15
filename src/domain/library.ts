@@ -273,7 +273,11 @@ const statusErrorSchema = z
   .object({
     code: z.string().optional(),
     message: z.string(),
-    action: z.enum(["retry_transcription", "retry_summary"]),
+    action: z.enum([
+      "retry_transcription",
+      "retry_transcript_generation",
+      "retry_summary",
+    ]),
   })
   .passthrough();
 
@@ -285,6 +289,20 @@ const whisperStateSchema = z
   .passthrough();
 
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+
+const contentRevisionSchema = z.object({
+  transcript: z.object({
+    source: z.enum(["generated", "manual"]),
+    sha256: sha256Schema,
+    updatedAt: timestampSchema,
+  }).strict(),
+  summary: z.object({
+    source: z.enum(["generated", "manual"]),
+    sha256: sha256Schema,
+    basedOnTranscriptSha256: sha256Schema,
+    updatedAt: timestampSchema,
+  }).strict(),
+}).strict();
 
 const transcriptionDispatchSchema = z
   .object({
@@ -328,12 +346,32 @@ const reviewInputSchema = z
 const summarizeAttemptSchema = z
   .object({
     attemptId: uuidSchema,
-    kind: z.enum(["initial", "resummarize"]),
+    kind: z.enum([
+      "initial",
+      "resummarize",
+      "manual_edit",
+      "transcript_regenerate",
+      "summary_regenerate",
+    ]),
     startedAt: timestampSchema,
     preTranscriptHash: sha256Schema.optional(),
     preSummaryHash: sha256Schema.optional(),
+    intendedContentRevision: contentRevisionSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((attempt, context) => {
+    if (
+      attempt.kind !== "initial"
+      && attempt.kind !== "resummarize"
+      && attempt.intendedContentRevision === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["intendedContentRevision"],
+        message: "content mutation attempts require intended content revision metadata",
+      });
+    }
+  });
 
 export const statusJsonSchema = z
   .object({
@@ -353,6 +391,7 @@ export const statusJsonSchema = z
     review: reviewInputSchema.optional().transform((value) => value ?? { participants: [] }),
     summarizeAttempts: z.number().int().nonnegative().safe().optional(),
     summarizeAttempt: summarizeAttemptSchema.optional(),
+    contentRevision: contentRevisionSchema.optional(),
     updatedAt: timestampSchema,
   })
   .passthrough();

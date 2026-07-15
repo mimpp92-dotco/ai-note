@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { SummarizeAttempt } from "@/domain/meeting";
+import type { ContentRevision, SummarizeAttempt } from "@/domain/meeting";
 import { resetArtifactLeaseStateForTests } from "@/lib/artifactLease";
 import {
   createDirectorySyncCapability,
@@ -55,7 +55,10 @@ afterEach(() => {
   rmSync(workDir, { recursive: true, force: true });
 });
 
-async function seed(id: string, kind: SummarizeAttempt["kind"]): Promise<SummarizeAttempt> {
+async function seed(
+  id: string,
+  kind: "initial" | "resummarize",
+): Promise<SummarizeAttempt> {
   const paths = meetingPaths(id);
   await mkdir(paths.dir, { recursive: true });
   if (kind === "resummarize") {
@@ -78,6 +81,58 @@ async function seed(id: string, kind: SummarizeAttempt["kind"]): Promise<Summari
       audioMime: "audio/webm",
     }),
     status: "summarizing",
+    summarizeAttempt: attempt,
+  });
+  return attempt;
+}
+
+function intendedRevision(
+  transcriptSource: ContentRevision["transcript"]["source"] = "generated",
+  summarySource: ContentRevision["summary"]["source"] = "generated",
+): ContentRevision {
+  return {
+    transcript: {
+      source: transcriptSource,
+      sha256: hash(NEW_TRANSCRIPT),
+      updatedAt: "2026-07-10T00:05:00.000Z",
+    },
+    summary: {
+      source: summarySource,
+      sha256: hash(NEW_SUMMARY),
+      basedOnTranscriptSha256: hash(NEW_TRANSCRIPT),
+      updatedAt: "2026-07-10T00:05:00.000Z",
+    },
+  };
+}
+
+async function seedNewAttempt(
+  id: string,
+  kind: "manual_edit" | "transcript_regenerate" | "summary_regenerate",
+  contentRevision = intendedRevision(
+    kind === "transcript_regenerate" ? "generated" : "manual",
+    kind === "summary_regenerate" ? "generated" : "manual",
+  ),
+): Promise<SummarizeAttempt> {
+  const paths = meetingPaths(id);
+  await mkdir(paths.dir, { recursive: true });
+  await writeFile(paths.transcript, OLD_TRANSCRIPT);
+  await writeFile(paths.summary, OLD_SUMMARY);
+  const attempt: SummarizeAttempt = {
+    attemptId: randomUUID(),
+    kind,
+    startedAt: "2026-07-10T00:05:00.000Z",
+    preTranscriptHash: hash(OLD_TRANSCRIPT),
+    preSummaryHash: hash(OLD_SUMMARY),
+    intendedContentRevision: contentRevision,
+  };
+  await writeStatus(id, {
+    ...initialStatus(id, {
+      startedAt: "2026-07-10T00:00:00.000Z",
+      endedAt: "2026-07-10T00:01:00.000Z",
+      durationMs: 60_000,
+      audioMime: "audio/webm",
+    }),
+    status: "summarized",
     summarizeAttempt: attempt,
   });
   return attempt;
@@ -147,10 +202,49 @@ describe("durable summarize pair publisher", () => {
     expect(await readFile(paths.summary, "utf8")).toBe(NEW_SUMMARY);
     expect((await readStatus(id))?.summarizeAttempt).toBeUndefined();
     expect((await readStatus(id))?.status).toBe("summarized");
+    expect((await readStatus(id))?.contentRevision).toEqual({
+      transcript: {
+        source: "generated",
+        sha256: hash(NEW_TRANSCRIPT),
+        updatedAt: attempt.startedAt,
+      },
+      summary: {
+        source: "generated",
+        sha256: hash(NEW_SUMMARY),
+        basedOnTranscriptSha256: hash(NEW_TRANSCRIPT),
+        updatedAt: attempt.startedAt,
+      },
+    });
     expect(result.state).toBe("published");
     expect(existsSync(summarizeAttemptPaths(id, attempt.attemptId).dir)).toBe(false);
     expect(existsSync(knowledgeCardPath(id))).toBe(false);
     expect(existsSync(corpusMapPath())).toBe(false);
+  });
+
+  it.each([
+    "manual_edit",
+    "transcript_regenerate",
+    "summary_regenerate",
+  ] as const)("publishes %s with its full intended content revision", async (kind) => {
+    const id = `meeting-${kind}`;
+    const expected = intendedRevision(
+      kind === "transcript_regenerate" ? "generated" : "manual",
+      kind === "summary_regenerate" ? "generated" : "manual",
+    );
+    const attempt = await seedNewAttempt(id, kind, expected);
+    const operation = await acquireMeetingOperation(id, kind);
+    await expect(publishSummarizeAttempt({
+      id,
+      ownerToken: operation.ownerToken,
+      attempt,
+      transcript: NEW_TRANSCRIPT,
+      summary: NEW_SUMMARY,
+    })).resolves.toMatchObject({ state: "published" });
+    operation.release();
+
+    expect((await readStatus(id))?.contentRevision).toEqual(expected);
+    expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(NEW_TRANSCRIPT);
+    expect(await readFile(meetingPaths(id).summary, "utf8")).toBe(NEW_SUMMARY);
   });
 
   it("restores the old transcript when summary publication fails", async () => {
@@ -205,6 +299,19 @@ describe("durable summarize pair publisher", () => {
     expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(NEW_TRANSCRIPT);
     expect(await readFile(meetingPaths(id).summary, "utf8")).toBe(NEW_SUMMARY);
     expect((await readStatus(id))?.summarizeAttempt).toBeUndefined();
+    expect((await readStatus(id))?.contentRevision).toEqual({
+      transcript: {
+        source: "generated",
+        sha256: hash(NEW_TRANSCRIPT),
+        updatedAt: attempt.startedAt,
+      },
+      summary: {
+        source: "generated",
+        sha256: hash(NEW_SUMMARY),
+        basedOnTranscriptSha256: hash(NEW_TRANSCRIPT),
+        updatedAt: attempt.startedAt,
+      },
+    });
   });
 
   it("restores the old pair when transcript rename commits but its directory sync is pending", async () => {
@@ -258,5 +365,52 @@ describe("durable summarize pair publisher", () => {
     )).resolves.toMatchObject({ state: "completed" });
     reconcileOperation.release();
     expect((await readStatus(id))?.summarizeAttempt).toBeUndefined();
+  });
+
+  it("clears an interrupted manual edit without manufacturing summary failure state", async () => {
+    const id = "meeting-manual-interrupted";
+    const priorRevision: ContentRevision = {
+      transcript: {
+        source: "manual",
+        sha256: hash(OLD_TRANSCRIPT),
+        updatedAt: "2026-07-09T23:00:00.000Z",
+      },
+      summary: {
+        source: "manual",
+        sha256: hash(OLD_SUMMARY),
+        basedOnTranscriptSha256: hash(OLD_TRANSCRIPT),
+        updatedAt: "2026-07-09T23:00:00.000Z",
+      },
+    };
+    const attempt = await seedNewAttempt(id, "manual_edit");
+    const current = await readStatus(id);
+    expect(current).not.toBeNull();
+    await writeStatus(id, {
+      ...current!,
+      contentRevision: priorRevision,
+      summarizeAttempts: 7,
+      error: {
+        code: "transcription_failed",
+        message: "prior error",
+        action: "retry_transcription",
+      },
+      summarizeAttempt: attempt,
+    });
+
+    const operation = await acquireMeetingOperation(id, "summarize_reconcile");
+    await expect(reconcileSummarizeAttempt(id, operation.ownerToken))
+      .resolves.toEqual({ state: "interrupted" });
+    operation.release();
+
+    const after = await readStatus(id);
+    expect(after?.summarizeAttempt).toBeUndefined();
+    expect(after?.contentRevision).toEqual(priorRevision);
+    expect(after?.summarizeAttempts).toBe(7);
+    expect(after?.error).toEqual({
+      code: "transcription_failed",
+      message: "prior error",
+      action: "retry_transcription",
+    });
+    expect(after?.status).toBe("summarized");
   });
 });

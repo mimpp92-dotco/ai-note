@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { SummarizeAttempt } from "@/domain/meeting";
+import type { ContentRevision, SummarizeAttempt } from "@/domain/meeting";
 import { readArtifactPair } from "@/lib/artifactPair";
 import { resetArtifactLeaseStateForTests } from "@/lib/artifactLease";
 import {
@@ -70,7 +70,112 @@ async function seed(id: string): Promise<SummarizeAttempt> {
   return attempt;
 }
 
+async function seedStable(id: string, contentRevision?: ContentRevision): Promise<void> {
+  const paths = meetingPaths(id);
+  await mkdir(paths.dir, { recursive: true });
+  await writeFile(paths.transcript, OLD_T);
+  await writeFile(paths.summary, OLD_S);
+  await writeStatus(id, {
+    ...initialStatus(id, {
+      startedAt: "2026-07-10T00:00:00.000Z",
+      endedAt: "2026-07-10T00:01:00.000Z",
+      durationMs: 60_000,
+      audioMime: "audio/webm",
+    }),
+    status: "summarized",
+    ...(contentRevision ? { contentRevision } : {}),
+  });
+}
+
+function revision(summaryBase = hash(OLD_T)): ContentRevision {
+  return {
+    transcript: {
+      source: "manual",
+      sha256: hash(OLD_T),
+      updatedAt: "2026-07-10T00:02:00.000Z",
+    },
+    summary: {
+      source: "generated",
+      sha256: hash(OLD_S),
+      basedOnTranscriptSha256: summaryBase,
+      updatedAt: "2026-07-10T00:03:00.000Z",
+    },
+  };
+}
+
 describe("generation-consistent artifact pair reader", () => {
+  it("derives a virtual generated/fresh revision for a stable legacy pair without writing status", async () => {
+    const id = "meeting-legacy-revision";
+    await seedStable(id);
+
+    const pair = await readArtifactPair(id);
+
+    expect(pair).toMatchObject({
+      transcript: OLD_T,
+      summary: OLD_S,
+      state: "stable",
+      revision: {
+        transcriptSha256: hash(OLD_T),
+        summarySha256: hash(OLD_S),
+      },
+      contentRevision: {
+        transcript: { source: "generated", sha256: hash(OLD_T) },
+        summary: {
+          source: "generated",
+          sha256: hash(OLD_S),
+          basedOnTranscriptSha256: hash(OLD_T),
+        },
+      },
+      summaryOutdated: false,
+    });
+  });
+
+  it.each([
+    [hash(OLD_T), false],
+    ["c".repeat(64), true],
+  ] as const)("derives manual summary freshness from the recorded transcript base", async (base, outdated) => {
+    const id = `meeting-manual-${outdated ? "stale" : "fresh"}`;
+    await seedStable(id, revision(base));
+    await expect(readArtifactPair(id)).resolves.toMatchObject({
+      state: "stable",
+      contentRevision: revision(base),
+      summaryOutdated: outdated,
+    });
+  });
+
+  it("fails closed when recorded provenance hashes contradict canonical bytes", async () => {
+    const id = "meeting-source-conflict";
+    await seedStable(id, {
+      ...revision(),
+      transcript: { ...revision().transcript, sha256: "d".repeat(64) },
+    });
+    await expect(readArtifactPair(id)).resolves.toMatchObject({
+      state: "source_conflict",
+      transcript: null,
+      summary: null,
+      revision: {
+        transcriptSha256: hash(OLD_T),
+        summarySha256: hash(OLD_S),
+      },
+    });
+  });
+
+  it("distinguishes a missing pair from a mixed partial pair", async () => {
+    const missingId = "meeting-missing-pair";
+    const paths = meetingPaths(missingId);
+    await mkdir(paths.dir, { recursive: true });
+    await writeStatus(missingId, initialStatus(missingId, {
+      startedAt: "2026-07-10T00:00:00.000Z",
+      endedAt: "2026-07-10T00:01:00.000Z",
+      durationMs: 60_000,
+      audioMime: "audio/webm",
+    }));
+    await expect(readArtifactPair(missingId)).resolves.toMatchObject({ state: "missing" });
+
+    await writeFile(paths.transcript, OLD_T);
+    await expect(readArtifactPair(missingId)).resolves.toMatchObject({ state: "ambiguous" });
+  });
+
   it("returns the old pair while a publisher waits, then the complete new pair", async () => {
     const id = "meeting-reader";
     const attempt = await seed(id);
