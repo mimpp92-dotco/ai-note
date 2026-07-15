@@ -584,6 +584,7 @@
         "src/components/MeetingDetailView.tsx",
         "src/components/MeetingContentEditors.tsx",
         "src/components/RecorderSessionProvider.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx",
         "src/components/__tests__/views.test.tsx",
         "src/app/api/meetings/*/content/route.ts",
         "src/app/api/meetings/*/transcript/route.ts",
@@ -591,13 +592,14 @@
       ],
       "allowedPaths": [
         "e2e/manual-transcript-and-summary-editing.spec.ts",
-        "e2e/smoke.spec.ts"
+        "e2e/smoke.spec.ts",
+        "src/components/RecorderSessionProvider.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx"
       ],
       "forbiddenPaths": [
         "data/**",
         ".env*",
         "glossary.json",
-        "src/**",
         "scripts/**",
         "whisper/**",
         "playwright.config.ts",
@@ -614,7 +616,11 @@
       "testPolicy": {"mode": "required"},
       "tddMode": "enforced",
       "verifyLevel": "targeted",
-      "verifyCommands": ["npm run test:e2e"],
+      "verifyCommands": [
+        "npm test -- src/components/__tests__/RecorderSessionProvider.test.tsx",
+        "npm run typecheck",
+        "npm run test:e2e"
+      ],
       "requiredEvidence": ["scope-check", "tdd-red-green", "test-green", "browser"],
       "requiresBrowser": true,
       "dataPolicy": "synthetic-only",
@@ -623,7 +629,7 @@
         "workspace의 실제 data, glossary, env secret 중 하나라도 읽어야 하면 중단",
         "npm run test:e2e:doctor가 pinned Playwright 또는 matching Chromium을 확인하지 못하면 중단",
         "실제 Whisper, LLM, 외부 network 호출이 필요하면 중단",
-        "허용된 Playwright spec 두 파일 밖 수정이나 fixture 값 복제가 필요하면 중단",
+        "허용된 두 Playwright spec과 RecorderSessionProvider source/test 밖 수정이나 fixture 값 복제가 필요하면 중단",
         "browser 검증 명령이 product tree를 수정하거나 command-owned evidence 밖에 산출물을 써야 하면 중단",
         "desktop-1440, mobile-390, mobile-320 중 하나라도 검증할 수 없으면 중단"
       ]
