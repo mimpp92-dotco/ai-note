@@ -29,6 +29,7 @@ import { classifyLlmFailure, safeLog } from "@/lib/publicApi";
 import { readStatus, updateStatus } from "@/lib/status";
 import {
   resolveTranscript,
+  summarizeCore,
   summarizeTranscript,
 } from "@/lib/summarizeCore";
 import {
@@ -513,8 +514,34 @@ async function executePreparedGeneration(
       const raw = await readFile(paths.raw, "utf8");
       const glossary = await readGlossary();
       const correction = await adapter.run(buildCorrectionPrompt(raw, glossary));
-      transcript = resolveTranscript(raw, correction);
-      const result = await generateSummary(adapter, status.title, transcript);
+      const resolvedTranscript = resolveTranscript(raw, correction);
+      let summaryOutput = await adapter.run(
+        buildSummaryPrompt(resolvedTranscript, status.title),
+        { json: true },
+      );
+      let result = await summarizeCore({
+        title: status.title,
+        raw,
+        correction,
+        summaryOutput,
+      });
+      if (result.usedFallback) {
+        try {
+          summaryOutput = await adapter.run(
+            buildSummaryPrompt(resolvedTranscript, status.title),
+            { json: true },
+          );
+          result = await summarizeCore({
+            title: status.title,
+            raw,
+            correction,
+            summaryOutput,
+          });
+        } catch {
+          // The first pass already produced a schema-valid fallback payload.
+        }
+      }
+      transcript = result.transcript;
       summary = `${JSON.stringify(result.summary, null, 2)}\n`;
     } else if (intent === "transcript_regenerate") {
       const snapshot = prepared.snapshot!;
