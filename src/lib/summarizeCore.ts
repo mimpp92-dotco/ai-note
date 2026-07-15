@@ -38,21 +38,54 @@ export interface SummarizeResult {
   truncated: boolean;
 }
 
+export interface SummarizeTranscriptInput {
+  title: string;
+  /** Already-canonical transcript. Summary-only generation must not correct it. */
+  transcript: string;
+  summaryOutput: string;
+  /** Canonical metadata that the model is not allowed to replace. */
+  preservedParticipants?: readonly string[];
+}
+
+export interface SummarizeTranscriptResult {
+  summary: Summary;
+  usedFallback: boolean;
+  truncated: boolean;
+}
+
 export async function summarizeCore(
   input: SummarizeInput,
 ): Promise<SummarizeResult> {
   const transcript = resolveTranscript(input.raw, input.correction);
-  const truncated = transcript.length > MAX_TRANSCRIPT_CHARS;
+  const summarized = await summarizeTranscript({
+    title: input.title,
+    transcript,
+    summaryOutput: input.summaryOutput,
+  });
+  return { transcript, ...summarized };
+}
 
+// Summary-only generation shares parsing, normalization, fallback, and the
+// 40,000-character notice with initial generation. It intentionally has no raw
+// or correction input, so callers cannot accidentally re-run transcript work.
+export async function summarizeTranscript(
+  input: SummarizeTranscriptInput,
+): Promise<SummarizeTranscriptResult> {
+  const truncated = input.transcript.length > MAX_TRANSCRIPT_CHARS;
   const parsed = parseSummary(input.summaryOutput, input.title);
   const usedFallback = parsed === null;
-  const summary = parsed ?? fallbackSummary(input.title, transcript);
+  const base = parsed ?? fallbackSummary(input.title, input.transcript);
+  const participants = input.preservedParticipants ?? [];
+  const followups = truncated && !base.followups.includes(TRUNCATION_NOTICE)
+    ? [...base.followups, TRUNCATION_NOTICE]
+    : [...base.followups];
+  const summary = {
+    ...base,
+    participants: [...participants],
+    followups,
+  };
 
-  if (truncated && !summary.followups.includes(TRUNCATION_NOTICE)) {
-    summary.followups.push(TRUNCATION_NOTICE);
-  }
-
-  return { transcript, summary, usedFallback, truncated };
+  return { summary, usedFallback, truncated };
 }
 
 // --- transcript correction --------------------------------------------------

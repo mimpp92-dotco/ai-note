@@ -1,22 +1,40 @@
+import { z } from "zod";
+
 import {
   guardLocalApiRequest,
   parseBoundedJsonBody,
   requestBodyErrorResponse,
 } from "@/lib/localRequestGuard";
+import { artifactPairRevisionSchema } from "@/lib/manualMeetingContent";
 import { assertSafeId } from "@/lib/meetingId";
 import { meetingFenceResponse } from "@/lib/meetingFence";
 import { jsonNoStore, publicErrorResponse } from "@/lib/publicApi";
 import { acceptSummarize } from "@/lib/summarize";
 
-// POST /api/meetings/[id]/summarize — user-initiated (re)summarize. Correction +
-// summary can take minutes on a long meeting, so this does NOT block on the work:
-// it validates synchronously, fires runSummarize (fire-and-forget), and returns 202.
-// The client polls (router.refresh) for the new summary or a retry_summary failure.
-// Body { resummarize: true } forces regenerating an already-summarized meeting
-// ("다시 요약"); without it an existing summary still 409s (no accidental re-summarize,
-// so glossary saves / the worker sweep can never trigger one).
+// Initial generation retains correction + summary. An explicit re-summarize is
+// revision-bound and runs summary-only from the current canonical transcript.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const requestSchema = z.object({
+  resummarize: z.boolean().optional(),
+  expectedRevision: artifactPairRevisionSchema.optional(),
+}).strict().superRefine((body, context) => {
+  if (body.resummarize === true && body.expectedRevision === undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["expectedRevision"],
+      message: "summary regeneration requires an expected revision",
+    });
+  }
+  if (body.resummarize !== true && body.expectedRevision !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["expectedRevision"],
+      message: "initial generation does not accept a content revision",
+    });
+  }
+});
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const denied = guardLocalApiRequest(request);
@@ -30,23 +48,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const fenced = await meetingFenceResponse(id);
   if (fenced) return fenced;
 
-  let body: { resummarize?: boolean } | null;
+  let body: unknown;
   try {
-    body = await parseBoundedJsonBody(request, 4 * 1024) as { resummarize?: boolean } | null;
+    body = await parseBoundedJsonBody(request, 4 * 1024);
   } catch (error) {
     return requestBodyErrorResponse(error);
   }
-  if (
-    body === null
-    || typeof body !== "object"
-    || Object.keys(body).some((key) => key !== "resummarize")
-    || (body.resummarize !== undefined && typeof body.resummarize !== "boolean")
-  ) {
+  const parsed = requestSchema.safeParse(body);
+  if (!parsed.success) {
     return publicErrorResponse("invalid_request", 400);
   }
-  const force = body?.resummarize === true;
+  const force = parsed.data.resummarize === true;
 
-  const accepted = await acceptSummarize(id, { force });
+  const accepted = await acceptSummarize(id, {
+    force,
+    expectedRevision: parsed.data.expectedRevision,
+  });
   if (!accepted.accepted) {
     if (accepted.reason === "not_found") {
       return publicErrorResponse("meeting_not_found", 404, { meetingId: id });
@@ -54,7 +71,23 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (accepted.reason === "no_model") {
       return publicErrorResponse("invalid_request", 400, { field: "provider" });
     }
-    if (accepted.reason === "error") return publicErrorResponse("internal_error", 503);
+    if (accepted.reason === "revision_conflict") {
+      return publicErrorResponse("content_revision_conflict", 409);
+    }
+    if (accepted.reason === "source_conflict") {
+      return publicErrorResponse("content_source_conflict", 409);
+    }
+    if (accepted.reason === "state_ambiguous") {
+      return publicErrorResponse("content_state_ambiguous", 409);
+    }
+    if (accepted.reason === "in_progress" && force) {
+      return publicErrorResponse("content_operation_in_progress", 409, {
+        operation: "summary_regenerate",
+      });
+    }
+    if (accepted.reason === "error") {
+      return publicErrorResponse(force ? "content_save_unavailable" : "internal_error", 503);
+    }
     return publicErrorResponse("meeting_conflict", 409, { meetingId: id, action: "summarize" });
   }
 

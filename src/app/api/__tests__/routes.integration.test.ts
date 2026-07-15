@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { GET as glossaryGET, POST as glossaryPOST } from "@/app/api/glossary/route";
 import { GET as audioGET } from "@/app/api/meetings/[id]/audio/route";
@@ -17,10 +17,12 @@ import { POST as summarizePOST } from "@/app/api/meetings/[id]/summarize/route";
 import { PATCH as summaryPATCH } from "@/app/api/meetings/[id]/summary/route";
 import { POST as titlePOST } from "@/app/api/meetings/[id]/title/route";
 import { PATCH as transcriptPATCH } from "@/app/api/meetings/[id]/transcript/route";
+import { POST as transcriptRegeneratePOST } from "@/app/api/meetings/[id]/transcript/regenerate/route";
 import { GET as listMeetings } from "@/app/api/meetings/route";
 import { GET as llmHealthGET } from "@/app/api/settings/llm/health/route";
 import { POST as llmSettingsPOST } from "@/app/api/settings/llm/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
+import { POST as globalSummarizePOST } from "@/app/api/summarize/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
 import { meetingPaths } from "@/lib/paths";
 import { acquireArtifactWriteLease } from "@/lib/artifactLease";
@@ -28,6 +30,7 @@ import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
 import { settingsPath, writeSettings } from "@/lib/settings";
 import { initialStatus, writeStatus } from "@/lib/status";
 import { isSummarizeInflight } from "@/lib/summarize";
+import { FakeAdapter } from "@/services/llm/fake";
 
 // Integration test for the app-api route handlers. Boots the whisper service with
 // FAKE_WHISPER=1 (pure stdlib, no venv/model/network) and FAKE_FFMPEG=1 (byte copy,
@@ -525,13 +528,27 @@ describe("manual re-summarize (force)", () => {
     await writeSettings({ provider: "claude-cli" });
     const id = "m-resummarize";
     await seedSummarized(id); // summary.json present (fixture: title "데일리 스크럼 2026-07-05")
+    const current = await (await contentGET(
+      appRequest(`/api/meetings/${id}/content`),
+      ctx(id),
+    )).json();
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
     try {
       // plain POST on an already-summarized meeting is refused
       expect((await summarizePOST(summarizeReq(id), ctx(id))).status).toBe(409);
 
+      // A meeting-specific regeneration is revision-bound.
+      expect((await summarizePOST(
+        summarizeReq(id, { resummarize: true }),
+        ctx(id),
+      )).status).toBe(400);
+
       // forced re-summarize is accepted asynchronously (202), then runs in the
       // background via the offline FakeAdapter.
-      const forced = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
+      const forced = await summarizePOST(summarizeReq(id, {
+        resummarize: true,
+        expectedRevision: current.revision,
+      }), ctx(id));
       expect(forced.status).toBe(202);
       await settleSummarize(id);
 
@@ -545,7 +562,119 @@ describe("manual re-summarize (force)", () => {
       expect(after.status).toBe("summarized");
       expect(after.error).toBeNull();
       expect(after.summarizeAttempts).toBe(0);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0][0]).toContain("교정된 전사");
+      expect(run.mock.calls[0][0]).not.toContain("[원문]");
+      expect(run.mock.calls[0][1]).toEqual({ json: true });
     } finally {
+      run.mockRestore();
+      delete process.env.FAKE_LLM;
+    }
+  });
+
+  it("global resummarize compatibility snapshots the current pair and runs summary-only", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-global-summary-only";
+    await seedSummarized(id);
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+    try {
+      const response = await globalSummarizePOST(appRequest("/api/summarize", {
+        method: "POST",
+        body: JSON.stringify({ id, resummarize: true }),
+      }));
+      expect(response.status).toBe(202);
+      await settleSummarize(id);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0][0]).toContain("교정된 전사");
+      expect(run.mock.calls[0][0]).not.toContain("[원문]");
+    } finally {
+      run.mockRestore();
+      delete process.env.FAKE_LLM;
+    }
+  });
+
+  it("keeps the bodyless-compatible initial route as correction plus summary", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-initial-summarize";
+    const paths = meetingPaths(id);
+    mkdirSync(paths.dir, { recursive: true });
+    await writeStatus(id, { ...initialStatus(id, INIT), status: "transcribed" });
+    writeFileSync(paths.raw, "최초 생성 원문\n");
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+    try {
+      const response = await summarizePOST(summarizeReq(id), ctx(id));
+      expect(response.status).toBe(202);
+      await settleSummarize(id);
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[0][0]).toContain("[원문]");
+      expect(run.mock.calls[1][0]).toContain("JSON 스키마");
+      expect(existsSync(paths.transcript)).toBe(true);
+      expect(existsSync(paths.summary)).toBe(true);
+    } finally {
+      run.mockRestore();
+      delete process.env.FAKE_LLM;
+    }
+  });
+
+  it("transcript regeneration requires exact confirmation and revision, then preserves summary bytes", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-transcript-regenerate";
+    await seedSummarized(id);
+    const initial = await (await contentGET(
+      appRequest(`/api/meetings/${id}/content`),
+      ctx(id),
+    )).json();
+    const oldSummary = readFileSync(meetingPaths(id).summary, "utf8");
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+    const requestBody = (body: unknown, headers?: Record<string, string>) => appRequest(
+      `/api/meetings/${id}/transcript/regenerate`,
+      { method: "POST", headers, body: JSON.stringify(body) },
+    );
+    try {
+      for (const invalid of [
+        { expectedRevision: initial.revision },
+        { expectedRevision: initial.revision, confirmReplacement: false },
+        { expectedRevision: initial.revision, confirmReplacement: true, extra: true },
+      ]) {
+        expect((await transcriptRegeneratePOST(requestBody(invalid), ctx(id))).status).toBe(400);
+      }
+      expect((await transcriptRegeneratePOST(requestBody({}, {
+        "content-length": String(4 * 1024 + 1),
+      }), ctx(id))).status).toBe(413);
+      expect(run).not.toHaveBeenCalled();
+
+      const accepted = await transcriptRegeneratePOST(requestBody({
+        expectedRevision: initial.revision,
+        confirmReplacement: true,
+      }), ctx(id));
+      expect(accepted.status).toBe(202);
+      await settleSummarize(id);
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0][0]).toContain("[원문]");
+      expect(run.mock.calls[0][1]).toBeUndefined();
+      expect(readFileSync(meetingPaths(id).summary, "utf8")).toBe(oldSummary);
+      const changed = await (await contentGET(
+        appRequest(`/api/meetings/${id}/content`),
+        ctx(id),
+      )).json();
+      expect(changed.transcriptSource).toBe("generated");
+      expect(changed.summaryOutdated).toBe(true);
+
+      const stale = await transcriptRegeneratePOST(requestBody({
+        expectedRevision: initial.revision,
+        confirmReplacement: true,
+      }), ctx(id));
+      expect(stale.status).toBe(409);
+      await expect(stale.json()).resolves.toMatchObject({
+        error: { code: "content_revision_conflict" },
+      });
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {
+      run.mockRestore();
       delete process.env.FAKE_LLM;
     }
   });
@@ -554,9 +683,16 @@ describe("manual re-summarize (force)", () => {
     await writeSettings({ provider: "claude-cli" });
     const id = "m-resummarize-inflight";
     await seedSummarized(id);
+    const current = await (await contentGET(
+      appRequest(`/api/meetings/${id}/content`),
+      ctx(id),
+    )).json();
     const lease = await acquireMeetingOperation(id, "summarize");
     try {
-      const res = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
+      const res = await summarizePOST(summarizeReq(id, {
+        resummarize: true,
+        expectedRevision: current.revision,
+      }), ctx(id));
       expect(res.status).toBe(409);
     } finally {
       lease.release();

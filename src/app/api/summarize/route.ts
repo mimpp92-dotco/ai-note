@@ -51,6 +51,25 @@ export async function POST(request: Request) {
   }
   if (accepted.reason === "not_found") return publicErrorResponse("meeting_not_found", 404);
   if (accepted.reason === "no_model") return publicErrorResponse("invalid_request", 400, { field: "provider" });
-  if (accepted.reason === "error") return publicErrorResponse("internal_error", 503);
+  if (accepted.reason === "revision_conflict") {
+    return publicErrorResponse("content_revision_conflict", 409);
+  }
+  if (accepted.reason === "source_conflict") {
+    return publicErrorResponse("content_source_conflict", 409);
+  }
+  if (accepted.reason === "state_ambiguous") {
+    return publicErrorResponse("content_state_ambiguous", 409);
+  }
+  if (accepted.reason === "in_progress" && parsed.data.resummarize === true) {
+    return publicErrorResponse("content_operation_in_progress", 409, {
+      operation: "summary_regenerate",
+    });
+  }
+  if (accepted.reason === "error") {
+    return publicErrorResponse(
+      parsed.data.resummarize === true ? "content_save_unavailable" : "internal_error",
+      503,
+    );
+  }
   return publicErrorResponse("meeting_conflict", 409, { meetingId: id, action: "summarize" });
 }

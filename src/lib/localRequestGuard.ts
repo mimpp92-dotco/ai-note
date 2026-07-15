@@ -27,6 +27,7 @@ export const DATA_SURFACE_INVENTORY = [
   "/api/meetings/[id]/summary",
   "/api/meetings/[id]/title",
   "/api/meetings/[id]/transcript",
+  "/api/meetings/[id]/transcript/regenerate",
   "/api/organization-pending",
   "/api/settings/llm",
   "/api/settings/llm/health",

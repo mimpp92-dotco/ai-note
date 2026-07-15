@@ -30,7 +30,13 @@ afterEach(() => {
 
 async function seed(
   id: string,
-  opts: { raw?: boolean; summary?: boolean; attempts?: number } = {},
+  opts: {
+    raw?: boolean;
+    summary?: boolean;
+    attempts?: number;
+    outdated?: boolean;
+    errorAction?: "retry_transcript_generation" | "retry_summary";
+  } = {},
 ) {
   const p = meetingPaths(id);
   await mkdir(p.dir, { recursive: true });
@@ -43,6 +49,26 @@ async function seed(
     }),
     status: "transcribed",
     ...(opts.attempts !== undefined ? { summarizeAttempts: opts.attempts } : {}),
+    ...(opts.errorAction
+      ? { error: { message: "generation failed", action: opts.errorAction } }
+      : {}),
+    ...(opts.outdated
+      ? {
+          contentRevision: {
+            transcript: {
+              source: "manual" as const,
+              sha256: "a".repeat(64),
+              updatedAt: "2026-07-05T09:06:00.000Z",
+            },
+            summary: {
+              source: "generated" as const,
+              sha256: "b".repeat(64),
+              basedOnTranscriptSha256: "c".repeat(64),
+              updatedAt: "2026-07-05T09:07:00.000Z",
+            },
+          },
+        }
+      : {}),
   });
   if (opts.raw ?? true) await writeFile(p.raw, "회의 원문\n");
   if (opts.summary) await writeFile(p.summary, "{}\n");
@@ -69,6 +95,16 @@ describe("findSummarizeCandidates", () => {
   it("excludes a meeting that already has summary.json", async () => {
     await writeSettings({ provider: "claude-cli" });
     await seed("meeting-done", { summary: true });
+    expect(await findSummarizeCandidates()).toEqual([]);
+  });
+
+  it.each([
+    ["outdated summary", { summary: true, outdated: true }],
+    ["transcript regeneration failure", { summary: true, errorAction: "retry_transcript_generation" }],
+    ["summary regeneration failure", { summary: true, errorAction: "retry_summary" }],
+  ] as const)("never auto-selects a summarized meeting with %s", async (_label, options) => {
+    await writeSettings({ provider: "claude-cli" });
+    await seed(`meeting-no-auto-${_label.replaceAll(" ", "-")}`, options);
     expect(await findSummarizeCandidates()).toEqual([]);
   });
 

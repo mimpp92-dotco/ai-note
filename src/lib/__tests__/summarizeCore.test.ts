@@ -2,7 +2,11 @@
 import { describe, expect, it } from "vitest";
 
 import { summarySchema } from "@/domain/summarySchema";
-import { extractJsonObject, summarizeCore } from "@/lib/summarizeCore";
+import {
+  extractJsonObject,
+  summarizeCore,
+  summarizeTranscript,
+} from "@/lib/summarizeCore";
 
 // raw.md-style transcript: one segment per line.
 const RAW = [
@@ -142,6 +146,24 @@ describe("summarizeCore", () => {
     });
 
     expect(result.transcript).toBe(corrected);
+  });
+
+  it("summarizes an already-canonical transcript without running correction and preserves internal participants", async () => {
+    const result = await summarizeTranscript({
+      title: "회의",
+      transcript: "직접 수정한 전체 스크립트",
+      summaryOutput: JSON.stringify({
+        oneLine: "새 요약",
+        discussion: ["새 논의"],
+        participants: ["모델이 만든 참석자"],
+      }),
+      preservedParticipants: ["기존 내부 참석자"],
+    });
+
+    expect(result.usedFallback).toBe(false);
+    expect(result.summary.oneLine).toBe("새 요약");
+    expect(result.summary.participants).toEqual(["기존 내부 참석자"]);
+    expect(Object.keys(result)).not.toContain("transcript");
   });
 });
 

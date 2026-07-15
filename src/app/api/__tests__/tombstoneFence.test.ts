@@ -14,6 +14,7 @@ import { DELETE as deleteMeeting, GET as meetingGET } from "@/app/api/meetings/[
 import { POST as titlePOST } from "@/app/api/meetings/[id]/title/route";
 import { PATCH as summaryPATCH } from "@/app/api/meetings/[id]/summary/route";
 import { PATCH as transcriptPATCH } from "@/app/api/meetings/[id]/transcript/route";
+import { POST as transcriptRegeneratePOST } from "@/app/api/meetings/[id]/transcript/regenerate/route";
 import { classifyMeetingRecord } from "@/domain/library";
 import { scanMeetingRecordObservations } from "@/lib/library";
 import { resetMeetingLifecycleForTests } from "@/lib/meetingLifecycle";
@@ -187,6 +188,39 @@ describe("global meeting tombstone fence", () => {
     });
 
     expect((await call(id, req)).status).toBe(409);
+    expect(bodyObserved).toBe(false);
+  });
+
+  it.each([
+    ["deleted", true, 410],
+    ["ambiguous", false, 409],
+  ] as const)("fences transcript regeneration for a %s tombstone before body access", async (
+    _label,
+    valid,
+    expectedStatus,
+  ) => {
+    const id = `transcript-regenerate-${_label}`;
+    await seed(id);
+    if (valid) {
+      await getMeetingTombstoneStore().create(id);
+    } else {
+      const directory = join(dataRoot(), "meeting-tombstones");
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, `${id}.json`), "{broken");
+    }
+    let bodyObserved = false;
+    const req = request(`/api/meetings/${id}/transcript/regenerate`, {
+      method: "POST",
+      body: "{}",
+    });
+    Object.defineProperty(req, "body", {
+      get() {
+        bodyObserved = true;
+        throw new Error("body must not be observed");
+      },
+    });
+
+    expect((await transcriptRegeneratePOST(req, ctx(id))).status).toBe(expectedStatus);
     expect(bodyObserved).toBe(false);
   });
 });
