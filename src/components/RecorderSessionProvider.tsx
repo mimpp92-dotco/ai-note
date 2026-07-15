@@ -35,6 +35,16 @@ export type RecorderSessionPhase =
 export type RecorderRequestedLocation = RecorderResultLocation;
 export type RecorderFinalizeResult = RecorderFinalizeResultContract;
 export type RecorderRetryDisposition = "probe_required" | "body_required" | "blocked" | null;
+export type NavigationBlockerPhase = "dirty" | "saving" | "verifying";
+
+export interface NavigationBlockerDescriptor {
+  id: string;
+  kind: "meeting_content_edit";
+  phase: NavigationBlockerPhase;
+  label: "전체 스크립트 수정" | "회의록 요약 수정";
+  discard: () => void;
+  allowNavigation: (currentUrl: string, destinationUrl: string) => boolean;
+}
 
 type ServerStatus = { status: string; error?: { message: string } | null };
 
@@ -50,6 +60,7 @@ interface CapturedRecording {
 type FinalizeMetadata = Omit<CapturedRecording, "blob">;
 
 interface PendingNavigation {
+  current: string;
   destination: string;
   commit: () => void;
   trigger: HTMLElement | null;
@@ -73,6 +84,8 @@ export interface RecorderSessionValue {
   probe(): Promise<void>;
   discard(): void;
   dismiss(): void;
+  registerNavigationBlocker(blocker: NavigationBlockerDescriptor): void;
+  unregisterNavigationBlocker(id: string): void;
   requestNavigation(
     destination: string,
     commit: () => void,
@@ -81,6 +94,7 @@ export interface RecorderSessionValue {
 }
 
 const RecorderSessionContext = createContext<RecorderSessionValue | null>(null);
+const MAX_NAVIGATION_BLOCKERS = 8;
 
 function resolveAudioContext(): typeof AudioContext | undefined {
   if (typeof window === "undefined") return undefined;
@@ -148,6 +162,7 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
   const [retryDisposition, setRetryDisposition] = useState<RecorderRetryDisposition>(null);
   const [hasRetainedBlob, setHasRetainedBlob] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
+  const [blockerRevision, setBlockerRevision] = useState(0);
 
   const phaseRef = useRef<RecorderSessionPhase>("idle");
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -168,7 +183,9 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
   const mountedRef = useRef(true);
   const currentUrlRef = useRef("");
   const suppressNextPopRef = useRef(false);
+  const navigationCommitInProgressRef = useRef(false);
   const cancelNavigationRef = useRef<HTMLButtonElement>(null);
+  const navigationBlockersRef = useRef(new Map<string, NavigationBlockerDescriptor>());
   const refreshLibrary = library?.refreshLibrary;
   const invalidateStatusWork = library?.invalidateStatusWork;
   const invalidateOrganizationPending = library?.invalidateOrganizationPending;
@@ -510,6 +527,29 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
     }
   }, [discard]);
 
+  const registerNavigationBlocker = useCallback((blocker: NavigationBlockerDescriptor) => {
+    if (
+      !blocker.id
+      || blocker.id.length > 128
+      || !blocker.label
+      || blocker.label.length > 80
+      || blocker.kind !== "meeting_content_edit"
+    ) {
+      throw new Error("invalid navigation blocker");
+    }
+    const blockers = navigationBlockersRef.current;
+    if (!blockers.has(blocker.id) && blockers.size >= MAX_NAVIGATION_BLOCKERS) {
+      throw new Error("navigation blocker limit reached");
+    }
+    blockers.set(blocker.id, blocker);
+    setBlockerRevision((value) => value + 1);
+  }, []);
+
+  const unregisterNavigationBlocker = useCallback((id: string) => {
+    if (!navigationBlockersRef.current.delete(id)) return;
+    setBlockerRevision((value) => value + 1);
+  }, []);
+
   const hasUnsavedAudio = phase === "requesting_permission"
     || phase === "recording"
     || phase === "stopping"
@@ -518,6 +558,16 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
     || phase === "finalize_ambiguous"
     || (phase === "failed" && hasRetainedBlob);
 
+  const blockedContentNavigation = useCallback((current: string, destination: string) => (
+    [...navigationBlockersRef.current.values()].filter((blocker) => {
+      try {
+        return !blocker.allowNavigation(current, destination);
+      } catch {
+        return true;
+      }
+    })
+  ), []);
+
   const requestNavigation = useCallback((
     destination: string,
     commit: () => void,
@@ -525,7 +575,9 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
   ): boolean => {
     const current = currentUrlRef.current
       || (typeof window !== "undefined" ? window.location.href : "http://127.0.0.1:3000/");
-    if (!hasUnsavedAudio || isScopeOnlyNavigation(current, destination)) {
+    const audioBlocked = hasUnsavedAudio && !isScopeOnlyNavigation(current, destination);
+    const contentBlocked = blockedContentNavigation(current, destination).length > 0;
+    if (!audioBlocked && !contentBlocked) {
       try {
         currentUrlRef.current = new URL(destination, current).href;
       } catch {
@@ -534,26 +586,40 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
       commit();
       return true;
     }
-    setPendingNavigation({ destination, commit, trigger });
+    navigationCommitInProgressRef.current = false;
+    setPendingNavigation({ current, destination, commit, trigger });
     return false;
-  }, [hasUnsavedAudio]);
+  }, [blockedContentNavigation, hasUnsavedAudio]);
 
   const cancelPendingNavigation = useCallback(() => {
+    navigationCommitInProgressRef.current = false;
     setPendingNavigation(null);
   }, []);
 
   const discardAndNavigate = useCallback(() => {
     const pending = pendingNavigation;
-    if (!pending) return;
-    setPendingNavigation(null);
-    discard();
+    if (!pending || navigationCommitInProgressRef.current) return;
+    const contentBlockers = blockedContentNavigation(pending.current, pending.destination);
+    if (contentBlockers.some((blocker) => blocker.phase !== "dirty")) return;
+    const audioBlocked = hasUnsavedAudio
+      && !isScopeOnlyNavigation(pending.current, pending.destination);
+    navigationCommitInProgressRef.current = true;
+    let committed = false;
     try {
-      currentUrlRef.current = new URL(pending.destination, currentUrlRef.current).href;
-    } catch {
-      // Let the stored navigation action handle it.
+      for (const blocker of contentBlockers) blocker.discard();
+      if (audioBlocked) discard();
+      setPendingNavigation(null);
+      try {
+        currentUrlRef.current = new URL(pending.destination, pending.current).href;
+      } catch {
+        // Let the stored navigation action handle it.
+      }
+      pending.commit();
+      committed = true;
+    } finally {
+      if (!committed) navigationCommitInProgressRef.current = false;
     }
-    pending.commit();
-  }, [discard, pendingNavigation]);
+  }, [blockedContentNavigation, discard, hasUnsavedAudio, pendingNavigation]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -567,14 +633,14 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
   }, [stopPolling, teardownCapture]);
 
   useEffect(() => {
-    if (!hasUnsavedAudio) return;
+    if (!hasUnsavedAudio && navigationBlockersRef.current.size === 0) return;
     const beforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [hasUnsavedAudio]);
+  }, [blockerRevision, hasUnsavedAudio]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -584,13 +650,18 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
         currentUrlRef.current = destination;
         return;
       }
-      if (!hasUnsavedAudio || isScopeOnlyNavigation(currentUrlRef.current, destination)) {
+      const current = currentUrlRef.current;
+      const audioBlocked = hasUnsavedAudio && !isScopeOnlyNavigation(current, destination);
+      const contentBlocked = blockedContentNavigation(current, destination).length > 0;
+      if (!audioBlocked && !contentBlocked) {
         currentUrlRef.current = destination;
         return;
       }
-      const restore = currentUrlRef.current;
+      const restore = current;
       window.history.pushState(window.history.state, "", restore);
+      navigationCommitInProgressRef.current = false;
       setPendingNavigation({
+        current,
         destination,
         trigger: document.activeElement instanceof HTMLElement ? document.activeElement : null,
         commit: () => {
@@ -601,19 +672,25 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [hasUnsavedAudio]);
+  }, [blockedContentNavigation, blockerRevision, hasUnsavedAudio]);
 
   useEffect(() => {
-    if (!pendingNavigation || hasUnsavedAudio) return;
+    if (!pendingNavigation) return;
     const pending = pendingNavigation;
+    const audioBlocked = hasUnsavedAudio
+      && !isScopeOnlyNavigation(pending.current, pending.destination);
+    if (
+      audioBlocked
+      || blockedContentNavigation(pending.current, pending.destination).length > 0
+    ) return;
     setPendingNavigation(null);
     try {
-      currentUrlRef.current = new URL(pending.destination, currentUrlRef.current).href;
+      currentUrlRef.current = new URL(pending.destination, pending.current).href;
     } catch {
       // The stored router action remains authoritative.
     }
     pending.commit();
-  }, [hasUnsavedAudio, pendingNavigation]);
+  }, [blockedContentNavigation, blockerRevision, hasUnsavedAudio, pendingNavigation]);
 
   const value = useMemo<RecorderSessionValue>(() => ({
     phase,
@@ -633,6 +710,8 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
     probe,
     discard,
     dismiss,
+    registerNavigationBlocker,
+    unregisterNavigationBlocker,
     requestNavigation,
   }), [
     phase,
@@ -652,16 +731,29 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
     probe,
     discard,
     dismiss,
+    registerNavigationBlocker,
+    unregisterNavigationBlocker,
     requestNavigation,
   ]);
+
+  const pendingContentBlockers = pendingNavigation
+    ? blockedContentNavigation(pendingNavigation.current, pendingNavigation.destination)
+    : [];
+  const pendingAudioBlocked = Boolean(
+    pendingNavigation
+    && hasUnsavedAudio
+    && !isScopeOnlyNavigation(pendingNavigation.current, pendingNavigation.destination),
+  );
 
   return (
     <RecorderSessionContext.Provider value={value}>
       {children}
       <RecorderCompactControls />
       {pendingNavigation && (
-        <RecorderNavigationDialog
+        <NavigationGuardDialog
           phase={phase}
+          audioBlocked={pendingAudioBlocked}
+          contentBlockers={pendingContentBlockers}
           cancelRef={cancelNavigationRef}
           returnFocus={pendingNavigation.trigger}
           onCancel={cancelPendingNavigation}
@@ -778,8 +870,10 @@ function RecorderCompactControls() {
   );
 }
 
-function RecorderNavigationDialog({
+function NavigationGuardDialog({
   phase,
+  audioBlocked,
+  contentBlockers,
   cancelRef,
   returnFocus,
   onCancel,
@@ -787,38 +881,81 @@ function RecorderNavigationDialog({
   onDiscard,
 }: {
   phase: RecorderSessionPhase;
+  audioBlocked: boolean;
+  contentBlockers: NavigationBlockerDescriptor[];
   cancelRef: RefObject<HTMLButtonElement>;
   returnFocus: HTMLElement | null;
   onCancel: () => void;
   onStop: () => void;
   onDiscard: () => void;
 }) {
-  const recording = phase === "recording" || phase === "requesting_permission";
+  const recording = audioBlocked
+    && (phase === "recording" || phase === "requesting_permission");
+  const hasContent = contentBlockers.length > 0;
+  const contentBusy = contentBlockers.some((blocker) => blocker.phase !== "dirty");
+  const title = audioBlocked && hasContent
+    ? "녹음과 수정 내용이 저장되지 않았습니다"
+    : hasContent
+      ? "수정 내용이 저장되지 않았습니다"
+      : "녹음이 아직 저장되지 않았습니다";
+  const cancelLabel = recording
+    ? "계속 녹음"
+    : hasContent
+      ? "계속 편집"
+      : "현재 화면에 머물기";
+  const discardLabel = audioBlocked && hasContent
+    ? "녹음과 수정 내용 버리고 이동"
+    : hasContent
+      ? "수정 내용 버리고 이동"
+      : "녹음 버리고 이동";
   return (
     <AppDialog
       open
-      title="녹음이 아직 저장되지 않았습니다"
+      title={title}
       initialFocusRef={cancelRef}
       returnFocus={returnFocus}
       onDismiss={() => onCancel()}
     >
       {(dismiss) => (
         <>
-        <p className="mt-2 text-[14px] leading-relaxed text-inkSoft">
-          이 화면을 떠나면 현재 녹음 또는 저장 대기 오디오를 잃을 수 있습니다.
-        </p>
+        {hasContent ? (
+          <div className="mt-2 text-[14px] leading-relaxed text-inkSoft">
+            <p>
+              {contentBusy
+                ? "아래 작업의 저장 결과를 확인하고 있습니다."
+                : "아래 저장되지 않은 내용은 이동하면 사라집니다."}
+            </p>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-ink">
+              {audioBlocked && <li>녹음 원본 또는 저장 대기 오디오</li>}
+              {contentBlockers.map((blocker) => (
+                <li key={blocker.id}>{blocker.label} 초안</li>
+              ))}
+            </ul>
+            {contentBusy && (
+              <p className="mt-2">
+                저장 결과를 확인한 뒤 이동합니다. 결과가 확정되기 전에는 수정 내용을 버리거나 화면을 떠날 수 없습니다.
+              </p>
+            )}
+          </div>
+        ) : audioBlocked ? (
+          <p className="mt-2 text-[14px] leading-relaxed text-inkSoft">
+            이 화면을 떠나면 현재 녹음 또는 저장 대기 오디오를 잃을 수 있습니다.
+          </p>
+        ) : null}
         <div className="mt-5 flex flex-wrap justify-end gap-2">
           <button ref={cancelRef} type="button" onClick={() => dismiss("explicit_cancel")} className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-accent">
-            {recording ? "계속 녹음" : "현재 화면에 머물기"}
+            {cancelLabel}
           </button>
-          {phase === "recording" && (
+          {audioBlocked && phase === "recording" && (
             <button type="button" onClick={() => { onStop(); dismiss("explicit_cancel"); }} className="min-h-11 rounded-full border border-line px-4 text-[13px] font-semibold text-ink">
               기록 중지하고 머물기
             </button>
           )}
-          <button type="button" onClick={onDiscard} className="min-h-11 rounded-full bg-error px-4 text-[13px] font-semibold text-bg">
-            녹음 버리고 이동
-          </button>
+          {!contentBusy && (
+            <button type="button" onClick={onDiscard} className="min-h-11 rounded-full bg-error px-4 text-[13px] font-semibold text-bg">
+              {discardLabel}
+            </button>
+          )}
         </div>
         </>
       )}

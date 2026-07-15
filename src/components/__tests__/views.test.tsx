@@ -9,6 +9,7 @@ import { MeetingDetailView } from "@/components/MeetingDetailView";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
 import { Recorder } from "@/components/Recorder";
+import { GuardedLink } from "@/components/RecorderNavigation";
 import { RecorderSessionProvider } from "@/components/RecorderSessionProvider";
 import { SettingsForm } from "@/components/SettingsForm";
 import type { LlmHealthState } from "@/components/healthStatus";
@@ -26,8 +27,15 @@ vi.mock("next/link", () => ({
 
 // MeetingDetailView uses useRouter. usePathname is stubbed for any transitive
 // navigation consumers rendered by these views.
+const viewNavigation = vi.hoisted(() => ({
+  refresh: vi.fn(),
+  push: vi.fn(),
+  replace: vi.fn(),
+  back: vi.fn(),
+}));
+
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => viewNavigation,
   usePathname: () => "/",
 }));
 
@@ -1081,7 +1089,13 @@ describe("MeetingDetailView — information hierarchy and review freshness", () 
 });
 
 describe("MeetingDetailView — content action hierarchy and manual editing", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    viewNavigation.refresh.mockReset();
+    viewNavigation.push.mockReset();
+    viewNavigation.replace.mockReset();
+    viewNavigation.back.mockReset();
+  });
 
   it("global에는 이동·폴더·combined Markdown만, 각 content action은 해당 tab footer에만 둔다", () => {
     render(
@@ -1120,15 +1134,17 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
 
   it("dirty editor에서 다른 탭 editor를 열면 현재 탭에 discard 확인을 보이고 계속 수정 focus를 복구한다", () => {
     render(
-      <MeetingDetailView
-        id="m1"
-        status={makeStatus({ status: "summarized" })}
-        transcript={{ text: "본문", corrected: true }}
-        segments={[]}
-        summary={SUMMARY}
-        hasAudio={false}
-        content={stableContent()}
-      />,
+      <RecorderSessionProvider>
+        <MeetingDetailView
+          id="m1"
+          status={makeStatus({ status: "summarized" })}
+          transcript={{ text: "본문", corrected: true }}
+          segments={[]}
+          summary={SUMMARY}
+          hasAudio={false}
+          content={stableContent()}
+        />
+      </RecorderSessionProvider>,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
@@ -1140,6 +1156,8 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
     fireEvent.click(screen.getByRole("button", { name: "회의록 요약 수정" }));
 
     expect(screen.getByText("저장하지 않은 수정 내용을 버릴까요?")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "수정 내용이 저장되지 않았습니다" }))
+      .not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "계속 수정" }));
     expect(screen.getByRole("tab", { name: "전체 스크립트" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveValue("저장하지 않은 스크립트");
@@ -1150,6 +1168,80 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
     fireEvent.click(screen.getByRole("button", { name: "수정 내용 버리기" }));
     expect(screen.queryByRole("textbox", { name: "전체 스크립트" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "한 줄 요약" })).toHaveFocus();
+  });
+
+  it("registers a dirty detail editor guard, preserves the draft on cancel, and unregisters on unmount", async () => {
+    window.history.replaceState({}, "", "/meetings/m1");
+    function Harness({ detail }: { detail: boolean }) {
+      return (
+        <RecorderSessionProvider>
+          {detail ? (
+            <MeetingDetailView
+              id="m1"
+              status={makeStatus({ status: "summarized" })}
+              transcript={{ text: "본문", corrected: true }}
+              segments={[]}
+              summary={SUMMARY}
+              hasAudio={false}
+              content={stableContent()}
+            />
+          ) : (
+            <GuardedLink href="/settings">외부 이동</GuardedLink>
+          )}
+        </RecorderSessionProvider>
+      );
+    }
+
+    const view = render(<Harness detail />);
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    const editor = screen.getByRole("textbox", { name: "전체 스크립트" });
+    fireEvent.change(editor, { target: { value: "이탈 전에 보존할 상세 draft" } });
+    await waitFor(() => {
+      expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
+    });
+    const back = screen.getByRole("link", { name: /목록/ });
+    fireEvent.click(back);
+
+    expect(viewNavigation.push).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "수정 내용이 저장되지 않았습니다" }))
+      .toHaveTextContent("전체 스크립트 수정");
+    expect(editor).toHaveValue("이탈 전에 보존할 상세 draft");
+    fireEvent.click(screen.getByRole("button", { name: "계속 편집" }));
+    await waitFor(() => expect(back).toHaveFocus());
+    expect(editor).toHaveValue("이탈 전에 보존할 상세 draft");
+
+    view.rerender(<Harness detail={false} />);
+    fireEvent.click(screen.getByRole("link", { name: "외부 이동" }));
+    expect(viewNavigation.push).toHaveBeenCalledTimes(1);
+    expect(viewNavigation.push).toHaveBeenCalledWith("/settings");
+  });
+
+  it("keeps the detail back link's destination-heading focus policy after explicit discard", async () => {
+    window.history.replaceState({}, "", "/meetings/m1");
+    window.sessionStorage.removeItem("ai-note-focus-scope");
+    render(
+      <RecorderSessionProvider>
+        <MeetingDetailView
+          id="m1"
+          status={makeStatus({ status: "summarized" })}
+          transcript={{ text: "본문", corrected: true }}
+          segments={[]}
+          summary={SUMMARY}
+          hasAudio={false}
+          content={stableContent()}
+        />
+      </RecorderSessionProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "전체 스크립트" }), {
+      target: { value: "이동 전에 버릴 draft" },
+    });
+    fireEvent.click(screen.getByRole("link", { name: /목록/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "수정 내용 버리고 이동" }));
+
+    expect(viewNavigation.push).toHaveBeenCalledTimes(1);
+    expect(window.sessionStorage.getItem("ai-note-focus-scope")).toBe("1");
   });
 
   it("pristine third revision은 content probe가 canonical revision을 확인하지 못하면 기존 snapshot과 경고를 유지한다", async () => {

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import {
   type FormEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -23,7 +24,10 @@ import {
 } from "@/components/MeetingContentEditors";
 import { useOptionalLibrary } from "@/components/LibraryProvider";
 import { GuardedLink as Link } from "@/components/RecorderNavigation";
-import { useOptionalRecorderSession } from "@/components/RecorderSessionProvider";
+import {
+  type NavigationBlockerDescriptor,
+  useOptionalRecorderSession,
+} from "@/components/RecorderSessionProvider";
 import { Tabs, type TabItem } from "@/components/Tabs";
 import { type LlmReadiness, getLlmReadiness } from "@/components/healthStatus";
 import { useHealth } from "@/components/useHealth";
@@ -309,6 +313,18 @@ function operationLabel(operation: string | undefined): string {
   return "다른 내용 작업";
 }
 
+function allowContentEditorNavigation(current: string, destination: string): boolean {
+  if (destination === "history:back") return false;
+  try {
+    const currentUrl = new URL(current);
+    const destinationUrl = new URL(destination, currentUrl);
+    return currentUrl.origin === destinationUrl.origin
+      && currentUrl.pathname === destinationUrl.pathname;
+  } catch {
+    return false;
+  }
+}
+
 export function MeetingDetailView({
   id,
   status,
@@ -420,6 +436,54 @@ export function MeetingDetailView({
     && content?.state === "stable"
     && !serverMutationActive
     && saveStage === "idle";
+
+  const discardEditorForNavigation = useCallback(() => {
+    const snapshot = confirmedRef.current;
+    const mode = editorMode;
+    if (!snapshot || !mode) return;
+    if (mode === "transcript") setTranscriptDraft(snapshot.transcript);
+    else setSummaryDraft(createSummaryEditorDraft(summaryEditable(snapshot.summary)));
+    setEditorMode(null);
+    setSaveStage("idle");
+    setEditorStatus(null);
+    setSaveOutcome("none");
+    setLatestConfirming(false);
+    setDiscardRequest(null);
+    setExternalSyncStatus(null);
+  }, [editorMode]);
+
+  const registerNavigationBlocker = recorderSession?.registerNavigationBlocker;
+  const unregisterNavigationBlocker = recorderSession?.unregisterNavigationBlocker;
+  useEffect(() => {
+    if (!editorMode || !registerNavigationBlocker || !unregisterNavigationBlocker) return;
+    const phase = saveStage === "saving"
+      ? "saving"
+      : saveStage === "verifying" || saveOutcome === "ambiguous"
+        ? "verifying"
+        : activeEditorDirty
+          ? "dirty"
+          : null;
+    if (!phase) return;
+    const blocker: NavigationBlockerDescriptor = {
+      id: `meeting-content-${id}`,
+      kind: "meeting_content_edit",
+      phase,
+      label: editorMode === "transcript" ? "전체 스크립트 수정" : "회의록 요약 수정",
+      discard: discardEditorForNavigation,
+      allowNavigation: allowContentEditorNavigation,
+    };
+    registerNavigationBlocker(blocker);
+    return () => unregisterNavigationBlocker(blocker.id);
+  }, [
+    activeEditorDirty,
+    discardEditorForNavigation,
+    editorMode,
+    id,
+    registerNavigationBlocker,
+    saveOutcome,
+    saveStage,
+    unregisterNavigationBlocker,
+  ]);
 
   useEffect(() => {
     setCurrentLocation(location);
@@ -1211,7 +1275,11 @@ export function MeetingDetailView({
   return (
     <main id="main" className="max-w-5xl space-y-8 px-4 py-12 sm:px-6">
       <header data-detail-section="heading">
-        <Link href={currentBackHref} className="inline-flex min-h-11 items-center text-[13px] text-inkSoft hover:text-accent">
+        <Link
+          href={currentBackHref}
+          onNavigationCommitted={() => window.sessionStorage.setItem("ai-note-focus-scope", "1")}
+          className="inline-flex min-h-11 items-center text-[13px] text-inkSoft hover:text-accent"
+        >
           ← 목록
         </Link>
         <div className="mt-3 min-w-0">

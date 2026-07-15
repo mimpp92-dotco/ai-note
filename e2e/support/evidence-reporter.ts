@@ -20,6 +20,13 @@ import type {
   TestResult,
 } from "@playwright/test/reporter";
 
+import {
+  REQUIRED_SYNTHETIC_VIEWPORTS,
+  collectRequirementCoverage,
+  validateEvidenceAttachments,
+  type TestAttachmentCoverage,
+} from "./evidence-contract";
+
 interface ArtifactRecord {
   path: string;
   sha256: string;
@@ -73,72 +80,97 @@ export default class EvidenceReporter implements Reporter {
   private readonly evidenceRoot = resolve(
     process.env.AI_EXECUTE_BROWSER_EVIDENCE_DIR ?? "test-results/evidence",
   );
-  private readonly screenshots = new Map<string, Buffer>();
-  private readonly consoleProjects = new Set<string>();
-  private readonly networkProjects = new Set<string>();
+  private readonly screenshots: Array<{
+    project: string;
+    name: string;
+    body: Buffer;
+  }> = [];
+  private readonly attachmentCoverage: TestAttachmentCoverage[] = [];
   private readonly consoleErrors: string[] = [];
   private readonly externalRequests: string[] = [];
   private readonly tests: Array<{ project: string; title: string; status: string; errors: string[] }> = [];
-  private expectedProjects: string[] = [];
+  private suiteTests: TestCase[] = [];
 
   onBegin(_config: FullConfig, suite: Suite): void {
-    this.expectedProjects = [...new Set(
-      suite.allTests().map((test) => test.parent.project()?.name ?? "unknown"),
-    )];
+    this.suiteTests = suite.allTests();
     prepareEvidenceRoot(this.evidenceRoot, this.runnerOwned);
   }
 
   onTestEnd(test: TestCase, result: TestResult): void {
     const project = test.parent.project()?.name ?? "unknown";
+    const title = test.titlePath().join(" › ");
+    const testId = `${project}:${this.tests.length + 1}:${title}`;
     this.tests.push({
       project,
-      title: test.titlePath().join(" › "),
+      title,
       status: result.status,
       errors: result.errors.map((error) => error.message ?? String(error)),
     });
 
+    let screenshotCount = 0;
+    let consoleCount = 0;
+    let networkCount = 0;
     for (const attachment of result.attachments) {
-      if (attachment.name === "browser-screenshot") {
+      if (
+        attachment.name === "browser-screenshot"
+        || attachment.name.startsWith("browser-screenshot:")
+      ) {
         const body = bytesForAttachment(attachment);
-        if (body) this.screenshots.set(project, body);
+        if (body) screenshotCount += 1;
+        if (body && result.status === "passed") {
+          this.screenshots.push({ project, name: attachment.name, body });
+        }
       }
       if (attachment.name === "browser-console") {
-        this.consoleProjects.add(project);
         const parsed = parseAttachmentJson(attachment) as { errors?: unknown } | null;
         if (Array.isArray(parsed?.errors)) {
+          consoleCount += 1;
           this.consoleErrors.push(...parsed.errors.filter((item): item is string => typeof item === "string"));
         }
       }
       if (attachment.name === "browser-network") {
-        this.networkProjects.add(project);
         const parsed = parseAttachmentJson(attachment) as { externalRequests?: unknown } | null;
         if (Array.isArray(parsed?.externalRequests)) {
+          networkCount += 1;
           this.externalRequests.push(
             ...parsed.externalRequests.filter((item): item is string => typeof item === "string"),
           );
         }
       }
     }
+    this.attachmentCoverage.push({
+      id: testId,
+      viewport: project,
+      screenshotCount,
+      consoleCount,
+      networkCount,
+    });
   }
 
   async onEnd(result: FullResult): Promise<{ status?: FullResult["status"] }> {
     const artifactsRoot = join(this.evidenceRoot, "artifacts");
     const screenshotRecords: ScreenshotRecord[] = [];
-    for (const project of this.expectedProjects) {
-      const body = this.screenshots.get(project);
-      if (!body) continue;
-      const path = join(artifactsRoot, `${safeName(project)}.png`);
-      writeFileSync(path, body, { mode: 0o600 });
-      screenshotRecords.push({ viewport: project, ...this.record(path) });
+    const screenshotIndexes = new Map<string, number>();
+    for (const screenshot of this.screenshots) {
+      const index = (screenshotIndexes.get(screenshot.project) ?? 0) + 1;
+      screenshotIndexes.set(screenshot.project, index);
+      const milestone = screenshot.name.split(":", 2)[1] ?? "success";
+      const path = join(
+        artifactsRoot,
+        `${safeName(screenshot.project)}-${String(index).padStart(2, "0")}-${safeName(milestone)}.png`,
+      );
+      writeFileSync(path, screenshot.body, { mode: 0o600 });
+      screenshotRecords.push({ viewport: screenshot.project, ...this.record(path) });
     }
 
-    const completeProjects = this.expectedProjects.length > 0 && this.expectedProjects.every(
-      (project) => this.screenshots.has(project)
-        && this.consoleProjects.has(project)
-        && this.networkProjects.has(project),
-    );
+    const attachmentValidation = validateEvidenceAttachments({
+      requiredViewports: REQUIRED_SYNTHETIC_VIEWPORTS,
+      tests: this.attachmentCoverage,
+    });
+    const requirementCoverage = collectRequirementCoverage(this.suiteTests);
     const passed = result.status === "passed"
-      && completeProjects
+      && attachmentValidation.complete
+      && requirementCoverage.invalidAnnotations.length === 0
       && this.consoleErrors.length === 0
       && this.externalRequests.length === 0;
     const assertionsPath = join(artifactsRoot, "assertions.json");
@@ -147,7 +179,9 @@ export default class EvidenceReporter implements Reporter {
       assertionsPath,
       JSON.stringify({
         passed,
-        expectedProjects: this.expectedProjects,
+        expectedProjects: REQUIRED_SYNTHETIC_VIEWPORTS,
+        attachmentValidation,
+        invalidRequirementAnnotations: requirementCoverage.invalidAnnotations,
         noConsoleErrors: this.consoleErrors.length === 0,
         noExternalNetwork: this.externalRequests.length === 0,
         externalRequests: this.externalRequests,
@@ -161,19 +195,15 @@ export default class EvidenceReporter implements Reporter {
       { mode: 0o600 },
     );
 
-    const coveredRequirements = (process.env.AI_NOTE_E2E_REQUIREMENTS ?? "SYNTHETIC-BROWSER-SMOKE")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
     const manifest = {
       schemaVersion: 1,
-      coveredRequirements,
+      coveredRequirements: requirementCoverage.coveredRequirements,
       browser: {
         backend: "playwright",
         fixture: "synthetic",
-        fixtureId: "ai-note-empty-library-v1",
+        fixtureId: "ai-note-synthetic-library-v1",
         fixtureRoot: "artifacts",
-        viewports: this.expectedProjects,
+        viewports: REQUIRED_SYNTHETIC_VIEWPORTS,
         assertionsPassed: passed,
         usedRealUserData: false,
         forbiddenRootAccessed: false,

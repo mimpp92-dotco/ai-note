@@ -12,6 +12,7 @@ const baseURL = `http://localhost:${port}`;
 
 export default defineConfig({
   testDir: "./e2e",
+  globalSetup: "./e2e/global-setup.mjs",
   outputDir: "test-results/playwright",
   timeout: 60_000,
   fullyParallel: false,

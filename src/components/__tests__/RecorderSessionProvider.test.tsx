@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GuardedLink, useGuardedRouter } from "@/components/RecorderNavigation";
 import {
+  type NavigationBlockerDescriptor,
+  type NavigationBlockerPhase,
   RecorderSessionProvider,
   useRecorderSession,
 } from "@/components/RecorderSessionProvider";
@@ -66,13 +69,73 @@ function Probe() {
 
 function ProgrammaticNavigation() {
   const router = useGuardedRouter();
-  return <button onClick={(event) => router.push("/settings", event.currentTarget)}>프로그램 이동</button>;
+  return (
+    <>
+      <button onClick={(event) => router.push("/settings", event.currentTarget)}>프로그램 이동</button>
+      <button onClick={(event) => router.replace("/glossary", event.currentTarget)}>프로그램 교체</button>
+      <button onClick={(event) => router.back(event.currentTarget)}>프로그램 뒤로</button>
+    </>
+  );
 }
 
-function App({ full = true }: { full?: boolean }) {
-  return (
+const noContentDiscard = () => {};
+
+function sameDetailPage(current: string, destination: string): boolean {
+  if (destination === "history:back") return false;
+  try {
+    return new URL(current).pathname === new URL(destination, current).pathname;
+  } catch {
+    return false;
+  }
+}
+
+function ContentNavigationBlocker({
+  phase,
+  label = "전체 스크립트 수정",
+  onDiscard = noContentDiscard,
+}: {
+  phase: NavigationBlockerPhase;
+  label?: NavigationBlockerDescriptor["label"];
+  onDiscard?: () => void;
+}) {
+  const { registerNavigationBlocker, unregisterNavigationBlocker } = useRecorderSession();
+  useEffect(() => {
+    registerNavigationBlocker({
+      id: "meeting-content-m1",
+      kind: "meeting_content_edit",
+      phase,
+      label,
+      discard: onDiscard,
+      allowNavigation: sameDetailPage,
+    });
+    return () => unregisterNavigationBlocker("meeting-content-m1");
+  }, [label, onDiscard, phase, registerNavigationBlocker, unregisterNavigationBlocker]);
+  return null;
+}
+
+function App({
+  full = true,
+  blockerPhase = null,
+  blockerLabel,
+  onContentDiscard,
+  strict = false,
+}: {
+  full?: boolean;
+  blockerPhase?: NavigationBlockerPhase | null;
+  blockerLabel?: NavigationBlockerDescriptor["label"];
+  onContentDiscard?: () => void;
+  strict?: boolean;
+}) {
+  const tree = (
     <RecorderSessionProvider>
       {full && <Recorder />}
+      {blockerPhase && (
+        <ContentNavigationBlocker
+          phase={blockerPhase}
+          label={blockerLabel}
+          onDiscard={onContentDiscard}
+        />
+      )}
       <SessionCapture />
       <Probe />
       <GuardedLink href="/settings">설정으로</GuardedLink>
@@ -80,6 +143,7 @@ function App({ full = true }: { full?: boolean }) {
       <ProgrammaticNavigation />
     </RecorderSessionProvider>
   );
+  return strict ? <StrictMode>{tree}</StrictMode> : tree;
 }
 
 async function startRecording() {
@@ -176,6 +240,153 @@ describe("RecorderSessionProvider", () => {
     fireEvent.click(await screen.findByRole("button", { name: "녹음 버리고 이동" }));
     expect(navigation.push).toHaveBeenCalledWith("/settings");
     expect(screen.getByTestId("session")).toHaveTextContent("idle:none");
+  });
+
+  it("registers one idempotent dirty content blocker in Strict Mode and removes it on cleanup", async () => {
+    const discard = vi.fn();
+    const view = render(
+      <App blockerPhase="dirty" onContentDiscard={discard} strict />,
+    );
+    const link = screen.getByRole("link", { name: "설정으로" });
+
+    fireEvent.click(link);
+    expect(navigation.push).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("dialog", { name: "수정 내용이 저장되지 않았습니다" }))
+      .toHaveLength(1);
+    dispatchNativeCancel(screen.getByRole("dialog"));
+    await waitFor(() => expect(link).toHaveFocus());
+
+    view.rerender(<App strict />);
+    fireEvent.click(link);
+    expect(navigation.push).toHaveBeenCalledTimes(1);
+    expect(discard).not.toHaveBeenCalled();
+  });
+
+  it("keeps a dirty content draft until explicit discard and returns cancel focus to the link", async () => {
+    const discard = vi.fn();
+    render(<App blockerPhase="dirty" onContentDiscard={discard} />);
+    const link = screen.getByRole("link", { name: "설정으로" });
+
+    fireEvent.click(link);
+    const dialog = screen.getByRole("dialog", { name: "수정 내용이 저장되지 않았습니다" });
+    expect(dialog).toHaveTextContent("전체 스크립트 수정");
+    expect(dialog).toHaveTextContent("이동하면 사라집니다");
+    const keep = screen.getByRole("button", { name: "계속 편집" });
+    await waitFor(() => expect(keep).toHaveFocus());
+    expect(discard).not.toHaveBeenCalled();
+    expect(navigation.push).not.toHaveBeenCalled();
+
+    dispatchNativeCancel(dialog);
+    await waitFor(() => expect(link).toHaveFocus());
+    fireEvent.click(link);
+    fireEvent.click(await screen.findByRole("button", { name: "수정 내용 버리고 이동" }));
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(navigation.push).toHaveBeenCalledTimes(1);
+    expect(navigation.push).toHaveBeenCalledWith("/settings");
+  });
+
+  it.each([
+    ["프로그램 이동", "push", "/settings"],
+    ["프로그램 교체", "replace", "/glossary"],
+    ["프로그램 뒤로", "back", undefined],
+  ] as const)("guards %s with the same pending navigation", async (button, method, destination) => {
+    const discard = vi.fn();
+    render(<App blockerPhase="dirty" onContentDiscard={discard} />);
+
+    fireEvent.click(screen.getByRole("button", { name: button }));
+    expect(screen.getByRole("dialog", { name: "수정 내용이 저장되지 않았습니다" }))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "수정 내용 버리고 이동" }));
+
+    expect(discard).toHaveBeenCalledTimes(1);
+    if (destination === undefined) expect(navigation[method]).toHaveBeenCalledWith();
+    else expect(navigation[method]).toHaveBeenCalledWith(destination);
+  });
+
+  it.each(["saving", "verifying"] as const)(
+    "%s content cannot be discarded and commits its pending navigation after blocker removal",
+    async (phase) => {
+      const discard = vi.fn();
+      const view = render(<App blockerPhase={phase} onContentDiscard={discard} />);
+      fireEvent.click(screen.getByRole("link", { name: "설정으로" }));
+
+      expect(screen.getByRole("dialog")).toHaveTextContent("저장 결과를 확인한 뒤 이동합니다");
+      expect(screen.queryByRole("button", { name: /버리고 이동/ })).not.toBeInTheDocument();
+      expect(discard).not.toHaveBeenCalled();
+      expect(navigation.push).not.toHaveBeenCalled();
+
+      view.rerender(<App />);
+      await waitFor(() => expect(navigation.push).toHaveBeenCalledTimes(1));
+      expect(navigation.push).toHaveBeenCalledWith("/settings");
+      expect(discard).not.toHaveBeenCalled();
+    },
+  );
+
+  it("changes a pending saving guard to dirty after failure without losing the draft", async () => {
+    const discard = vi.fn();
+    const view = render(<App blockerPhase="saving" onContentDiscard={discard} />);
+    fireEvent.click(screen.getByRole("link", { name: "설정으로" }));
+    expect(screen.queryByRole("button", { name: /버리고 이동/ })).not.toBeInTheDocument();
+
+    view.rerender(<App blockerPhase="dirty" onContentDiscard={discard} />);
+    expect(await screen.findByRole("button", { name: "수정 내용 버리고 이동" }))
+      .toBeInTheDocument();
+    expect(navigation.push).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "수정 내용 버리고 이동" }));
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(navigation.push).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["dirty", "saving", "verifying"] as const)(
+    "adds beforeunload protection for %s content and removes it when pristine",
+    (phase) => {
+      const view = render(<App blockerPhase={phase} />);
+      expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
+      view.rerender(<App />);
+      expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+    },
+  );
+
+  it("combines unsaved audio and dirty content without discarding either before explicit confirmation", async () => {
+    const discardContent = vi.fn();
+    render(<App full={false} blockerPhase="dirty" onContentDiscard={discardContent} />);
+    const session = getRecorderSession();
+    await act(async () => session.start());
+    await waitFor(() => expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/));
+
+    fireEvent.click(screen.getByRole("link", { name: "설정으로" }));
+    const dialog = screen.getByRole("dialog", { name: "녹음과 수정 내용이 저장되지 않았습니다" });
+    expect(dialog).toHaveTextContent("녹음 원본");
+    expect(dialog).toHaveTextContent("전체 스크립트 수정");
+    expect(discardContent).not.toHaveBeenCalled();
+    expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/);
+    expect(navigation.push).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "계속 녹음" }));
+    expect(discardContent).not.toHaveBeenCalled();
+    expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/);
+    fireEvent.click(screen.getByRole("link", { name: "설정으로" }));
+    fireEvent.click(screen.getByRole("button", { name: "녹음과 수정 내용 버리고 이동" }));
+
+    expect(discardContent).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("session")).toHaveTextContent("idle:none");
+    expect(navigation.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores popstate URL for dirty content and consumes the destination once after confirmation", async () => {
+    window.history.replaceState({}, "", "/meetings/m1");
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const discard = vi.fn();
+    render(<App blockerPhase="dirty" onContentDiscard={discard} />);
+
+    window.history.pushState({}, "", "/settings");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(await screen.findByRole("dialog", { name: "수정 내용이 저장되지 않았습니다" }))
+      .toBeInTheDocument();
+    expect(window.location.pathname).toBe("/meetings/m1");
+    fireEvent.click(screen.getByRole("button", { name: "수정 내용 버리고 이동" }));
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(back).toHaveBeenCalledTimes(1);
   });
 
   it("returns from permanent discard confirmation to its connected trigger", async () => {
