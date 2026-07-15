@@ -12,6 +12,8 @@ src/
 └── services/          # whisper 클라이언트(프록시) 등 외부 래퍼
 whisper/               # 로컬 Python whisper 서비스(uv 3.11/3.12 핀 venv)
 scripts/               # check-links.mjs (링크 무결성 체커)
+e2e/                   # synthetic Playwright scenario + evidence reporter
+playwright.config.ts   # Chromium 3-viewport, isolated webServer 계약
 .claude/commands/      # meeting-summarize.md
 data/meetings/{id}/    # 런타임 산출물(gitignore, fixtures 제외)
 data/meetings/{id}/knowledge-card.json # meeting별 재생성 가능한 검색 파생물
@@ -22,6 +24,12 @@ data/knowledge/corpus-map.json # bounded 전체 검색 후보 projection
 fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fallback
 ```
 
+## Synthetic browser QA 경계
+
+반복 가능한 시각/상호작용 gate의 정본은 `npm run test:e2e`다. `run-e2e.mjs`가 매 실행마다 loopback port와 OS temp snapshot을 소유하고, snapshot에는 allowlist된 `src/`(비활성 worker entrypoint 제외)·`public/`·build metadata와 새 empty `data/`만 복사한다. `node_modules`는 dependency root로만 연결하며 `data/`, `glossary.json`, `.env*`, Git metadata와 runtime 산출물은 복사하지 않는다. App child는 synthetic `HOME`, scrubbed env, `AI_NOTE_DISABLE_WORKER=1`로 실행되고 Whisper target은 같은 임시 Next server의 존재하지 않는 `/health`로 고정돼 실제 로컬 Whisper/LLM/CLI에 닿지 않는다. 서버 bind는 `127.0.0.1`; Next 15 Route Handler authority와 local Host guard를 일치시키기 위해 browser URL만 동등한 loopback 이름 `localhost`를 쓴다.
+
+`e2e/support/synthetic-test.ts`가 각 scenario의 성공 screenshot, console error, 외부 browser request를 자동 수집한다. Reporter는 desktop-1440/mobile-390/mobile-320 coverage, assertion pass, console error 0, external network 0, SHA-256/byte size를 가진 `manifest.json`을 생성한다. 평상시 산출물은 gitignored `test-results/`, `/execute`에서는 runner-owned Git local journal만 사용한다. Chrome DevTools MCP는 existing Chrome session이 필요한 정성 탐색에만 선택적으로 사용하며 이 gate나 evidence를 대체하지 않는다. 상세 결정은 ADR [0020](decisions/0020-deterministic-synthetic-browser-verification.md)을 따른다.
+
 ## 프로세스 & 데이터 흐름
 ```
 브라우저(녹음, 오디오만·메모리 버퍼) ─stop─▶ POST /api/meetings/{id}/finalize(바이너리 스트림)
@@ -29,7 +37,7 @@ fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fall
 app-api ─POST /transcribe({meetingId,dispatchId})─▶ whisper(127.0.0.1, 배치 ko large-v3)
   whisper: raw.md(세그먼트-per-line) + segments.json 디스크 기록 → 상태 HTTP 반환
   app-api: 잡 폴링 → status.json 갱신(transcribing→transcribed)
-요약 워커(로컬 CLI/Ollama) {id|latest}: raw.md → staging-only summarize-core → app publisher → transcript.md + summary.json
+콘텐츠 coordinator(로컬 CLI/Ollama) {initial|transcript_regenerate|summary_regenerate}: intent별 입력 → staging payload → app publisher → transcript.md + summary.json
 ```
 
 ```mermaid
@@ -38,9 +46,9 @@ flowchart LR
     API -->|"POST /transcribe"| W["whisper · 127.0.0.1"]
     W -->|"raw.md · segments.json"| API
     API -->|status.json| UI
-    W -->|raw.md| SUM["요약 워커 · 로컬 CLI/Ollama"]
+    W -->|raw.md| SUM["최초 교정·요약 / 독립 재생성 · 로컬 CLI/Ollama"]
     SUM -->|validated payload| PUB["app summarize publisher"]
-    PUB -->|"transcript.md · summary.json"| V["열람 · 내보내기"]
+    PUB -->|"transcript.md · summary.json"| V["열람 · 수동 수정 · 내보내기"]
 ```
 
 ## 파일 소유권 (단일 writer)
@@ -50,7 +58,7 @@ flowchart LR
 | `audio.webm` / `play.webm` | app finalize publisher | 원본 불변 / 리먹스 |
 | `.finalize-receipt.json` | app finalize publisher | immutable metadata/location/audio identity; same-ID probe source |
 | `raw.md` + `segments.json` | whisper | 원본 불변 |
-| `transcript.md` + `summary.json` | **app summarize publisher만** | 재생성 가능. `summary.json`이 generation completion marker |
+| `transcript.md` + `summary.json` | **app summarize publisher만** | API/UI/adapter 직접 쓰기 금지. 수동 저장·독립 재생성도 full pair로 발행하며 `summary.json`이 completion marker |
 | `data/library.json` | **library repository만** | workspace/folder/placement metadata. Meeting directory는 이동하지 않음 |
 | `data/user-profile.json` | **profile settings app-api만** | optional 표시 이름/별칭/시간 기준. `data/settings.json` LLM provider 설정과 분리 |
 | `.whisper-dispatch.json` | **whisper만** | audio identity + durable dispatch publication phase |
@@ -64,7 +72,7 @@ flowchart LR
 
 Card write는 caller의 meeting operation owner 아래 `safe meeting ID → tombstone fence → artifact write lease → tombstone 재확인 → status와 source pair read → atomic replace` 순서를 따른다. Corrupt/unreadable status, deleted/ambiguous tombstone, unsafe record, missing/malformed/ambiguous pair는 live card로 복구하지 않고 fail-closed한다. Rename이 card/corpus의 logical commit이며 parent sync가 일시 실패한 `pending`도 committed 결과로 유지하고 rollback이나 blind rewrite를 하지 않는다.
 
-요약/재요약 성공 경로는 app publisher가 `summary.json` completion marker를 발행하고 matching `summarizeAttempt`를 committed 상태로 정리한 뒤에만 별도의 knowledge repository 호출로 card와 corpus 갱신을 시도한다. Publisher 결과와 index 결과는 독립적이다. Index의 missing/stale/corrupt/I/O 실패나 post-rename `pending`은 이미 발행된 transcript/summary pair와 `summarized` status를 rollback·실패 전이시키지 않으며, raw 오류 대신 bounded safe log와 다음 read의 index 상태로만 남는다. Corpus 갱신 trigger는 이 성공한 pair 발행과 명시적 `POST /api/knowledge/reindex`뿐이다.
+최초 생성, summary-only 재생성, summary 직접 저장처럼 **fresh summary**를 만든 경로는 app publisher가 `summary.json` completion marker와 matching `summarizeAttempt` 정리를 commit한 뒤에만 별도의 knowledge repository 호출로 card와 corpus 갱신을 시도한다. Transcript-only 재생성·직접 저장은 기존 summary를 보존하고 outdated일 수 있으므로 index refresh를 실행하지 않는다. Publisher 결과와 index 결과는 독립적이다. Index의 missing/stale/corrupt/I/O 실패나 post-rename `pending`은 이미 발행된 transcript/summary pair와 `summarized` status를 rollback·실패 전이시키지 않으며, raw 오류 대신 bounded safe log와 다음 read의 index 상태로만 남는다. 그 밖의 corpus 갱신 trigger는 명시적 `POST /api/knowledge/reindex`뿐이다.
 
 `data/knowledge/` 최초 생성은 data root와 새 entry가 실제 non-symlink directory인지 확인하고 `data/` namespace를 sync한다. 알려진 directory-sync 미지원은 `best_effort`, 지원 환경의 일시 실패는 `pending`으로 구분한다. Corpus write는 absolute canonical `corpus-map.json` path process queue에서 직렬화한다. Rebuild는 common meeting classifier의 `live` record만 대상으로 library/classification snapshot과 meeting별 tombstone/artifact-read-lease card snapshot을 queue 밖에서 수집한다. 모든 per-meeting lease를 놓은 뒤에만 corpus queue를 잡아 latest bounded map을 atomic replace하므로 artifact/library lease와 corpus queue를 중첩하지 않는다.
 
@@ -80,7 +88,7 @@ Library/classification snapshot과 card snapshot 사이의 최신성 경쟁은 �
 
 Date/workspace/folder/status/action-item filter는 score 계산 전에 적용한다. Ranking은 `src/lib/meetingSearch.ts`의 명시적 field-weight table과 exact-phrase bonus가 정본이며, 동점은 `startedAt` 최신순 → meeting ID 영문 오름차순이다. Public match reason은 상위 3개의 user-facing field label과 query 주변 180자 이하 plain-text excerpt만 포함하고 HTML/Markdown, score, absolute path, raw filesystem/provider output을 포함하지 않는다. `mentionedPeople`은 action-item owner처럼 결정적으로 만든 hint일 뿐 임의 인명 인식 결과로 설명하지 않는다.
 
-기본 검색 source는 `corpus-map.json`과 `knowledge-card.json`이며 `transcript.md` 전체를 매 요청마다 읽지 않는다. Search card freshness는 canonical pair의 completion marker인 current `summary.json` 해시와 current `summarizeAttempt`를 사용한다. Pair publisher가 transcript와 summary를 한 generation으로 발행하고 summary를 마지막에 commit한다는 계약에 의존한다. Ready card만 summary semantic field를 제공한다. Stale/missing/corrupt card는 본문을 제공하지 않지만 current live title/date/status/location/review participants는 검색할 수 있고 aggregate는 `partial`이다. Corpus 자체가 missing/corrupt/I/O로 읽히지 않으면 `unavailable`이며 결과를 반환하지 않는다.
+기본 검색 source는 `corpus-map.json`과 `knowledge-card.json`이며 `transcript.md` 전체를 매 요청마다 읽지 않는다. Search card freshness는 canonical pair의 completion marker인 current `summary.json` 해시, current `summarizeAttempt`, `contentRevision` pair hash와 `basedOnTranscriptSha256`를 함께 사용한다. Pair publisher가 transcript와 summary를 한 generation으로 발행하고 summary를 마지막에 commit한다는 계약에 의존한다. Ready이면서 summary가 current transcript 기준 fresh인 card만 semantic field를 제공한다. Outdated/stale/missing/corrupt card는 본문을 제공하지 않지만 current live title/date/status/location/review participants는 검색할 수 있고 aggregate는 `partial`이다. Corpus 자체가 missing/corrupt/I/O로 읽히지 않으면 `unavailable`이며 결과를 반환하지 않는다.
 
 검색은 library/classified-status snapshot에서 후보를 만들고 card를 읽은 뒤 current library/status snapshot을 다시 읽는다. 두 snapshot의 `libraryId+revision`이 다르면 혼합 generation을 반환하지 않고 no-store `409 {error:{code:"search_retry",message}}`로 낮춘다. Public result 직전 current classifier와 tombstone을 다시 확인해 tombstoned/ambiguous/unsafe/corrupt/missing-status meeting을 제외하고 title/status/location/review participants는 반드시 마지막 live snapshot에서 투영한다.
 
@@ -297,10 +305,22 @@ Surviving claim의 meeting은 첫 등장 순서로 `1..N` 번호를 서버가 �
   },
   "paths": { "audio":"...","play":"...","raw":"...","transcript":"...","summary":"...","segments":"..." },
   "review": { "participants": [] },  // 상세 UI(app-api 경유) 입력
-  "summarizeAttempts": 0,            // 선택. 요약 실패 횟수(워커 백오프용). 성공/수동 재시도 시 0으로 리셋
-  "summarizeAttempt": {              // 선택. adapter 실행·202 전 durable acceptance receipt
-    "attemptId": "uuid", "kind": "initial|resummarize", "startedAt": "ISO",
-    "preTranscriptHash": "optional sha256", "preSummaryHash": "optional sha256"
+  "summarizeAttempts": 0,            // 선택. 모델 생성 실패 횟수(워커 백오프용). 성공/명시적 재시도 시 0으로 리셋
+  "summarizeAttempt": {              // 선택. adapter 실행·202 또는 수동 pair 발행 전 durable acceptance receipt
+    "attemptId": "uuid",
+    "kind": "initial|resummarize|manual_edit|transcript_regenerate|summary_regenerate",
+    "startedAt": "ISO",
+    "preTranscriptHash": "optional sha256", "preSummaryHash": "optional sha256",
+    "intendedContentRevision": "new-kind에서는 필수 ContentRevision"
+  },
+  "contentRevision": {               // 선택. 없으면 stable legacy pair를 virtual generated+fresh로 해석
+    "transcript": {
+      "source": "generated|manual", "sha256": "sha256", "updatedAt": "ISO"
+    },
+    "summary": {
+      "source": "generated|manual", "sha256": "sha256",
+      "basedOnTranscriptSha256": "sha256", "updatedAt": "ISO"
+    }
   },
   "updatedAt": "ISO"
 }
@@ -316,26 +336,62 @@ StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `re
 - `highlights`를 항상 포함(fallback 시 `structured`에 `discussion[:3]` 등으로 채움).
 - `participants`는 **비운다(`[]`)** — 참석자는 `status.review`(사용자 입력)만 authoritative. 모델이 전사에서 주운 이름을 자동 기록 금지(거짓 attendees edge·프라이버시).
 
-## 요약 artifact pair 발행·복구 (ADR 0013)
+## 편집 가능한 파생 콘텐츠 revision·freshness (ADR 0021)
 
-- `summarizeCore`는 path를 받지 않고 검증된 transcript/summary payload만 반환한다. Canonical 파일은 `summarizePublisher`만 쓴다.
-- Adapter 실행과 202 응답 전 `status.summarizeAttempt`를 durable/best-effort로 commit한다. 지원 환경의 일시 parent-sync 실패(`pending`)는 launch 0으로 fail-closed한다.
+- `contentRevision.transcript`는 `{source:"generated|manual",sha256,updatedAt}`, `contentRevision.summary`는 여기에 `basedOnTranscriptSha256`를 더한다. `summaryOutdated`는 저장 필드가 아니라 `contentRevision.summary.basedOnTranscriptSha256 !== contentRevision.transcript.sha256`으로만 파생한다.
+- `contentRevision`이 없는 legacy stable pair는 현재 두 canonical byte hash, `source:"generated"`, `status.updatedAt`, summary base=current transcript hash인 **virtual fresh revision**으로 읽는다. 이 호환 해석은 read가 status write를 유발하지 않는다.
+- Stable pair read는 artifact byte hash와 persisted/virtual `contentRevision` hash를 대조한다. 불일치는 `source_conflict`이고 transcript/summary를 plausible pair로 노출하지 않는다. `summaryOutdated`가 true여도 pair 자체는 stable하며 기존 summary bytes를 삭제하지 않는다.
+- Transcript 직접 저장·재생성은 summary bytes와 summary revision metadata를 보존한다. Transcript hash가 달라지면 summary가 outdated가 되고, 같으면 기존 freshness를 유지한다. Summary 직접 저장·재생성은 current transcript hash를 `basedOnTranscriptSha256`로 기록해 fresh로 만든다.
+- Summary 수동 편집 DTO는 `oneLine`, `purpose`, `highlights`, `discussion`, `decisions`, `actionItems[{owner,task,due}]`, `risks`, `followups`만 허용한다. Canonical `title`, `topicSlug`, `summary.participants`는 저장 시 기존 값을 보존하고 unknown field는 거부한다. 표시 제목은 title route/`titleOverride`, 참석자는 review route/`status.review.participants`가 계속 유일한 사용자 writer다.
+
+## 수동 content API·저장 확인
+
+모든 route는 local request guard → safe meeting ID → tombstone fence를 body/filesystem보다 먼저 적용하고 `Cache-Control:no-store`를 사용한다. 안정된 pair의 revision token은 두 artifact를 함께 묶는 exact `{transcriptSha256,summarySha256}`다.
+
+| Route | 요청 계약 | 성공 계약 |
+|---|---|---|
+| `GET /api/meetings/{id}/content` | body 없는 read-only probe | `{transcript,summary,revision,transcriptSource,summarySource,summaryOutdated,pairState:"stable"}` |
+| `PATCH /api/meetings/{id}/transcript` | strict `{expectedRevision,transcript}`, raw body 2 MiB; transcript는 CRLF→LF 정규화 후 non-empty·UTF-8 1 MiB 이하 | stable content resource + `durability:durable|best_effort|pending` |
+| `PATCH /api/meetings/{id}/summary` | strict `{expectedRevision,summary:EditableSummary}`, raw body 512 KiB | stable content resource + `durability:durable|best_effort|pending` |
+
+- Expected pair가 current와 다르면 last-write-wins를 하지 않고 `409 content_revision_conflict`다. 다른 content mutation은 `409 content_operation_in_progress`, revision source 불일치는 `409 content_source_conflict`, 모순 상태는 `409 content_state_ambiguous`, 안전한 저장/판정 불가는 `503 content_save_unavailable`다. Validation/body cap, missing/deleted meeting, local guard 오류는 공통 typed envelope를 따른다. Public error는 path·hash·attempt/provider/fs output을 포함하지 않는다.
+- Client state는 `editing → saving → verifying? → saved|validation|conflict|error|ambiguous`다. Network failure나 invalid 2xx body는 같은 PATCH를 재전송하지 않고 GET probe를 수행한다. Probe가 intended content면 saved, pre-save revision이면 not-saved라 같은 draft로 재시도 가능, 제3 revision이면 conflict다. Probe 자체가 불명확하면 draft를 보존한 ambiguous 상태로 막고 `내 입력 복사`만 안전하게 제공한다.
+- Parent refresh는 dirty/saving/verifying draft를 덮지 않는다. Pristine local save 뒤 predecessor revision refresh는 무시하고, 알 수 없는 제3 revision은 content probe가 같은 canonical revision을 확인한 경우에만 수용한다.
+
+## 최초 생성·독립 재생성
+
+최초 생성 뒤에는 transcript와 summary generation을 결합하지 않는다. 모든 기존-pair mutation은 expected pair revision과 exclusive meeting content operation을 요구한다.
+
+| Kind | 입력·LLM 호출 | Publisher payload | freshness·index |
+|---|---|---|---|
+| `initial` | immutable `raw.md` + glossary로 correction 1회, 그 결과 transcript로 summary 1회(스키마 fallback이면 summary 1회 추가 가능) | 새 transcript + 새 summary | generated/generated fresh; 성공 뒤 index refresh |
+| `transcript_regenerate` | immutable `raw.md` + current glossary로 correction **1회만**; summary LLM 없음 | 새 transcript + unchanged current summary | transcript source=generated; summary metadata 보존, 달라진 transcript면 outdated; index refresh 없음 |
+| `summary_regenerate` | current canonical transcript로 summary만 생성(스키마 fallback이면 1회 추가 가능); raw/glossary/correction 미사용 | unchanged current transcript + 새 summary | summary source=generated, current transcript 기준 fresh; 성공 뒤 index refresh |
+| `manual_edit` transcript | LLM 호출 없음 | normalized manual transcript + unchanged current summary | transcript source=manual; 달라지면 outdated; index refresh 없음 |
+| `manual_edit` summary | LLM 호출 없음 | unchanged current transcript + editable fields를 반영한 summary | summary source=manual, current transcript 기준 fresh; 성공 뒤 index refresh |
+
+- Transcript 재생성은 `POST /api/meetings/{id}/transcript/regenerate` strict `{expectedRevision,confirmReplacement:true}`다. Summary 재생성은 기존 endpoint `POST /api/meetings/{id}/summarize` strict `{resummarize:true,expectedRevision}`를 summary-only 의미로 사용한다. Initial은 `resummarize:false` 또는 생략, expected revision 없음인 기존 미생성 조건에서만 수락한다.
+- Generation route는 durable/best-effort attempt acceptance 뒤에만 `202 {ok:true,durability}`를 반환하고 백그라운드 실행한다. Namespace durability pending은 launch 0이다. Public `contentOperation`은 `initial → initial`, `transcript_regenerate → transcript`, `summary_regenerate|legacy resummarize → summary`, `manual_edit → null`로 투영해 목록·상세가 작업 종류를 구분한다.
+- Transcript generation 실패는 기존 pair를 유지하고 `retry_transcript_generation`, summary generation 실패는 기존 pair를 유지한 `summarized` + `retry_summary`로 보인다. 최초 summary가 없는 실패만 `transcribed`로 돌아간다. Manual save 중단은 모델 실패가 아니므로 old pair를 복원·유지하고 attempt만 정리하며 `summarizeAttempts`를 늘리거나 `retry_summary`를 새로 만들지 않는다.
+- New attempt kinds는 intended `contentRevision`을 durable receipt/manifest에 반드시 포함한다. Legacy `initial|resummarize` manifest는 restart recovery에서 계속 읽고 missing revision metadata를 generated+fresh intended revision으로 복구하지만, 새 post-initial 요청은 `transcript_regenerate|summary_regenerate`만 기록한다.
+- 생성 호출 상한은 call당 `LLM_GENERATION_TIMEOUT_MS=1_800_000`(30분)이다. Detail client fallback deadline은 transcript-only 1 call+30초, summary-only 최대 2 call+30초이며 post-initial combined 3-call regeneration은 없다.
+
+## Freshness consumer 정책
+
+- Detail은 outdated summary를 그대로 렌더하되 tab/panel에 `요약 갱신 필요`를 표시한다. Transcript copy는 current transcript다. Summary copy와 combined Markdown export에는 warning을 포함한다. JSON export는 canonical summary schema를 그대로 내보내므로 warning을 주입하지 않고 UI 설명으로 현재 스크립트보다 오래될 수 있음을 알린다.
+- Knowledge card write/read는 current content hashes와 `contentRevision`을 대조하고 outdated summary를 `stale`로 취급한다. Transcript 변경만으로 stale card/corpus를 current로 다시 발행하지 않는다. Fresh summary 직접 저장·재생성·initial 성공 뒤에만 independent index refresh를 시도하며 실패는 canonical pair를 rollback하지 않는다.
+- AI 없는 검색은 outdated meeting의 summary semantic card를 ranking/filter 본문에서 제외하지만 current live title/date/status/location/review participants는 검색할 수 있게 유지하고 aggregate status를 `partial`, reason을 `stale`로 낮춘다.
+- Chat의 summary/card read는 outdated summary에 citation credit을 주지 않고 unavailable/stale warning으로 낮춘다. Current transcript discovery/chunk/full read는 계속 허용하되 `stale_evidence` degradation을 기록하므로 답변이 오래된 summary를 fresh evidence로 가장하지 않는다.
+
+## Content artifact pair 발행·복구 (ADR 0013, 0021)
+
+- API/UI/adapter는 canonical 파일을 직접 쓰지 않는다. Initial, 두 independent generation, 두 manual save 모두 unchanged opposite artifact까지 포함한 full transcript/summary payload를 만들고 `summarizePublisher`만 발행한다.
+- Adapter 실행과 202 응답 또는 manual publication 전에 `status.summarizeAttempt`를 durable/best-effort로 commit한다. 지원 환경의 일시 parent-sync 실패(`pending`)는 launch/publication 0으로 fail-closed한다.
 - Meeting 내 `.summarize-{attemptId}/`에 두 output·strict manifest·이전 transcript backup을 내구 staging한다. Manifest phase는 `prepared → preimage_durable → transcript_published → summary_published`다.
-- Canonical은 write lease 안에서 transcript(T1) 먼저, `summary.json`(S1) 마지막 순서로 발행한다. Summary 발행 전 실패하면 durable backup으로 T0를 복원한다. Matching attempt 상태 clear가 commit된 뒤에만 staging을 지운다.
-- Canonical rename 뒤 directory sync 실패는 이미 commit된 rename으로 처리한다. Transcript 단계의 pending은 preimage로 old pair를 복원하고, summary 단계의 pending은 commit된 new pair를 함께 유지해 `T0/S1`로 되돌리지 않는다. 남은 attempt는 다음 guarded read/restart reconciliation이 hash로 완료한다.
-- 상세·export는 artifact read lease 안에서 두 파일을 같이 읽어 old pair 또는 new pair만 반환한다. Delete/cleanup/publisher는 write lease를 쓴다. Lock 순서는 `meeting operation → artifact RW lease → status queue → library queue`다.
-- 프로세스 재시작 뒤 attempt만 남으면 첫 pair read가 exclusive `summarize_reconcile` operation으로 manifest/staged/pre/current hash를 판정해 완료·resume·복원·중단을 결정한다. 모순된 hash/manifest는 `summarize_ambiguous`로 남기고 추측해 덮어쓰거나 mixed pair를 노출하지 않는다.
-
-## 재요약 (단건 수동)
-`runSummarize(id, { force })` — `force`일 때만 기존 pair의 재생성을 허용한다. Core는 staging payload만 만들고 publisher가 old pair을 보존한 채 new pair을 발행한다. 유일한 트리거는 **상세의 "다시 요약" 버튼**(`POST /api/meetings/[id]/summarize` body `{ resummarize: true }`); body 없는 POST는 요약본이 있으면 409다. 배경 워커는 `force`를 전달하지 않으며 사용자 `titleOverride`는 보존된다(ADR 0008).
-
-**비동기(202) + 클라이언트 폴링(ADR 0009):** 라우트는 사전 검증 후 durable attempt commit이 완료된 경우에만 백그라운드 실행과 **202**를 허용한다. 지원 환경의 일시 namespace-sync 실패는 503/launch 0, 알려진 미지원 플랫폼은 `durability:"best_effort"` 202다. UI는 3초 `router.refresh()`로 내용 변경 또는 coordinator-backed live operation 해제를 완료 신호로 사용한다. Durable attempt만 남은 cold entry는 최초 pair read/summary-work 갱신에서 reconcile한 뒤 completed 또는 `retry_summary` interrupted/ambiguous로 보인다.
-
-**실패 가시성(ADR 0009):** 재요약이 실패하면(기존 `summary.json` 있음) 상태를 `transcribed`로 강등하지 않고 **`summarized`를 유지**한 채 `retry_summary` 에러만 첨부한다(옛 요약 보존). `deriveStatus`는 `summarized` 승격 시 `retry_summary` 에러를 **보존**한다(그 외 에러는 정리) — GET 라우트가 파생 상태를 persist하며 배너를 지우던 조용한-실패를 막기 위함. 요약본이 없는 최초 요약 실패는 기존대로 `transcribed`+에러.
-
-**목록·상세 재요약 inflight 일치:** 요약 완료 회의를 재요약하는 동안 목록과 상세가 서로 다른 상태(목록=`요약 완료`, 상세=`요약 중`)를 보이지 않도록 둘 다 durable `status.summarizeAttempt`를 단일 inflight 신호로 공유한다. Public list DTO(`toPublicMeetingListItem`)는 `resummarizeInflight = (status.summarizeAttempt !== undefined)`를 노출하고, `MeetingRow`는 이때 `요약 중` badge를 렌더한다. 상세는 in-process 재요약 lock을 이 `resummarizeInflight`와 OR로 결합해 진입 시 이미 진행 중이던 재요약도 즉시 반영한다. 이 신호는 파생 상태(`deriveStatus`)나 FSM enum을 바꾸지 않는 표시용 flag이며, `summary.json` completion marker가 발행되고 attempt가 정리되면 사라진다.
-
-**LLM 생성 타임아웃(ADR 0009):** 교정·요약 서브프로세스/요청은 `LLM_GENERATION_TIMEOUT_MS = 600_000`(10분) 고정. `exec.ts` 기본값(120초)·헬스체크의 짧은 타임아웃은 유지하고 생성 호출에만 적용한다(88분 회의가 120초에 SIGKILL되던 원인). 비동기라 사용자가 직접 대기하지 않으므로 넉넉한 상한의 부담이 작다. 한 번의 재요약은 교정→요약→(폴백 요약) **순차 최대 3콜**이라 서버 최악 예산은 ~30분이며, 클라이언트 타임아웃 폴백(`RESUMMARIZE_TIMEOUT_MS = 3×600s+30s`)은 이 예산을 넘겨 잡아 긴 회의에서 조기 오탐 타임아웃을 막는다.
+- Canonical은 write lease 안에서 transcript(T1) 먼저, completion marker인 `summary.json`(S1)을 마지막에 발행한다. Summary 발행 전 실패하면 durable backup으로 T0를 복원한다. Matching attempt clear와 intended `contentRevision` commit 뒤에만 staging을 지운다.
+- Canonical rename 뒤 directory sync 실패는 이미 commit된 rename으로 처리한다. Transcript 단계 pending은 preimage로 old pair를 복원하고, summary 단계 pending은 commit된 new pair를 함께 유지해 `T0/S1`로 되돌리지 않는다.
+- 상세·content probe·export는 artifact read lease 안에서 두 파일을 같이 읽어 old pair 또는 new pair만 반환한다. Publisher/delete/cleanup은 write lease를 쓴다. Lock 순서는 `meeting operation → artifact RW lease → status queue → library queue`다.
+- 프로세스 재시작 뒤 attempt만 남으면 첫 pair read가 exclusive `summarize_reconcile` operation으로 manifest/staged/pre/current/intended hash를 판정해 completed/resume/restore/interrupted/ambiguous 중 하나로 수렴한다. 모순된 hash·source·manifest는 추측해 덮어쓰거나 mixed pair를 노출하지 않는다.
 
 ## whisper HTTP 계약 (127.0.0.1)
 - **주소 고정(계약)**: `LOCAL_STT_HOST`는 exact `127.0.0.1|localhost`, port는 explicit 1–65535만 허용한다. whisper는 여기에 바인딩하고 app-api는 handler 안에서 지연 검증해 접속하며 redirect를 따르지 않는다.

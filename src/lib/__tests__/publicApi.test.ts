@@ -47,6 +47,7 @@ describe("public meeting DTO allowlist", () => {
       whisper: { progress: 0.5 },
       review: { participants: ["딜런"] },
       error: { code: "summary_failed", action: "retry_summary" },
+      contentOperation: null,
     });
     const serialized = JSON.stringify(dto);
     for (const sentinel of ["/Users", "internal-job-id", "summarizeAttempts", "secret-dispatch", "token@example.com"]) {
@@ -65,6 +66,7 @@ describe("public meeting DTO allowlist", () => {
         message: "요약을 완료하지 못했습니다. 설정을 확인한 뒤 다시 시도해 주세요",
         action: "retry_summary",
       },
+      contentOperation: null,
       resummarizeInflight: false,
     });
   });
@@ -84,6 +86,58 @@ describe("public meeting DTO allowlist", () => {
     };
     expect(toPublicMeetingListItem(running).resummarizeInflight).toBe(true);
     expect(toPublicMeetingListItem(status()).resummarizeInflight).toBe(false);
+  });
+
+  it.each([
+    ["initial", "initial", true],
+    ["resummarize", "summary", true],
+    ["transcript_regenerate", "transcript", false],
+    ["summary_regenerate", "summary", true],
+    ["manual_edit", null, false],
+  ] as const)("maps %s to its public content operation", (kind, operation, legacyInflight) => {
+    const intendedContentRevision = {
+      transcript: {
+        source: "generated" as const,
+        sha256: "a".repeat(64),
+        updatedAt: "2026-07-10T00:30:00.000Z",
+      },
+      summary: {
+        source: "generated" as const,
+        sha256: "b".repeat(64),
+        basedOnTranscriptSha256: "a".repeat(64),
+        updatedAt: "2026-07-10T00:30:00.000Z",
+      },
+    };
+    const running = {
+      ...status(),
+      summarizeAttempt: {
+        attemptId: "00000000-0000-4000-8000-000000000011",
+        kind,
+        startedAt: "2026-07-10T00:30:00.000Z",
+        ...(["initial", "resummarize"].includes(kind) ? {} : { intendedContentRevision }),
+      },
+    } as StatusJson;
+    expect(toPublicMeeting(running).contentOperation).toBe(operation);
+    expect(toPublicMeetingListItem(running)).toMatchObject({
+      contentOperation: operation,
+      resummarizeInflight: legacyInflight,
+    });
+  });
+
+  it("preserves the transcript-generation retry action without treating it as retry_summary", () => {
+    const dto = toPublicMeeting({
+      ...status(),
+      error: {
+        code: "private_provider_detail",
+        message: "raw /Users/private",
+        action: "retry_transcript_generation",
+      },
+    });
+    expect(dto.error).toEqual({
+      code: "transcript_generation_failed",
+      message: "전체 스크립트를 다시 만들지 못했습니다. 설정을 확인한 뒤 다시 시도해 주세요",
+      action: "retry_transcript_generation",
+    });
   });
 });
 
@@ -113,6 +167,26 @@ describe("safe errors and logging", () => {
         details: { workspaceId: "safe-id" },
       },
     });
+  });
+
+  it.each([
+    "content_revision_conflict",
+    "content_operation_in_progress",
+    "content_source_conflict",
+    "content_state_ambiguous",
+    "content_save_unavailable",
+  ] as const)("keeps content error %s static and safe", async (code) => {
+    const response = publicErrorResponse(code, code === "content_save_unavailable" ? 503 : 409, {
+      field: "transcript",
+      operation: "manual_edit",
+      path: "/Users/private",
+    });
+    const body = await response.json();
+    expect(body).toMatchObject({ error: { code, details: {
+      field: "transcript",
+      operation: "manual_edit",
+    } } });
+    expect(JSON.stringify(body)).not.toContain("/Users/private");
   });
 
   it.each([

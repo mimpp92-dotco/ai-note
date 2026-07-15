@@ -13,6 +13,7 @@ import {
   resolveCanonicalLibraryScope,
   resolveDegradedClientModel,
   scopedMeetingPageClientSchema,
+  summaryWorkClientSchema,
   type PageWindow,
 } from "@/lib/libraryClient";
 
@@ -76,8 +77,48 @@ describe("scoped meeting page client schema", () => {
     expect(scopedMeetingPageClientSchema.safeParse(meetingPagePayload()).success).toBe(true);
   });
 
+  it.each(["initial", "transcript", "summary", null] as const)(
+    "accepts the %s content operation while keeping the legacy boolean optional",
+    (contentOperation) => {
+      expect(scopedMeetingPageClientSchema.safeParse(meetingPagePayload({ contentOperation })).success)
+        .toBe(true);
+    },
+  );
+
+  it("accepts the transcript-specific retry action without lowering it to summary retry", () => {
+    const parsed = scopedMeetingPageClientSchema.safeParse(meetingPagePayload({
+      contentOperation: null,
+      error: {
+        code: "transcript_generation_failed",
+        message: "전체 스크립트를 다시 만들지 못했습니다",
+        action: "retry_transcript_generation",
+      },
+    }));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.meetings[0].error?.action).toBe("retry_transcript_generation");
+    }
+  });
+
   it("still rejects a genuinely unknown meeting key", () => {
     expect(scopedMeetingPageClientSchema.safeParse(meetingPagePayload({ bogusField: 1 })).success).toBe(false);
+  });
+});
+
+describe("summary-work client schema", () => {
+  it("reads a typed transcript or summary next action and rejects an unknown action", () => {
+    const payload = (action: string) => ({
+      summaryWork: {
+        processing: 1,
+        needsAttention: 1,
+        attention: { meetingId: "meeting-1", cursor: "cursor", action },
+      },
+      observedAt: "2026-07-10T00:00:00.000Z",
+    });
+    expect(summaryWorkClientSchema.safeParse(payload("retry_transcript_generation")).success)
+      .toBe(true);
+    expect(summaryWorkClientSchema.safeParse(payload("retry_summary")).success).toBe(true);
+    expect(summaryWorkClientSchema.safeParse(payload("retry_everything")).success).toBe(false);
   });
 });
 

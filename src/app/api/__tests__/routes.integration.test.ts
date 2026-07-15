@@ -4,20 +4,25 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { GET as glossaryGET, POST as glossaryPOST } from "@/app/api/glossary/route";
 import { GET as audioGET } from "@/app/api/meetings/[id]/audio/route";
+import { GET as contentGET } from "@/app/api/meetings/[id]/content/route";
 import { GET as exportGET } from "@/app/api/meetings/[id]/export/route";
 import { POST as finalizePOST } from "@/app/api/meetings/[id]/finalize/route";
 import { DELETE as deleteMeeting, GET as getMeeting } from "@/app/api/meetings/[id]/route";
 import { POST as reviewPOST } from "@/app/api/meetings/[id]/review/route";
 import { POST as summarizePOST } from "@/app/api/meetings/[id]/summarize/route";
+import { PATCH as summaryPATCH } from "@/app/api/meetings/[id]/summary/route";
 import { POST as titlePOST } from "@/app/api/meetings/[id]/title/route";
+import { PATCH as transcriptPATCH } from "@/app/api/meetings/[id]/transcript/route";
+import { POST as transcriptRegeneratePOST } from "@/app/api/meetings/[id]/transcript/regenerate/route";
 import { GET as listMeetings } from "@/app/api/meetings/route";
 import { GET as llmHealthGET } from "@/app/api/settings/llm/health/route";
 import { POST as llmSettingsPOST } from "@/app/api/settings/llm/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
+import { POST as globalSummarizePOST } from "@/app/api/summarize/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
 import { meetingPaths } from "@/lib/paths";
 import { acquireArtifactWriteLease } from "@/lib/artifactLease";
@@ -25,6 +30,7 @@ import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
 import { settingsPath, writeSettings } from "@/lib/settings";
 import { initialStatus, writeStatus } from "@/lib/status";
 import { isSummarizeInflight } from "@/lib/summarize";
+import { FakeAdapter } from "@/services/llm/fake";
 
 // Integration test for the app-api route handlers. Boots the whisper service with
 // FAKE_WHISPER=1 (pure stdlib, no venv/model/network) and FAKE_FFMPEG=1 (byte copy,
@@ -443,6 +449,107 @@ describe("title edit / delete / export overlay", () => {
     const md = await (await exportGET(appRequest(`http://t/api/meetings/${id}/export?fmt=md`), ctx(id))).text();
     expect(md).toContain("# 데일리 스크럼 2026-07-05"); // the AI title shown in the UI
     expect(md).not.toMatch(/^# 회의 /m); // never the "회의 YYYY-MM-DD HH:MM" placeholder
+    expect(md).not.toContain("현재 스크립트 변경 후 회의록 요약이 갱신되지 않음");
+  });
+
+  it("exports the current transcript with a stale-summary warning while keeping JSON schema unchanged", async () => {
+    const id = "m-export-stale";
+    await seedSummarized(id);
+    await titlePOST(titleReq(id, { title: "현재 표시 제목" }), ctx(id));
+    await reviewPOST(appRequest(`/api/meetings/${id}/review`, {
+      method: "POST",
+      body: JSON.stringify({ participants: ["현재 참석자"] }),
+    }), ctx(id));
+    const current = await (await contentGET(
+      appRequest(`/api/meetings/${id}/content`),
+      ctx(id),
+    )).json();
+    const saved = await transcriptPATCH(appRequest(`/api/meetings/${id}/transcript`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expectedRevision: current.revision,
+        transcript: "사용자가 수정한 현재 스크립트\n",
+      }),
+    }), ctx(id));
+    expect(saved.status).toBe(200);
+
+    const mdResponse = await exportGET(
+      appRequest(`/api/meetings/${id}/export?fmt=md`),
+      ctx(id),
+    );
+    expect(mdResponse.status).toBe(200);
+    const md = await mdResponse.text();
+    expect(md).toContain("# 현재 표시 제목");
+    expect(md).toContain("**참석자:** 현재 참석자");
+    expect(md).toContain("사용자가 수정한 현재 스크립트");
+    expect(md).toContain("현재 스크립트 변경 후 회의록 요약이 갱신되지 않음");
+
+    const jsonResponse = await exportGET(
+      appRequest(`/api/meetings/${id}/export?fmt=json`),
+      ctx(id),
+    );
+    expect(jsonResponse.status).toBe(200);
+    const exported = await jsonResponse.json();
+    expect(Object.keys(exported).sort()).toEqual([
+      "actionItems",
+      "decisions",
+      "discussion",
+      "followups",
+      "highlights",
+      "oneLine",
+      "participants",
+      "purpose",
+      "risks",
+      "title",
+      "topicSlug",
+    ]);
+    expect(exported).not.toHaveProperty("summaryOutdated");
+  });
+
+  it("fails closed instead of exporting ambiguous or source-conflicted pairs", async () => {
+    const sourceConflictId = "m-export-source-conflict";
+    await seedSummarized(sourceConflictId);
+    const current = await (await contentGET(
+      appRequest(`/api/meetings/${sourceConflictId}/content`),
+      ctx(sourceConflictId),
+    )).json();
+    const sourceConflictPaths = meetingPaths(sourceConflictId);
+    const sourceConflictStatus = JSON.parse(readFileSync(sourceConflictPaths.status, "utf8"));
+    sourceConflictStatus.contentRevision = {
+      transcript: {
+        source: "manual",
+        sha256: "0".repeat(64),
+        updatedAt: "2026-07-10T00:00:00.000Z",
+      },
+      summary: {
+        source: "generated",
+        sha256: current.revision.summarySha256,
+        basedOnTranscriptSha256: "0".repeat(64),
+        updatedAt: "2026-07-10T00:00:00.000Z",
+      },
+    };
+    writeFileSync(sourceConflictPaths.status, `${JSON.stringify(sourceConflictStatus)}\n`);
+
+    const conflicted = await exportGET(
+      appRequest(`/api/meetings/${sourceConflictId}/export?fmt=md`),
+      ctx(sourceConflictId),
+    );
+    expect(conflicted.status).toBe(409);
+    await expect(conflicted.json()).resolves.toMatchObject({
+      error: { code: "content_source_conflict" },
+    });
+
+    const ambiguousId = "m-export-ambiguous";
+    await seedSummarized(ambiguousId);
+    rmSync(meetingPaths(ambiguousId).transcript);
+    const ambiguous = await exportGET(
+      appRequest(`/api/meetings/${ambiguousId}/export?fmt=md`),
+      ctx(ambiguousId),
+    );
+    expect(ambiguous.status).toBe(409);
+    await expect(ambiguous.json()).resolves.toMatchObject({
+      error: { code: "content_state_ambiguous" },
+    });
   });
 
   it("DELETE tombstones and removes the folder (200), is idempotent (200), and 400s a bad id", async () => {
@@ -522,13 +629,27 @@ describe("manual re-summarize (force)", () => {
     await writeSettings({ provider: "claude-cli" });
     const id = "m-resummarize";
     await seedSummarized(id); // summary.json present (fixture: title "데일리 스크럼 2026-07-05")
+    const current = await (await contentGET(
+      appRequest(`/api/meetings/${id}/content`),
+      ctx(id),
+    )).json();
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
     try {
       // plain POST on an already-summarized meeting is refused
       expect((await summarizePOST(summarizeReq(id), ctx(id))).status).toBe(409);
 
+      // A meeting-specific regeneration is revision-bound.
+      expect((await summarizePOST(
+        summarizeReq(id, { resummarize: true }),
+        ctx(id),
+      )).status).toBe(400);
+
       // forced re-summarize is accepted asynchronously (202), then runs in the
       // background via the offline FakeAdapter.
-      const forced = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
+      const forced = await summarizePOST(summarizeReq(id, {
+        resummarize: true,
+        expectedRevision: current.revision,
+      }), ctx(id));
       expect(forced.status).toBe(202);
       await settleSummarize(id);
 
@@ -542,7 +663,119 @@ describe("manual re-summarize (force)", () => {
       expect(after.status).toBe("summarized");
       expect(after.error).toBeNull();
       expect(after.summarizeAttempts).toBe(0);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0][0]).toContain("교정된 전사");
+      expect(run.mock.calls[0][0]).not.toContain("[원문]");
+      expect(run.mock.calls[0][1]).toEqual({ json: true });
     } finally {
+      run.mockRestore();
+      delete process.env.FAKE_LLM;
+    }
+  });
+
+  it("global resummarize compatibility snapshots the current pair and runs summary-only", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-global-summary-only";
+    await seedSummarized(id);
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+    try {
+      const response = await globalSummarizePOST(appRequest("/api/summarize", {
+        method: "POST",
+        body: JSON.stringify({ id, resummarize: true }),
+      }));
+      expect(response.status).toBe(202);
+      await settleSummarize(id);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0][0]).toContain("교정된 전사");
+      expect(run.mock.calls[0][0]).not.toContain("[원문]");
+    } finally {
+      run.mockRestore();
+      delete process.env.FAKE_LLM;
+    }
+  });
+
+  it("keeps the bodyless-compatible initial route as correction plus summary", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-initial-summarize";
+    const paths = meetingPaths(id);
+    mkdirSync(paths.dir, { recursive: true });
+    await writeStatus(id, { ...initialStatus(id, INIT), status: "transcribed" });
+    writeFileSync(paths.raw, "최초 생성 원문\n");
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+    try {
+      const response = await summarizePOST(summarizeReq(id), ctx(id));
+      expect(response.status).toBe(202);
+      await settleSummarize(id);
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[0][0]).toContain("[원문]");
+      expect(run.mock.calls[1][0]).toContain("JSON 스키마");
+      expect(existsSync(paths.transcript)).toBe(true);
+      expect(existsSync(paths.summary)).toBe(true);
+    } finally {
+      run.mockRestore();
+      delete process.env.FAKE_LLM;
+    }
+  });
+
+  it("transcript regeneration requires exact confirmation and revision, then preserves summary bytes", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-transcript-regenerate";
+    await seedSummarized(id);
+    const initial = await (await contentGET(
+      appRequest(`/api/meetings/${id}/content`),
+      ctx(id),
+    )).json();
+    const oldSummary = readFileSync(meetingPaths(id).summary, "utf8");
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+    const requestBody = (body: unknown, headers?: Record<string, string>) => appRequest(
+      `/api/meetings/${id}/transcript/regenerate`,
+      { method: "POST", headers, body: JSON.stringify(body) },
+    );
+    try {
+      for (const invalid of [
+        { expectedRevision: initial.revision },
+        { expectedRevision: initial.revision, confirmReplacement: false },
+        { expectedRevision: initial.revision, confirmReplacement: true, extra: true },
+      ]) {
+        expect((await transcriptRegeneratePOST(requestBody(invalid), ctx(id))).status).toBe(400);
+      }
+      expect((await transcriptRegeneratePOST(requestBody({}, {
+        "content-length": String(4 * 1024 + 1),
+      }), ctx(id))).status).toBe(413);
+      expect(run).not.toHaveBeenCalled();
+
+      const accepted = await transcriptRegeneratePOST(requestBody({
+        expectedRevision: initial.revision,
+        confirmReplacement: true,
+      }), ctx(id));
+      expect(accepted.status).toBe(202);
+      await settleSummarize(id);
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0][0]).toContain("[원문]");
+      expect(run.mock.calls[0][1]).toBeUndefined();
+      expect(readFileSync(meetingPaths(id).summary, "utf8")).toBe(oldSummary);
+      const changed = await (await contentGET(
+        appRequest(`/api/meetings/${id}/content`),
+        ctx(id),
+      )).json();
+      expect(changed.transcriptSource).toBe("generated");
+      expect(changed.summaryOutdated).toBe(true);
+
+      const stale = await transcriptRegeneratePOST(requestBody({
+        expectedRevision: initial.revision,
+        confirmReplacement: true,
+      }), ctx(id));
+      expect(stale.status).toBe(409);
+      await expect(stale.json()).resolves.toMatchObject({
+        error: { code: "content_revision_conflict" },
+      });
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {
+      run.mockRestore();
       delete process.env.FAKE_LLM;
     }
   });
@@ -551,9 +784,16 @@ describe("manual re-summarize (force)", () => {
     await writeSettings({ provider: "claude-cli" });
     const id = "m-resummarize-inflight";
     await seedSummarized(id);
+    const current = await (await contentGET(
+      appRequest(`/api/meetings/${id}/content`),
+      ctx(id),
+    )).json();
     const lease = await acquireMeetingOperation(id, "summarize");
     try {
-      const res = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
+      const res = await summarizePOST(summarizeReq(id, {
+        resummarize: true,
+        expectedRevision: current.revision,
+      }), ctx(id));
       expect(res.status).toBe(409);
     } finally {
       lease.release();
@@ -566,5 +806,123 @@ describe("manual re-summarize (force)", () => {
     rmSync(settingsPath(), { force: true }); // no settings.json → getConfiguredAdapter null
     const res = await summarizePOST(summarizeReq(id, { resummarize: true }), ctx(id));
     expect(res.status).toBe(400);
+  });
+});
+
+describe("manual transcript and summary content routes", () => {
+  const editableSummary = {
+    oneLine: "수정한 한 줄",
+    purpose: "수정한 목적",
+    highlights: ["첫 줄\n둘째 줄"],
+    discussion: ["논의"],
+    decisions: ["결정"],
+    actionItems: [{ owner: "담당자", task: "할 일", due: "미정" }],
+    risks: ["위험"],
+    followups: ["후속"],
+  };
+
+  it("GET probes a stable safe resource and PATCH saves each field with expected pair revision", async () => {
+    const id = "m-manual-content";
+    await seedSummarized(id);
+
+    const initial = await contentGET(appRequest(`/api/meetings/${id}/content`), ctx(id));
+    expect(initial.status).toBe(200);
+    const first = await initial.json();
+    expect(first).toMatchObject({
+      transcript: "교정된 전사\n",
+      revision: {
+        transcriptSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        summarySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+      transcriptSource: "generated",
+      summarySource: "generated",
+      summaryOutdated: false,
+      pairState: "stable",
+    });
+    expect(JSON.stringify(first)).not.toMatch(/topicSlug|participants|title|\/data\/meetings|attemptId/u);
+
+    const transcript = await transcriptPATCH(appRequest(`/api/meetings/${id}/transcript`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expectedRevision: first.revision,
+        transcript: "수정한\r\n전체 스크립트\r",
+      }),
+    }), ctx(id));
+    expect(transcript.status).toBe(200);
+    const changed = await transcript.json();
+    expect(changed).toMatchObject({
+      transcript: "수정한\n전체 스크립트\n",
+      transcriptSource: "manual",
+      summaryOutdated: true,
+      durability: expect.stringMatching(/^(durable|best_effort|pending)$/),
+    });
+
+    const stale = await transcriptPATCH(appRequest(`/api/meetings/${id}/transcript`, {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: first.revision, transcript: "stale" }),
+    }), ctx(id));
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toMatchObject({
+      error: { code: "content_revision_conflict" },
+    });
+
+    const summary = await summaryPATCH(appRequest(`/api/meetings/${id}/summary`, {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: changed.revision, summary: editableSummary }),
+    }), ctx(id));
+    expect(summary.status).toBe(200);
+    await expect(summary.json()).resolves.toMatchObject({
+      summary: { oneLine: "수정한 한 줄", highlights: ["첫 줄\n둘째 줄"] },
+      summarySource: "manual",
+      summaryOutdated: false,
+    });
+  });
+
+  it("enforces exact JSON bodies, route byte caps, and normalized transcript byte limits", async () => {
+    const id = "m-manual-validation";
+    await seedSummarized(id);
+    const current = await (await contentGET(appRequest(`/api/meetings/${id}/content`), ctx(id))).json();
+
+    const unknown = await transcriptPATCH(appRequest(`/api/meetings/${id}/transcript`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expectedRevision: current.revision,
+        transcript: "valid",
+        hidden: true,
+      }),
+    }), ctx(id));
+    expect(unknown.status).toBe(400);
+
+    const wrongType = await summaryPATCH(appRequest(`/api/meetings/${id}/summary`, {
+      method: "PATCH",
+      headers: { "content-type": "text/plain" },
+      body: JSON.stringify({ expectedRevision: current.revision, summary: editableSummary }),
+    }), ctx(id));
+    expect(wrongType.status).toBe(415);
+
+    const declaredTooLarge = await transcriptPATCH(appRequest(`/api/meetings/${id}/transcript`, {
+      method: "PATCH",
+      headers: { "content-length": String(2 * 1024 * 1024 + 1) },
+      body: "{}",
+    }), ctx(id));
+    expect(declaredTooLarge.status).toBe(413);
+
+    const utf8TooLarge = await transcriptPATCH(appRequest(`/api/meetings/${id}/transcript`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expectedRevision: current.revision,
+        transcript: "한".repeat(400_000),
+      }),
+    }), ctx(id));
+    expect(utf8TooLarge.status).toBe(400);
+    await expect(utf8TooLarge.json()).resolves.toMatchObject({
+      error: { code: "invalid_request", details: { field: "transcript" } },
+    });
+  });
+
+  it("returns a safe missing result for an unknown content probe", async () => {
+    const response = await contentGET(appRequest("/api/meetings/no-content/content"), ctx("no-content"));
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "meeting_not_found" } });
   });
 });

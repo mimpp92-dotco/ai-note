@@ -1,0 +1,739 @@
+{
+  "schemaVersion": 1,
+  "slug": "manual-transcript-and-summary-editing",
+  "base": {
+    "ref": "execute/manual-transcript-and-summary-editing",
+    "sha": "4ca1db3fef0a1936fc7cc71ee995448306cd4164"
+  },
+  "sourceRequest": "요약 완료 후 전체 스크립트와 회의록 요약을 각각 직접 수정할 수 있게 한다. 최초 생성만 raw 교정과 요약을 연속 실행하고, 이후 전체 스크립트 재생성은 raw에서 교정본만, 회의록 요약 재생성은 현재 스크립트에서 요약만 만든다. 글로벌·스크립트·요약 버튼 위계를 분리하고 저장 결과 확인, summary freshness, typed error, unsaved navigation guard, synthetic browser QA를 포함한다.",
+  "publishStrategy": "single-pr",
+  "executionState": {
+    "summaryLedger": "local",
+    "journal": "git-dir",
+    "statusCommits": "none"
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "원본 artifact는 불변으로 유지하고 최초 회의록 생성에서만 raw correction과 summary generation을 순차 실행한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "audio.webm, raw.md, segments.json은 모든 편집·재생성·복구 경로에서 수정하지 않는다.",
+        "summary가 없는 최초 생성만 raw.md에서 corrected transcript를 만든 뒤 그 transcript로 summary를 생성한다.",
+        "편집·재생성 control은 generation-consistent transcript.md와 summary.json pair가 있는 회의에만 노출하고 raw fallback은 읽기 전용이다."
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "사용자는 교정된 전체 스크립트를 명시적 저장 방식으로 직접 수정할 수 있다.",
+      "source": "user-approved",
+      "acceptance": [
+        "전체 스크립트 탭에서 current transcript를 textarea로 편집하고 저장 또는 취소할 수 있다.",
+        "서버는 LF 정규화, non-empty, UTF-8 1 MiB 제한을 적용하고 성공 시 transcript source를 manual로 기록한다.",
+        "transcript hash가 바뀌면 기존 summary를 보존하되 summaryOutdated가 true가 된다.",
+        "validation, network, invalid success body, conflict, interrupted에서 draft와 focus를 보존한다."
+      ]
+    },
+    {
+      "id": "R3",
+      "text": "사용자는 화면에 표시되는 회의록 요약 본문 전체를 손실 없는 구조화 폼으로 직접 수정할 수 있다.",
+      "source": "user-approved",
+      "acceptance": [
+        "편집 필드는 oneLine, purpose, highlights, discussion, decisions, actionItems owner/task/due, risks, followups다.",
+        "문자열 목록은 항목별 반복 textarea로 편집해 항목 내부 개행과 배열 순서를 보존하고 추가·삭제를 지원한다.",
+        "서버는 canonical title, topicSlug, participants를 보존하고 editable field만 교체한 뒤 summarySchema로 검증한다.",
+        "수동 summary 저장은 source manual과 current transcript hash를 기록해 summary를 fresh로 만든다."
+      ]
+    },
+    {
+      "id": "R4",
+      "text": "전체 스크립트와 회의록 요약의 재생성을 독립된 두 작업으로 제공한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "원문에서 스크립트 다시 만들기는 raw correction만 한 번 실행하고 summary adapter call은 0회다.",
+        "스크립트 재생성은 기존 summary bytes와 metadata를 보존하고 transcript만 새 generated revision으로 발행한다.",
+        "현재 스크립트로 요약 다시 만들기는 correction adapter call 0회이며 current canonical transcript로 summary만 생성한다.",
+        "요약 재생성은 transcript bytes/source를 보존하고 generated summary를 current transcript hash에 묶는다.",
+        "기존 resummarize=true 호환 요청은 summary-only regeneration으로 해석하며 raw correction을 다시 실행하지 않는다."
+      ]
+    },
+    {
+      "id": "R5",
+      "text": "모든 content mutation은 durable pair publication, stale-write 방지, restart recovery와 저장 결과 probe를 사용한다.",
+      "source": "repository-contract",
+      "acceptance": [
+        "canonical transcript.md와 summary.json writer는 summarizePublisher 하나다.",
+        "initial, transcript_regenerate, summary_regenerate, manual_edit는 durable attempt와 manifest를 먼저 commit하고 transcript-first, summary-last로 full pair를 발행한다.",
+        "write lease 안의 current pair가 expected transcript/summary SHA-256과 다르면 content_revision_conflict로 fail-closed한다.",
+        "manual_edit pre-publication interruption은 old pair, contentRevision, prior error, summarizeAttempts를 보존하고 retry_summary를 만들지 않는다.",
+        "network 또는 invalid 2xx 뒤 client는 GET current-content probe로 intended, old, third, ambiguous 결과를 구분하고 PATCH를 자동 재전송하지 않는다.",
+        "rename 뒤 durability pending은 committed 결과로 표시하고 rollback 또는 blind retry하지 않는다."
+      ]
+    },
+    {
+      "id": "R6",
+      "text": "summary가 어떤 transcript를 바탕으로 했는지 기록하고 outdated summary를 모든 consumer에서 최신으로 가장하지 않는다.",
+      "source": "user-approved",
+      "acceptance": [
+        "status.contentRevision이 transcript source/hash와 summary source/hash/basedOnTranscriptSha256를 기록한다.",
+        "summaryOutdated는 stored summary base transcript hash와 current transcript hash 비교로 파생한다.",
+        "outdated 상태에서는 knowledge card를 새 pair hash로 refresh하지 않아 search/index가 stale 또는 partial을 유지한다.",
+        "chat은 stale summary를 최신 근거로 인용하지 않고 current transcript 사용 시 freshness warning을 반환한다.",
+        "summary copy와 combined Markdown은 stale warning을 포함하고 JSON은 canonical schema를 바꾸지 않은 채 UI에서 warning을 연결한다.",
+        "fresh summary 성공 뒤에만 knowledge card와 corpus-map refresh를 시도하며 index 실패는 content를 rollback하지 않는다."
+      ]
+    },
+    {
+      "id": "R7",
+      "text": "회의 상세 작업을 global, 전체 스크립트 전용, 회의록 요약 전용 위계로 분리한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "상단 global group에는 회의 이동, 폴더 열기, summary+transcript combined Markdown download만 둔다.",
+        "전체 스크립트 탭 하단에는 전체 스크립트 복사, 수정, 원문에서 스크립트 다시 만들기를 둔다.",
+        "회의록 요약 탭 하단에는 요약 복사, JSON download, 요약 수정, 현재 스크립트로 요약 다시 만들기를 둔다.",
+        "기존 상단 다시 요약 버튼과 combined raw-correction-plus-summary 재생성 UI를 제거한다.",
+        "summaryOutdated는 summary tab label과 panel에서 텍스트로 표시한다."
+      ]
+    },
+    {
+      "id": "R8",
+      "text": "편집·재생성 UX는 구체적인 오류 복구, 파괴 동작 확인, unsaved navigation guard와 접근성을 제공한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "validation, operation busy, revision conflict, source conflict, verifying, pending, interrupted, ambiguous를 safe code와 서로 다른 copy/action으로 구분한다.",
+        "revision conflict는 내 입력 복사와 확인 후 최신 내용 불러오기를 제공한다.",
+        "transcript/summary replacement는 각각 별도 dialog를 사용하고 Cancel이 initial focus며 busy 중 dismiss되지 않는다.",
+        "dirty editor는 link, programmatic navigation, browser back/forward, beforeunload를 막고 수정 내용 버리고 이동을 명시적으로 확인한다.",
+        "saving/verifying 중에는 결과가 모호해질 수 있으므로 이동과 discard를 허용하지 않는다.",
+        "unsaved audio와 content draft가 함께 있으면 둘을 함께 설명하고 하나도 조용히 버리지 않는다.",
+        "저장 성공 뒤 늦게 도착한 predecessor server props는 confirmed snapshot을 되돌리지 않고 third revision은 no-store probe로 현재 canonical임을 확인한 뒤에만 수용한다.",
+        "visible label, 44px target, role=status, focus return, Korean IME composition safety를 지킨다."
+      ]
+    },
+    {
+      "id": "R9",
+      "text": "실제 사용자 data를 읽지 않는 synthetic browser QA로 action hierarchy와 오류·이탈 UX를 검증한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "repository 밖 temporary snapshot의 synthetic meeting만 사용하고 workspace data, glossary, env secret을 읽지 않는다.",
+        "desktop 1440, mobile 390, mobile 320 viewport에서 global/tab footer, stale warning, long content overflow를 확인한다.",
+        "editor focus, discard confirmation, sidebar/back navigation guard, destructive regeneration confirmation을 확인한다.",
+        "console error 0과 required screenshots/assertions/console evidence를 남긴다."
+      ]
+    },
+    {
+      "id": "R10",
+      "text": "제품·아키텍처·UI·에이전트 문서를 독립 생성·freshness·오류·버튼 위계 계약과 일치시킨다.",
+      "source": "repository-contract",
+      "acceptance": [
+        "README, PRD, ARCHITECTURE, UI_GUIDE, AGENTS, src/CLAUDE가 새 동작을 설명한다.",
+        "새 ADR 0021이 immutable raw, editable derived pair, contentRevision, independent regeneration, probe, navigation guard 결정을 기록한다.",
+        "기존 ADR 0003, 0008, 0009, 0013, 0018, 0020은 수정하지 않고 새 ADR에서 관계를 명시한다.",
+        "npm run check:links가 통과한다."
+      ]
+    }
+  ],
+  "globalConstraints": {
+    "noUnplannedWork": true,
+    "noOpportunisticRefactor": true,
+    "noRealUserData": true,
+    "noNewDependencies": true,
+    "noOriginalArtifactMutation": true,
+    "noDirectArtifactWritesOutsidePublisher": true,
+    "noPaidApiOrApiKey": true
+  },
+  "browserEvidence": {
+    "mode": "playwright",
+    "preflightCommand": "npm run test:e2e:doctor",
+    "verifyCommand": "npm run test:e2e",
+    "requiredArtifacts": ["screenshots", "assertions", "console"],
+    "viewports": ["desktop-1440", "mobile-390", "mobile-320"],
+    "dataPolicy": "synthetic-only"
+  },
+  "phases": [
+    {
+      "id": 1,
+      "name": "content-revision-manual-edit-and-probe",
+      "file": "phase-1-content-revision-manual-edit-and-probe.md",
+      "requirements": ["R1", "R2", "R3", "R5", "R6", "R8"],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0013-durable-summarize-pair-publication.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "src/domain/meeting.ts",
+        "src/domain/library.ts",
+        "src/domain/summarySchema.ts",
+        "src/domain/summary.ts",
+        "src/lib/artifactPair.ts",
+        "src/lib/artifactLease.ts",
+        "src/lib/meetingLifecycle.ts",
+        "src/lib/summarizePublisher.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/publicApi.ts",
+        "src/app/api/meetings/*/review/route.ts",
+        "src/app/api/meetings/*/summarize/route.ts",
+        "src/lib/__tests__/summarizePublisher.test.ts",
+        "src/lib/__tests__/artifactPair.test.ts",
+        "src/lib/__tests__/meetingLifecycle.test.ts",
+        "src/lib/__tests__/publicApi.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts",
+        "src/app/api/__tests__/tombstoneFence.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts"
+      ],
+      "allowedPaths": [
+        "src/domain/meeting.ts",
+        "src/domain/library.ts",
+        "src/domain/summarySchema.ts",
+        "src/domain/summary.ts",
+        "src/lib/artifactPair.ts",
+        "src/lib/meetingLifecycle.ts",
+        "src/lib/summarizePublisher.ts",
+        "src/lib/manualMeetingContent.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/publicApi.ts",
+        "src/app/api/meetings/*/content/route.ts",
+        "src/app/api/meetings/*/transcript/route.ts",
+        "src/app/api/meetings/*/summary/route.ts",
+        "src/domain/__tests__/library.test.ts",
+        "src/domain/__tests__/summarySchema.test.ts",
+        "src/lib/__tests__/artifactPair.test.ts",
+        "src/lib/__tests__/meetingLifecycle.test.ts",
+        "src/lib/__tests__/publicApi.test.ts",
+        "src/lib/__tests__/summarizePublisher.test.ts",
+        "src/lib/__tests__/manualMeetingContent.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts",
+        "src/app/api/__tests__/tombstoneFence.test.ts"
+      ],
+      "forbiddenPaths": [
+        "data/**",
+        ".env*",
+        "glossary.json",
+        "whisper/**",
+        "src/services/**",
+        "src/lib/status.ts",
+        "src/lib/knowledgeIndex.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/meetingSearch.ts",
+        "src/lib/chatTools.ts"
+      ],
+      "testPolicy": {"mode": "required"},
+      "tddMode": "enforced",
+      "verifyLevel": "targeted",
+      "verifyCommands": [
+        "npm test -- src/domain/__tests__/library.test.ts src/domain/__tests__/summarySchema.test.ts src/lib/__tests__/artifactPair.test.ts src/lib/__tests__/meetingLifecycle.test.ts src/lib/__tests__/publicApi.test.ts src/lib/__tests__/summarizePublisher.test.ts src/lib/__tests__/manualMeetingContent.test.ts",
+        "npm test -- src/app/api/__tests__/routes.integration.test.ts src/app/api/__tests__/tombstoneFence.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+        "npm run typecheck"
+      ],
+      "requiredEvidence": ["scope-check", "tdd-red-green", "test-green"],
+      "produces": [
+        "src/lib/manualMeetingContent.ts",
+        "src/lib/__tests__/manualMeetingContent.test.ts",
+        "src/app/api/meetings/*/content/route.ts",
+        "src/app/api/meetings/*/transcript/route.ts",
+        "src/app/api/meetings/*/summary/route.ts"
+      ],
+      "blockIf": [
+        "audio.webm, raw.md, segments.json 중 하나라도 수정해야 하면 중단",
+        "summarizePublisher 외 코드가 canonical transcript.md 또는 summary.json을 직접 써야 하면 중단",
+        "expected pair revision 없이 stale client write를 허용해야 하면 중단",
+        "manual_edit interruption을 retry_summary 또는 summarizeAttempts 증가로 표시해야 하면 중단",
+        "save 결과 확인을 위해 mutation을 자동 재전송해야 하면 중단",
+        "수동 저장에 LLM, 외부 network, 새 dependency가 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "independent-transcript-and-summary-generation",
+      "file": "phase-2-independent-transcript-and-summary-generation.md",
+      "requirements": ["R1", "R4", "R5", "R6", "R8"],
+      "requiredFiles": [
+        "AGENTS.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0009-async-resummarize-failure-visibility.md",
+        "docs/decisions/0013-durable-summarize-pair-publication.md",
+        "src/domain/meeting.ts",
+        "src/domain/library.ts",
+        "src/lib/summarize.ts",
+        "src/lib/summarizeCore.ts",
+        "src/lib/summarizePrompts.ts",
+        "src/lib/summarizePublisher.ts",
+        "src/lib/artifactPair.ts",
+        "src/lib/manualMeetingContent.ts",
+        "src/lib/summarizeWorker.ts",
+        "src/app/api/meetings/*/summarize/route.ts",
+        "src/app/api/summarize/route.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizeCore.test.ts",
+        "src/lib/__tests__/summarizeWorker.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts",
+        "src/app/api/__tests__/tombstoneFence.test.ts"
+      ],
+      "allowedPaths": [
+        "src/lib/summarize.ts",
+        "src/lib/summarizeCore.ts",
+        "src/lib/summarizeWorker.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/app/api/meetings/*/summarize/route.ts",
+        "src/app/api/meetings/*/transcript/regenerate/route.ts",
+        "src/app/api/summarize/route.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizeCore.test.ts",
+        "src/lib/__tests__/summarizeWorker.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts",
+        "src/app/api/__tests__/tombstoneFence.test.ts"
+      ],
+      "forbiddenPaths": [
+        "data/**",
+        ".env*",
+        "glossary.json",
+        "whisper/**",
+        "src/services/llm/**",
+        "src/lib/summarizePublisher.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/meetingSearch.ts",
+        "src/lib/chatTools.ts"
+      ],
+      "testPolicy": {"mode": "required"},
+      "tddMode": "enforced",
+      "verifyLevel": "targeted",
+      "verifyCommands": [
+        "npm test -- src/lib/__tests__/summarizeCore.test.ts src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizeWorker.test.ts",
+        "npm test -- src/app/api/__tests__/routes.integration.test.ts src/app/api/__tests__/tombstoneFence.test.ts src/lib/__tests__/localRequestGuard.test.ts",
+        "npm run typecheck"
+      ],
+      "requiredEvidence": ["scope-check", "tdd-red-green", "test-green"],
+      "produces": ["src/app/api/meetings/*/transcript/regenerate/route.ts"],
+      "blockIf": [
+        "transcript regeneration이 summary adapter를 호출하거나 summary 내용을 새로 만들면 중단",
+        "summary regeneration이 correction adapter 또는 raw.md를 사용하면 중단",
+        "transcript 또는 summary의 변경하지 않는 반대쪽 artifact bytes를 바꿔야 하면 중단",
+        "legacy resummarize=true가 combined raw correction plus summary를 계속 실행해야 하면 중단",
+        "raw.md 또는 segments.json을 수정해야 하면 중단",
+        "기존 LLM adapter, provider, API-key surface를 변경해야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "freshness-consumers-and-export",
+      "file": "phase-3-freshness-consumers-and-export.md",
+      "requirements": ["R6", "R8"],
+      "requiredFiles": [
+        "AGENTS.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "src/domain/meeting.ts",
+        "src/lib/manualMeetingContent.ts",
+        "src/lib/knowledgeIndex.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/meetingSearch.ts",
+        "src/lib/chatTools.ts",
+        "src/lib/summaryMarkdown.ts",
+        "src/lib/publicApi.ts",
+        "src/lib/libraryClient.ts",
+        "src/lib/summaryWork.ts",
+        "src/lib/summaryWorkCache.ts",
+        "src/app/api/meetings/*/export/route.ts",
+        "src/lib/__tests__/knowledgeIndexRepository.test.ts",
+        "src/lib/__tests__/meetingSearch.test.ts",
+        "src/lib/__tests__/chatTools.test.ts",
+        "src/lib/__tests__/summaryMarkdown.test.ts",
+        "src/lib/__tests__/publicApi.test.ts",
+        "src/lib/__tests__/libraryClient.test.ts",
+        "src/lib/__tests__/summaryWork.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "allowedPaths": [
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/meetingSearch.ts",
+        "src/lib/chatTools.ts",
+        "src/lib/summaryMarkdown.ts",
+        "src/lib/publicApi.ts",
+        "src/lib/libraryClient.ts",
+        "src/lib/summaryWork.ts",
+        "src/lib/summaryWorkCache.ts",
+        "src/app/api/meetings/*/export/route.ts",
+        "src/lib/__tests__/knowledgeIndexRepository.test.ts",
+        "src/lib/__tests__/meetingSearch.test.ts",
+        "src/lib/__tests__/chatTools.test.ts",
+        "src/lib/__tests__/summaryMarkdown.test.ts",
+        "src/lib/__tests__/publicApi.test.ts",
+        "src/lib/__tests__/libraryClient.test.ts",
+        "src/lib/__tests__/summaryWork.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "forbiddenPaths": [
+        "data/**",
+        ".env*",
+        "glossary.json",
+        "whisper/**",
+        "src/services/**",
+        "src/lib/summarizePublisher.ts",
+        "src/components/**"
+      ],
+      "testPolicy": {"mode": "required"},
+      "tddMode": "enforced",
+      "verifyLevel": "targeted",
+      "verifyCommands": [
+        "npm test -- src/lib/__tests__/knowledgeIndexRepository.test.ts src/lib/__tests__/meetingSearch.test.ts src/lib/__tests__/chatTools.test.ts src/lib/__tests__/summaryMarkdown.test.ts",
+        "npm test -- src/lib/__tests__/publicApi.test.ts src/lib/__tests__/libraryClient.test.ts src/lib/__tests__/summaryWork.test.ts src/app/api/__tests__/routes.integration.test.ts",
+        "npm run typecheck"
+      ],
+      "requiredEvidence": ["scope-check", "tdd-red-green", "test-green"],
+      "blockIf": [
+        "outdated summary를 새 current pair hash로 knowledge card에 기록해야 하면 중단",
+        "chat이 outdated summary를 warning 없이 최신 근거로 인용해야 하면 중단",
+        "JSON export schema에 freshness field를 삽입해야 하면 중단",
+        "index 실패 때문에 canonical pair를 rollback해야 하면 중단",
+        "실제 사용자 data 또는 외부 network가 테스트에 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "detail-action-hierarchy-and-editors",
+      "file": "phase-4-detail-action-hierarchy-and-editors.md",
+      "requirements": ["R2", "R3", "R4", "R6", "R7", "R8"],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/UI_GUIDE.md",
+        "src/app/meetings/*/page.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/MeetingRow.tsx",
+        "src/components/MeetingList.tsx",
+        "src/components/Tabs.tsx",
+        "src/components/AppDialog.tsx",
+        "src/components/CopyButton.tsx",
+        "src/components/__tests__/views.test.tsx",
+        "src/components/__tests__/MeetingRow.test.tsx",
+        "src/components/__tests__/MeetingList.test.tsx",
+        "src/app/api/meetings/*/content/route.ts",
+        "src/app/api/meetings/*/transcript/route.ts",
+        "src/app/api/meetings/*/summary/route.ts",
+        "src/app/api/meetings/*/transcript/regenerate/route.ts",
+        "src/app/api/meetings/*/summarize/route.ts",
+        "src/lib/summaryMarkdown.ts"
+      ],
+      "allowedPaths": [
+        "src/app/meetings/*/page.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/MeetingContentEditors.tsx",
+        "src/components/MeetingRow.tsx",
+        "src/components/MeetingList.tsx",
+        "src/components/__tests__/views.test.tsx",
+        "src/components/__tests__/MeetingContentEditors.test.tsx",
+        "src/components/__tests__/MeetingRow.test.tsx",
+        "src/components/__tests__/MeetingList.test.tsx"
+      ],
+      "forbiddenPaths": [
+        "data/**",
+        ".env*",
+        "glossary.json",
+        "whisper/**",
+        "src/components/Tabs.tsx",
+        "src/components/AppDialog.tsx",
+        "src/components/RecorderSessionProvider.tsx",
+        "src/components/RecorderNavigation.tsx",
+        "src/app/api/**",
+        "src/lib/**",
+        "src/domain/**"
+      ],
+      "testPolicy": {"mode": "required"},
+      "tddMode": "enforced",
+      "verifyLevel": "targeted",
+      "verifyCommands": [
+        "npm test -- src/components/__tests__/MeetingContentEditors.test.tsx src/components/__tests__/views.test.tsx src/components/__tests__/MeetingRow.test.tsx src/components/__tests__/MeetingList.test.tsx",
+        "npm run typecheck",
+        "npm run lint",
+        "npm run build"
+      ],
+      "requiredEvidence": ["scope-check", "tdd-red-green", "test-green"],
+      "produces": [
+        "src/components/MeetingContentEditors.tsx",
+        "src/components/__tests__/MeetingContentEditors.test.tsx"
+      ],
+      "blockIf": [
+        "global top group에 transcript-only 또는 summary-only action을 남겨야 하면 중단",
+        "전체 스크립트 또는 요약 전용 action을 해당 tab footer 밖에 배치해야 하면 중단",
+        "문자열 배열을 newline split textarea로 직렬화해 multiline item을 손실해야 하면 중단",
+        "dirty draft를 parent refresh 또는 tab 전환으로 덮어써야 하면 중단",
+        "network 또는 invalid success body를 probe 없이 확정 실패로 표시해야 하면 중단",
+        "Tabs 또는 AppDialog shared primitive를 변경해야 하면 중단",
+        "실제 사용자 data로 UI를 검증해야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "unsaved-edit-navigation-guard",
+      "file": "phase-5-unsaved-edit-navigation-guard.md",
+      "requirements": ["R7", "R8", "R9"],
+      "requiredFiles": [
+        "AGENTS.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "package.json",
+        "playwright.config.ts",
+        "scripts/e2e-harness.mjs",
+        "e2e/smoke.spec.ts",
+        "e2e/support/evidence-reporter.ts",
+        "e2e/support/synthetic-test.ts",
+        "src/domain/library.ts",
+        "src/domain/meeting.ts",
+        "src/domain/summarySchema.ts",
+        "src/lib/__tests__/library.test.ts",
+        "src/components/RecorderSessionProvider.tsx",
+        "src/components/RecorderNavigation.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/MeetingContentEditors.tsx",
+        "src/components/AppDialog.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx",
+        "src/components/__tests__/MeetingContentEditors.test.tsx",
+        "src/components/__tests__/views.test.tsx"
+      ],
+      "allowedPaths": [
+        "src/components/RecorderSessionProvider.tsx",
+        "src/components/RecorderNavigation.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/MeetingContentEditors.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx",
+        "src/components/__tests__/MeetingContentEditors.test.tsx",
+        "src/components/__tests__/views.test.tsx",
+        "playwright.config.ts",
+        "scripts/e2e-manual-editing-fixture.mjs",
+        "scripts/__tests__/e2e-manual-editing-fixture.test.mjs",
+        "scripts/__tests__/e2e-evidence-contract.test.ts",
+        "e2e/global-setup.mjs",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/smoke.spec.ts",
+        "e2e/support/evidence-contract.ts",
+        "e2e/support/evidence-reporter.ts"
+      ],
+      "forbiddenPaths": [
+        "data/**",
+        ".env*",
+        "glossary.json",
+        "whisper/**",
+        "src/components/AppDialog.tsx",
+        "src/components/LibraryNavigation.tsx",
+        "src/app/**",
+        "src/lib/**",
+        "src/domain/**"
+      ],
+      "testPolicy": {"mode": "required"},
+      "tddMode": "enforced",
+      "verifyLevel": "targeted",
+      "verifyCommands": [
+        "npm test -- src/components/__tests__/RecorderSessionProvider.test.tsx src/components/__tests__/MeetingContentEditors.test.tsx src/components/__tests__/views.test.tsx",
+        "npm test -- scripts/__tests__/e2e-manual-editing-fixture.test.mjs scripts/__tests__/e2e-evidence-contract.test.ts",
+        "npm run typecheck",
+        "npm run lint"
+      ],
+      "requiredEvidence": ["scope-check", "tdd-red-green", "test-green"],
+      "produces": [
+        "scripts/e2e-manual-editing-fixture.mjs",
+        "scripts/__tests__/e2e-manual-editing-fixture.test.mjs",
+        "scripts/__tests__/e2e-evidence-contract.test.ts",
+        "e2e/global-setup.mjs",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/support/evidence-contract.ts"
+      ],
+      "blockIf": [
+        "saving 또는 verifying 중인 content mutation을 discard하고 이동해야 하면 중단",
+        "unsaved audio와 content draft 중 하나를 조용히 버려야 하면 중단",
+        "sidebar link, programmatic router, popstate, beforeunload 중 하나를 보호할 수 없으면 중단",
+        "AppDialog 또는 LibraryNavigation shared primitive 수정이 필요하면 중단",
+        "synthetic browser fixture가 runner-owned snapshot 밖을 읽거나 써야 하면 중단",
+        "browser contract 작성에 실제 사용자 data, 기존 dev server, Whisper, LLM 또는 외부 network가 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "synthetic-browser-qa",
+      "file": "phase-6-synthetic-browser-qa.md",
+      "requirements": ["R7", "R8", "R9"],
+      "requiredFiles": [
+        "AGENTS.md",
+        "package.json",
+        "playwright.config.ts",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "scripts/run-e2e.mjs",
+        "scripts/e2e-manual-editing-fixture.mjs",
+        "e2e/global-setup.mjs",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/smoke.spec.ts",
+        "e2e/support/evidence-contract.ts",
+        "e2e/support/evidence-reporter.ts",
+        "e2e/support/synthetic-test.ts",
+        "src/domain/library.ts",
+        "src/app/meetings/*/page.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/MeetingContentEditors.tsx",
+        "src/components/RecorderSessionProvider.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx",
+        "src/components/__tests__/views.test.tsx",
+        "src/app/api/meetings/*/content/route.ts",
+        "src/app/api/meetings/*/transcript/route.ts",
+        "src/app/api/meetings/*/summary/route.ts"
+      ],
+      "allowedPaths": [
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/smoke.spec.ts",
+        "src/components/RecorderSessionProvider.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx"
+      ],
+      "forbiddenPaths": [
+        "data/**",
+        ".env*",
+        "glossary.json",
+        "scripts/**",
+        "whisper/**",
+        "playwright.config.ts",
+        "e2e/global-setup.mjs",
+        "e2e/support/**",
+        "docs/decisions/**",
+        "docs/plans/**",
+        "docs/ARCHITECTURE.md",
+        "docs/PRD.md",
+        "docs/UI_GUIDE.md",
+        "package.json",
+        "package-lock.json"
+      ],
+      "testPolicy": {"mode": "required"},
+      "tddMode": "enforced",
+      "verifyLevel": "targeted",
+      "verifyCommands": [
+        "npm test -- src/components/__tests__/RecorderSessionProvider.test.tsx",
+        "npm run typecheck",
+        "npm run test:e2e"
+      ],
+      "requiredEvidence": ["scope-check", "tdd-red-green", "test-green", "browser"],
+      "requiresBrowser": true,
+      "dataPolicy": "synthetic-only",
+      "blockIf": [
+        "repository 밖 temporary snapshot과 synthetic data root를 격리할 수 없으면 중단",
+        "workspace의 실제 data, glossary, env secret 중 하나라도 읽어야 하면 중단",
+        "npm run test:e2e:doctor가 pinned Playwright 또는 matching Chromium을 확인하지 못하면 중단",
+        "실제 Whisper, LLM, 외부 network 호출이 필요하면 중단",
+        "허용된 두 Playwright spec과 RecorderSessionProvider source/test 밖 수정이나 fixture 값 복제가 필요하면 중단",
+        "browser 검증 명령이 product tree를 수정하거나 command-owned evidence 밖에 산출물을 써야 하면 중단",
+        "desktop-1440, mobile-390, mobile-320 중 하나라도 검증할 수 없으면 중단"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "docs-adr-and-final-contract",
+      "file": "phase-7-docs-adr-and-final-contract.md",
+      "requirements": ["R10"],
+      "requiredFiles": [
+        "AGENTS.md",
+        "README.md",
+        "src/CLAUDE.md",
+        "docs/PRD.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/README.md",
+        "docs/decisions/0000-template.md",
+        "docs/decisions/0003-local-files-single-writer.md",
+        "docs/decisions/0008-title-override.md",
+        "docs/decisions/0009-async-resummarize-failure-visibility.md",
+        "docs/decisions/0013-durable-summarize-pair-publication.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "scripts/check-links.mjs"
+      ],
+      "allowedPaths": [
+        "AGENTS.md",
+        "README.md",
+        "src/CLAUDE.md",
+        "docs/PRD.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/README.md",
+        "docs/decisions/0021-manual-transcript-and-summary-editing.md"
+      ],
+      "forbiddenPaths": [
+        "data/**",
+        ".env*",
+        "glossary.json",
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "whisper/**",
+        "docs/decisions/000*.md",
+        "docs/decisions/001*.md"
+      ],
+      "testPolicy": {"mode": "exempt", "reason": "문서와 ADR만 갱신하는 phase이며 runtime 동작은 앞선 TDD와 browser phase가 소유한다. 링크 무결성을 비대화형 명령으로 검증한다."},
+      "verifyLevel": "targeted",
+      "verifyCommands": ["npm run check:links"],
+      "requiredEvidence": ["scope-check"],
+      "produces": ["docs/decisions/0021-manual-transcript-and-summary-editing.md"],
+      "blockIf": [
+        "기존 ADR 0003, 0008, 0009, 0013, 0018, 0020 수정이 필요하면 중단하고 새 ADR 0021에서 관계를 설명",
+        "문서 갱신을 위해 runtime source 수정이 필요하면 중단",
+        "원본 불가침, 단일 writer, local guard, tombstone, 비용 0 원칙과 모순되는 서술이 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "final-gate-summarize-core-boundary-repair",
+      "file": "phase-8-final-gate-summarize-core-boundary-repair.md",
+      "requirements": ["R1", "R4"],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "src/lib/summarize.ts",
+        "src/lib/summarizeCore.ts",
+        "scripts/__tests__/meeting-summarize.test.mjs"
+      ],
+      "allowedPaths": ["src/lib/summarize.ts"],
+      "forbiddenPaths": [
+        "data/**",
+        ".env*",
+        "glossary.json",
+        "whisper/**",
+        "src/lib/summarizeCore.ts",
+        "src/lib/summarizePublisher.ts",
+        "src/services/llm/**",
+        "scripts/__tests__/meeting-summarize.test.mjs"
+      ],
+      "testPolicy": {"mode": "required"},
+      "tddMode": "not-required",
+      "verifyLevel": "targeted",
+      "verifyCommands": [
+        "npm test -- scripts/__tests__/meeting-summarize.test.mjs",
+        "npm run typecheck"
+      ],
+      "requiredEvidence": ["scope-check", "test-green"],
+      "blockIf": [
+        "기존 producer-inventory 테스트를 수정하거나 약화해야 하면 중단",
+        "최초 생성 외 transcript_regenerate 또는 summary_regenerate 동작을 바꿔야 하면 중단",
+        "correction 1회와 summary 최대 2회 호출 예산을 바꿔야 하면 중단",
+        "summarizeCore 또는 publisher에 I/O나 새 writer를 추가해야 하면 중단",
+        "새 dependency, provider, API-key surface 또는 외부 network가 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    }
+  ],
+  "finalGate": [
+    "npm test",
+    "npm run typecheck",
+    "npm run lint",
+    "npm run build",
+    "npm run check:links"
+  ]
+}

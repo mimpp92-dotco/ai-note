@@ -89,12 +89,12 @@ describe("목록·상세 상태 일치 (R6)", () => {
     const list = render(
       <MeetingList meetings={[toPublicMeetingListItem(status)]} onRenamed={vi.fn()} onDeleted={vi.fn()} />,
     );
-    expect(screen.getByText("요약 중")).toBeInTheDocument();
+    expect(screen.getByText("회의록 요약 생성 중")).toBeInTheDocument();
     expect(screen.queryByText("요약 완료")).not.toBeInTheDocument();
     list.unmount();
 
     renderDetail(status);
-    expect(screen.getByText("요약 생성 중…")).toBeInTheDocument();
+    expect(screen.getByText("회의록 요약 생성 중")).toBeInTheDocument();
     expect(screen.queryByText("요약 완료")).not.toBeInTheDocument();
   });
 
@@ -105,11 +105,11 @@ describe("목록·상세 상태 일치 (R6)", () => {
       <MeetingList meetings={[toPublicMeetingListItem(status)]} onRenamed={vi.fn()} onDeleted={vi.fn()} />,
     );
     expect(screen.getByText("요약 완료")).toBeInTheDocument();
-    expect(screen.queryByText("요약 중")).not.toBeInTheDocument();
+    expect(screen.queryByText("회의록 요약 생성 중")).not.toBeInTheDocument();
     list.unmount();
 
     renderDetail(status);
     expect(screen.getByText("요약 완료")).toBeInTheDocument();
-    expect(screen.queryByText("요약 생성 중…")).not.toBeInTheDocument();
+    expect(screen.queryByText("회의록 요약 생성 중")).not.toBeInTheDocument();
   });
 });

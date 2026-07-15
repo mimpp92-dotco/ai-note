@@ -9,13 +9,13 @@ import { summarySchema } from "@/domain/summarySchema";
 import { readArtifactPair } from "@/lib/artifactPair";
 import { resolveMeetingDetailSource } from "@/lib/detailSource";
 import { readResolvedLibraryState } from "@/lib/libraryService";
+import { isExactMeetingOperationActive } from "@/lib/meetingLifecycle";
 import { assertSafeId } from "@/lib/meetingId";
 import { inspectMeetingTombstone } from "@/lib/meetingTombstone";
 import { validateLocalPageHeaders } from "@/lib/localRequestGuard";
 import { meetingPaths } from "@/lib/paths";
 import { toPublicMeeting } from "@/lib/publicApi";
 import { deriveStatus, readStatus } from "@/lib/status";
-import { isSummarizeInflight } from "@/lib/summarize";
 import { inspectTranscriptionPublication } from "@/lib/transcriptionArtifacts";
 
 // Reads data/ artifacts at request time → must be dynamic + Node runtime. This is a
@@ -104,6 +104,7 @@ export default async function MeetingDetailPage({
   );
 
   const correctedText = pair.transcript;
+  const parsedSummary = parseSummary(pair.summary);
   const transcript = correctedText !== null
     ? { text: correctedText, corrected: true }
     : {
@@ -127,20 +128,38 @@ export default async function MeetingDetailPage({
     : null;
   const placement = library.placements.find((candidate) => candidate.meetingId === id);
   const attentionAfter = sourceSearch.get("attentionAfter");
+  const publicStatus = toPublicMeeting(status);
+  const contentOperation = publicStatus.contentOperation
+    ?? (isExactMeetingOperationActive(id, "transcript_regenerate")
+      ? "transcript"
+      : isExactMeetingOperationActive(id, "summary_regenerate")
+        ? "summary"
+        : isExactMeetingOperationActive(id, "summarize")
+          ? "initial"
+          : null);
+  const contentTab = sourceSearch.get("contentTab");
 
   return (
     <MeetingDetailView
       id={id}
-      status={toPublicMeeting(status)}
+      status={{ ...publicStatus, contentOperation }}
       transcript={transcript}
       segments={transcription.state === "complete" ? readSegments(p.segments) : []}
-      summary={parseSummary(pair.summary)}
+      summary={parsedSummary}
+      content={{
+        state: pair.state,
+        revision: pair.revision ?? null,
+        transcriptSource: pair.contentRevision?.transcript.source ?? null,
+        summarySource: pair.contentRevision?.summary.source ?? null,
+        summaryOutdated: pair.summaryOutdated ?? null,
+      }}
       hasAudio={existsSync(p.play) || existsSync(p.audio)}
       // Unified inflight signal: the durable status.summarizeAttempt (same field the list
       // DTO reads) OR the in-process lock. Sharing summarizeAttempt keeps list and detail in
       // agreement even after a restart or orphaned lease, when the in-memory lock is gone but
       // the attempt persists until reconciliation clears it (R6).
-      resummarizeInflight={isSummarizeInflight(id) || status.summarizeAttempt !== undefined}
+      resummarizeInflight={contentOperation === "initial" || contentOperation === "summary"}
+      initialTab={contentTab === "summary" ? "summary" : "script"}
       backHref={detailSource?.backHref ?? "/"}
       location={placement
         ? { workspaceId: placement.workspaceId, folderId: placement.folderId }

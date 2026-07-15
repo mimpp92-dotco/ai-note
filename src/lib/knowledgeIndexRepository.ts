@@ -155,6 +155,7 @@ export class KnowledgeIndexRepositoryError extends Error {
     | "delete_state_ambiguous"
     | "status_unavailable"
     | "source_pair_missing"
+    | "source_pair_stale"
     | "source_pair_ambiguous"
     | "source_io_error"
     | "unsafe_knowledge_root"
@@ -294,6 +295,7 @@ function reasonForRecord(record: ClassifiedMeetingRecord): KnowledgeReindexReaso
 function reasonForRepositoryError(error: unknown): KnowledgeReindexReason {
   if (!(error instanceof KnowledgeIndexRepositoryError)) return "io_error";
   if (error.code === "meeting_deleted" || error.code === "source_pair_missing") return "missing";
+  if (error.code === "source_pair_stale") return "stale";
   if (error.code === "source_pair_ambiguous" || error.code === "status_unavailable") {
     return "corrupt";
   }
@@ -570,8 +572,19 @@ export function createKnowledgeIndexRepository(
       } catch {
         return { mode: "corrupt" };
       }
-      return currentStatus.summarizeAttempt !== undefined
-        || isKnowledgeCardStale(card, hashKnowledgeSourcePair(source))
+      const currentHashes = hashKnowledgeSourcePair(source);
+      if (currentStatus.summarizeAttempt !== undefined) return { mode: "stale", card };
+      if (currentStatus.contentRevision !== undefined) {
+        if (
+          currentStatus.contentRevision.transcript.sha256 !== currentHashes.transcript
+          || currentStatus.contentRevision.summary.sha256 !== currentHashes.summary
+        ) return { mode: "corrupt" };
+        if (
+          currentStatus.contentRevision.summary.basedOnTranscriptSha256
+          !== currentStatus.contentRevision.transcript.sha256
+        ) return { mode: "stale", card };
+      }
+      return isKnowledgeCardStale(card, currentHashes)
         ? { mode: "stale", card }
         : { mode: "ready", card };
     } finally {
@@ -608,6 +621,17 @@ export function createKnowledgeIndexRepository(
         throw new KnowledgeIndexRepositoryError("source_pair_ambiguous");
       }
       const source = await readSourcePair(meetingId);
+      const currentHashes = hashKnowledgeSourcePair(source);
+      if (status.contentRevision !== undefined) {
+        if (
+          status.contentRevision.transcript.sha256 !== currentHashes.transcript
+          || status.contentRevision.summary.sha256 !== currentHashes.summary
+        ) throw new KnowledgeIndexRepositoryError("source_pair_ambiguous");
+        if (
+          status.contentRevision.summary.basedOnTranscriptSha256
+          !== status.contentRevision.transcript.sha256
+        ) throw new KnowledgeIndexRepositoryError("source_pair_stale");
+      }
       let card: KnowledgeCard;
       try {
         card = buildKnowledgeCard({ meetingId, source, status });

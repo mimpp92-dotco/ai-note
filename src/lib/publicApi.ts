@@ -30,6 +30,11 @@ export type PublicErrorCode =
   | "recovery_not_supported"
   | "recovery_conflict"
   | "recovery_io"
+  | "content_revision_conflict"
+  | "content_operation_in_progress"
+  | "content_source_conflict"
+  | "content_state_ambiguous"
+  | "content_save_unavailable"
   | "chat_llm_unconfigured"
   | "chat_llm_unavailable"
   | "chat_timeout"
@@ -39,6 +44,7 @@ export type PublicErrorCode =
   | "summary_auth_required"
   | "summary_provider_failed"
   | "summary_failed"
+  | "transcript_generation_failed"
   | "transcription_failed"
   | "local_service_unavailable"
   | "internal_error";
@@ -65,6 +71,11 @@ const PUBLIC_ERROR_MESSAGES: Record<PublicErrorCode, string> = {
   recovery_not_supported: "이 환경에서는 조직 파일을 안전하게 복구할 수 없습니다",
   recovery_conflict: "조직 파일 복구 상태를 안전하게 확인할 수 없습니다",
   recovery_io: "조직 파일 복구 중 로컬 저장소 오류가 발생했습니다",
+  content_revision_conflict: "다른 저장으로 회의 내용이 변경되었습니다. 최신 내용을 확인해 주세요",
+  content_operation_in_progress: "다른 회의 내용 작업이 진행 중입니다. 완료된 뒤 다시 시도해 주세요",
+  content_source_conflict: "저장된 회의 내용의 출처 정보를 안전하게 확인할 수 없습니다",
+  content_state_ambiguous: "회의 내용 저장 상태를 안전하게 확인할 수 없습니다",
+  content_save_unavailable: "회의 내용을 로컬 저장소에 안전하게 저장하거나 확인할 수 없습니다",
   chat_llm_unconfigured: "질문 기능을 사용하려면 요약 모델을 먼저 설정해 주세요",
   chat_llm_unavailable: "설정한 로컬 요약 모델을 사용할 수 없습니다. 설정과 로그인을 확인해 주세요",
   chat_timeout: "답변 준비 시간이 초과되었습니다. 다시 시도하거나 확인 범위를 줄여 주세요",
@@ -74,6 +85,7 @@ const PUBLIC_ERROR_MESSAGES: Record<PublicErrorCode, string> = {
   summary_auth_required: "요약 도구 로그인이 필요합니다. 로그인한 뒤 다시 시도해 주세요",
   summary_provider_failed: "요약 도구가 작업을 완료하지 못했습니다. 설정을 확인해 주세요",
   summary_failed: "요약을 완료하지 못했습니다. 설정을 확인한 뒤 다시 시도해 주세요",
+  transcript_generation_failed: "전체 스크립트를 다시 만들지 못했습니다. 설정을 확인한 뒤 다시 시도해 주세요",
   transcription_failed: "전사를 완료하지 못했습니다. 로컬 전사 서비스를 확인해 주세요",
   local_service_unavailable: "로컬 서비스를 사용할 수 없습니다",
   internal_error: "요청을 처리하지 못했습니다",
@@ -86,6 +98,7 @@ const SAFE_DETAIL_KEYS = new Set([
   "mode",
   "action",
   "field",
+  "operation",
   "recoveryFingerprint",
 ]);
 const SAFE_DETAIL_VALUE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
@@ -141,6 +154,13 @@ export interface PublicStatusError {
 
 function publicStatusError(error: StatusError | null): PublicStatusError | null {
   if (!error) return null;
+  if (error.action === "retry_transcript_generation") {
+    return {
+      code: "transcript_generation_failed",
+      message: PUBLIC_ERROR_MESSAGES.transcript_generation_failed,
+      action: error.action,
+    };
+  }
   if (error.action === "retry_summary") {
     const code = error.code && error.code in PUBLIC_ERROR_MESSAGES
       ? error.code as PublicErrorCode
@@ -166,8 +186,21 @@ const publicMeetingSchema = z.object({
   audioMime: z.string(),
   whisper: z.object({ progress: z.number() }),
   review: z.object({ participants: z.array(z.string()) }),
+  contentOperation: z.enum(["initial", "transcript", "summary"]).nullable(),
   updatedAt: z.string(),
 }).strict();
+
+export type PublicContentOperation = "initial" | "transcript" | "summary";
+
+export function contentOperationForStatus(
+  status: StatusJson,
+): PublicContentOperation | null {
+  const kind = status.summarizeAttempt?.kind;
+  if (kind === "initial") return "initial";
+  if (kind === "transcript_regenerate") return "transcript";
+  if (kind === "resummarize" || kind === "summary_regenerate") return "summary";
+  return null;
+}
 
 export interface PublicMeeting {
   id: string;
@@ -181,6 +214,7 @@ export interface PublicMeeting {
   audioMime: string;
   whisper: { progress: number };
   review: { participants: string[] };
+  contentOperation?: PublicContentOperation | null;
   updatedAt: string;
 }
 
@@ -197,6 +231,7 @@ export function toPublicMeeting(status: StatusJson): PublicMeeting {
     audioMime: status.audioMime,
     whisper: { progress: status.whisper.progress },
     review: { participants: [...status.review.participants] },
+    contentOperation: contentOperationForStatus(status),
     updatedAt: status.updatedAt,
   }) as PublicMeeting;
 }
@@ -207,23 +242,24 @@ export interface PublicMeetingListItem {
   status: MeetingStatus;
   startedAt: string;
   error: PublicStatusError | null;
-  // True while a (re)summarize holds a durable acceptance receipt (status.summarizeAttempt) —
-  // the same persistent signal the detail view reads. deriveStatus keeps the row at
-  // `summarized` when an old summary.json survives a re-summarize, so this boolean lets the
-  // list overlay 요약 중 and agree with the detail during an in-flight run (R6). Read-only.
-  // Optional so existing ScopedMeetingRow constructors stay valid; toPublicMeetingListItem
-  // always emits a concrete boolean.
+  // Durable content generation kind. `manual_edit` is intentionally null: a
+  // save is not presented as transcript/summary generation.
+  contentOperation?: PublicContentOperation | null;
+  // Legacy summary-only compatibility signal. Transcript generation must not be
+  // collapsed into this boolean; new consumers use contentOperation instead.
   resummarizeInflight?: boolean;
 }
 
 export function toPublicMeetingListItem(status: StatusJson): PublicMeetingListItem {
+  const contentOperation = contentOperationForStatus(status);
   return {
     id: status.id,
     title: status.title,
     status: status.status,
     startedAt: status.startedAt,
     error: publicStatusError(status.error),
-    resummarizeInflight: status.summarizeAttempt !== undefined,
+    contentOperation,
+    resummarizeInflight: contentOperation === "initial" || contentOperation === "summary",
   };
 }
 

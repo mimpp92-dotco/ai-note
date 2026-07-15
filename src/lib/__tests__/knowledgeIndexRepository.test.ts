@@ -79,6 +79,10 @@ function makeStatus(id: string, overrides: Partial<StatusJson> = {}): StatusJson
   };
 }
 
+function hashText(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 async function seedMeeting(
   id: string,
   options: { transcript?: string; summaryText?: string; status?: Partial<StatusJson> } = {},
@@ -265,6 +269,102 @@ describe("knowledge-card repository", () => {
 
     await expect(repository.readKnowledgeCard("meeting-corrupt-status")).resolves.toEqual({
       mode: "corrupt",
+    });
+  });
+
+  it("keeps a transcript-changed summary stale until the summary is rebound and refreshed", async () => {
+    const id = "meeting-content-revision";
+    const initialTranscript = "초기 전사\n";
+    const changedTranscript = "수정된 전사\n";
+    const summaryText = `${JSON.stringify(summary)}\n`;
+    const initialTranscriptHash = hashText(initialTranscript);
+    const changedTranscriptHash = hashText(changedTranscript);
+    const summaryHash = hashText(summaryText);
+    const initialStatus = await seedMeeting(id, {
+      transcript: initialTranscript,
+      summaryText,
+      status: {
+        contentRevision: {
+          transcript: {
+            source: "generated",
+            sha256: initialTranscriptHash,
+            updatedAt: "2026-07-12T00:30:00.000Z",
+          },
+          summary: {
+            source: "generated",
+            sha256: summaryHash,
+            basedOnTranscriptSha256: initialTranscriptHash,
+            updatedAt: "2026-07-12T00:30:00.000Z",
+          },
+        },
+      },
+    });
+    const repository = createKnowledgeIndexRepository({
+      dataRoot: dataRoot(),
+      loadClassifiedMeetingRecords: async () => [liveRecord(id, JSON.parse(
+        await readFile(meetingPaths(id).status, "utf8"),
+      ) as StatusJson)],
+    });
+    await writeCard(id, repository);
+    await expect(repository.rebuildCorpusMap()).resolves.toMatchObject({
+      corpusMap: { cards: [{ meetingId: id }] },
+    });
+
+    await writeFile(meetingPaths(id).transcript, changedTranscript);
+    await writeFile(meetingPaths(id).status, `${JSON.stringify({
+      ...initialStatus,
+      contentRevision: {
+        transcript: {
+          source: "manual",
+          sha256: changedTranscriptHash,
+          updatedAt: "2026-07-12T01:00:00.000Z",
+        },
+        summary: initialStatus.contentRevision!.summary,
+      },
+      updatedAt: "2026-07-12T01:00:00.000Z",
+    })}\n`);
+
+    await expect(repository.readKnowledgeCard(id)).resolves.toMatchObject({ mode: "stale" });
+    const canonicalBeforeFailedRefresh = await Promise.all([
+      readFile(meetingPaths(id).transcript),
+      readFile(meetingPaths(id).summary),
+      readFile(meetingPaths(id).status),
+    ]);
+    await expect(writeCard(id, repository)).rejects.toMatchObject({ code: "source_pair_stale" });
+    await expect(Promise.all([
+      readFile(meetingPaths(id).transcript),
+      readFile(meetingPaths(id).summary),
+      readFile(meetingPaths(id).status),
+    ])).resolves.toEqual(canonicalBeforeFailedRefresh);
+    await expect(repository.rebuildCorpusMap()).resolves.toMatchObject({
+      corpusMap: { cards: [] },
+    });
+
+    const reboundStatus = {
+      ...initialStatus,
+      contentRevision: {
+        transcript: {
+          source: "manual" as const,
+          sha256: changedTranscriptHash,
+          updatedAt: "2026-07-12T01:00:00.000Z",
+        },
+        summary: {
+          ...initialStatus.contentRevision!.summary,
+          basedOnTranscriptSha256: changedTranscriptHash,
+          updatedAt: "2026-07-12T01:01:00.000Z",
+        },
+      },
+      updatedAt: "2026-07-12T01:01:00.000Z",
+    };
+    await writeFile(meetingPaths(id).status, `${JSON.stringify(reboundStatus)}\n`);
+
+    await expect(writeCard(id, repository)).resolves.toMatchObject({
+      state: "committed",
+      card: { meetingId: id },
+    });
+    await expect(repository.readKnowledgeCard(id)).resolves.toMatchObject({ mode: "ready" });
+    await expect(repository.rebuildCorpusMap()).resolves.toMatchObject({
+      corpusMap: { cards: [{ meetingId: id }] },
     });
   });
 

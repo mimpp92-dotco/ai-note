@@ -26,11 +26,22 @@ record (browser mic) → local Whisper (STT) → configured AI summary (worker) 
 ```
 
 1. Click **Start** — audio is captured in the browser and saved locally.
-2. On stop, a local **Whisper** service transcribes it (`raw.md`).
-3. A background worker feeds the transcript to your configured model and writes a corrected transcript (`transcript.md`) + structured summary (`summary.json`) — automatically, even if you close the tab.
+2. On stop, a local **Whisper** service creates the initial automatic transcript.
+3. A background worker corrects that initial transcript and creates the structured summary — automatically, even if you close the tab.
 4. Organize meetings in local workspaces and up to three folder levels, then
    review and **copy / download / reveal the folder**.
 5. Use **검색 (Search)** to find a meeting without AI. (Asking across meetings — the **질문/회의 도우미 (Questions/Meeting assistant)** chatbot — is currently on hold; see below.)
+
+## Edit a finished meeting
+
+After the first corrected script and summary are created, each can be edited or regenerated independently from the meeting detail:
+
+- **전체 스크립트 수정** and **회의록 요약 수정** save your changes directly. Summary list items use separate multiline fields, so line breaks stay inside the item.
+- **원문에서 스크립트 다시 만들기** rebuilds only the full script from the initial automatic transcript. It keeps the existing summary and marks it **요약 갱신 필요** if the script changed.
+- **현재 스크립트로 요약 다시 만들기** rebuilds only the summary from the currently saved full script; it never replaces that script.
+- Saving or rebuilding the summary makes it current again. The meeting title and participant list keep their existing dedicated controls and are not changed by the summary editor.
+
+There is no autosave: save or cancel an open edit before leaving. AI NOTE also guards links, browser back, and other app navigation so an unsaved draft is not discarded silently.
 
 ## Find and ask across meetings
 
@@ -107,6 +118,16 @@ npm run typecheck
 npm run check:links
 ```
 
+Contributors running deterministic browser regression install the pinned Chromium build once, then use the read-only doctor and repository-owned Playwright command:
+
+```bash
+npm run test:e2e:install  # one-time browser binary install
+npm run test:e2e:doctor   # Node/package/browser compatibility only; no mutation
+npm run test:e2e          # Chromium at desktop 1440 + mobile 390/320
+```
+
+The E2E command runs against an allowlisted temporary snapshot with an empty `data/` directory, synthetic `HOME`, disabled worker, disconnected synthetic Whisper state, no configured model, and no external browser traffic. It never copies `data/`, `glossary.json`, `.env*`, or credentials. Screenshots and the evidence manifest are local ignored output under `test-results/`. Chrome DevTools MCP is optional for qualitative inspection of an existing Chrome session; it is not the repeatable browser gate. See [ADR 0020](docs/decisions/0020-deterministic-synthetic-browser-verification.md).
+
 ## Configuration
 
 Copy `.env.example` to `.env.local` and adjust as needed. Common knobs:
@@ -128,7 +149,8 @@ Manage domain terms and "misheard → correct" pairs in the app's **단어 관�
 | `src/` | Next.js app — recorder UI, API routes, domain contracts |
 | `whisper/` | Local STT service (Python, `127.0.0.1`) |
 | `docs/` | PRD · ARCHITECTURE · UI_GUIDE + decision records |
-| `scripts/` | dev tooling (link checker) |
+| `scripts/` | dev tooling (setup/link checks + isolated Playwright harness) |
+| `e2e/` | synthetic Chromium scenarios and command-owned evidence reporter |
 
 Module boundaries & data flow → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Working with an AI agent? Start at [AGENTS.md](AGENTS.md).
 

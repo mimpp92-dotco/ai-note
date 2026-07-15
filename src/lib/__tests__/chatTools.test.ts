@@ -206,6 +206,68 @@ describe("artifact evidence tools", () => {
       data: { items: [{ meetingId: MEETING, status: "unavailable", reason }] },
     });
   });
+
+  it("does not return or credit an outdated summary as current evidence", async () => {
+    const executor = createChatToolExecutor({
+      mode: "normal",
+      dependencies: dependencies({
+        readArtifactPair: vi.fn().mockResolvedValue({
+          transcript: "현재 전사",
+          summary: "outdated-summary-sentinel",
+          state: "stable",
+          summaryOutdated: true,
+        }),
+      }),
+    });
+
+    const result = await executor.execute(call("read_summaries", { meetingIds: [MEETING] }));
+    expect(result).toMatchObject({
+      status: "ok",
+      data: {
+        items: [{ meetingId: MEETING, status: "unavailable", reason: "card_stale" }],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("outdated-summary-sentinel");
+    expect(executor.snapshot().warnings).toContain("stale_evidence");
+    expect(executor.snapshot().evidence.find((entry) => entry.meetingId === MEETING)?.tiers ?? [])
+      .not.toContain("summary");
+  });
+
+  it.each(["ambiguous", "source_conflict"] as const)(
+    "does not expose plausible artifact text from a %s pair",
+    async (state) => {
+      const executor = createChatToolExecutor({
+        mode: "normal",
+        dependencies: dependencies({
+          readArtifactPair: vi.fn().mockResolvedValue({
+            transcript: "private-transcript-sentinel",
+            summary: "private-summary-sentinel",
+            state,
+            summaryOutdated: null,
+          }),
+        }),
+      });
+      const summaryResult = await executor.execute(call(
+        "read_summaries",
+        { meetingIds: [MEETING] },
+        `summary-${state}`,
+      ));
+      const transcriptResult = await executor.execute(call(
+        "read_transcript_chunks",
+        { meetingId: MEETING, query: "private", limit: 1 },
+        `transcript-${state}`,
+      ));
+      expect(summaryResult).toMatchObject({
+        status: "ok",
+        data: { items: [{ status: "unavailable", reason: "artifact_unavailable" }] },
+      });
+      expect(transcriptResult).toMatchObject({
+        status: "error",
+        error: { code: "artifact_unavailable" },
+      });
+      expect(JSON.stringify([summaryResult, transcriptResult])).not.toContain("private-");
+    },
+  );
 });
 
 describe("transcript bounds", () => {
@@ -270,6 +332,35 @@ describe("transcript bounds", () => {
       error: { code: "transcript_too_large" },
       budgetExhausted: false,
     });
+  });
+
+  it("returns current transcript evidence with an explicit stale-summary warning", async () => {
+    const executor = createChatToolExecutor({
+      mode: "normal",
+      dependencies: dependencies({
+        readArtifactPair: vi.fn().mockResolvedValue({
+          transcript: "현재 스크립트에서 로드맵을 확인했습니다.",
+          summary: "이전 요약",
+          state: "stable",
+          summaryOutdated: true,
+        }),
+      }),
+    });
+
+    const result = await executor.execute(call("read_transcript_chunks", {
+      meetingId: MEETING,
+      query: "로드맵",
+      limit: 1,
+    }));
+    expect(result).toMatchObject({
+      status: "ok",
+      data: { windows: [{ text: expect.stringContaining("로드맵") }] },
+    });
+    expect(executor.snapshot().warnings).toContain("stale_evidence");
+    expect(executor.snapshot().evidence).toContainEqual(expect.objectContaining({
+      meetingId: MEETING,
+      tiers: expect.arrayContaining(["transcript_chunk"]),
+    }));
   });
 
   it("never exceeds the aggregate output budget and records budget exhaustion safely", async () => {

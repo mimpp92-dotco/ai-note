@@ -8,6 +8,9 @@ export type MeetingOperation =
   | "finalize"
   | "summarize"
   | "summarize_reconcile"
+  | "manual_edit"
+  | "transcript_regenerate"
+  | "summary_regenerate"
   | "transcribe_dispatch"
   | "move"
   | "delete"
@@ -52,7 +55,15 @@ function keyFor(meetingId: string): string {
 }
 
 function operationGroup(operation: MeetingOperation): string {
-  return operation === "summarize_reconcile" ? "summarize" : operation;
+  return [
+    "summarize",
+    "summarize_reconcile",
+    "manual_edit",
+    "transcript_regenerate",
+    "summary_regenerate",
+  ].includes(operation)
+    ? "content_mutation"
+    : operation;
 }
 
 function compatible(a: MeetingOperation, b: MeetingOperation): boolean {

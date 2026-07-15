@@ -23,6 +23,7 @@ export const MEETING_STATUSES: readonly MeetingStatus[] = [
 // Recovery action carried by status.error, so the UI can offer the right retry.
 export type ErrorAction =
   | "retry_transcription"
+  | "retry_transcript_generation"
   | "retry_summary";
 
 export interface StatusError {
@@ -66,16 +67,47 @@ export interface ReviewInput {
   participants: string[];
 }
 
-export type SummarizeAttemptKind = "initial" | "resummarize";
+export type ContentSource = "generated" | "manual";
 
-// Durable acceptance receipt used to recover a summarize after process exit.
-export interface SummarizeAttempt {
+export interface ContentRevision {
+  transcript: {
+    source: ContentSource;
+    sha256: string;
+    updatedAt: string;
+  };
+  summary: {
+    source: ContentSource;
+    sha256: string;
+    basedOnTranscriptSha256: string;
+    updatedAt: string;
+  };
+}
+
+export type SummarizeAttemptKind =
+  | "initial"
+  | "resummarize"
+  | "manual_edit"
+  | "transcript_regenerate"
+  | "summary_regenerate";
+
+interface SummarizeAttemptBase {
   attemptId: string;
-  kind: SummarizeAttemptKind;
   startedAt: string;
   preTranscriptHash?: string;
   preSummaryHash?: string;
 }
+
+// Durable acceptance receipt used to recover a content publication after
+// process exit. Legacy kinds may omit revision metadata; new kinds cannot.
+export type SummarizeAttempt =
+  | (SummarizeAttemptBase & {
+      kind: "initial" | "resummarize";
+      intendedContentRevision?: ContentRevision;
+    })
+  | (SummarizeAttemptBase & {
+      kind: "manual_edit" | "transcript_regenerate" | "summary_regenerate";
+      intendedContentRevision: ContentRevision;
+    });
 
 export interface StatusJson {
   id: string;
@@ -104,6 +136,7 @@ export interface StatusJson {
   // back off instead of re-spawning a subprocess every poll. Reset by a manual retry.
   summarizeAttempts?: number;
   summarizeAttempt?: SummarizeAttempt;
+  contentRevision?: ContentRevision;
   updatedAt: string;
 }
 

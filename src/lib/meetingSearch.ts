@@ -102,6 +102,11 @@ export interface SearchLiveRecord {
   location: MeetingSearchLocation | null;
   reviewParticipants: string[];
   summarizeAttemptPending: boolean;
+  summaryOutdated?: boolean;
+  contentRevision?: {
+    transcriptSha256: string;
+    summarySha256: string;
+  };
 }
 
 export interface SearchLiveSnapshot {
@@ -546,7 +551,18 @@ export async function searchMeetings(
 
     const cardRead = cardReads.get(meetingId) ?? { mode: "missing" as const };
     if (cardRead.mode !== "ready") reasons.add(cardRead.mode);
-    const statusAllowsSemantic = live.status === "summarized" && !live.summarizeAttemptPending;
+    if (live.summaryOutdated === true) reasons.add("stale");
+    const revisionMatchesCard = cardRead.mode !== "ready"
+      || live.contentRevision === undefined
+      || (
+        cardRead.card.sourceHashes.transcript === live.contentRevision.transcriptSha256
+        && cardRead.card.sourceHashes.summary === live.contentRevision.summarySha256
+      );
+    if (cardRead.mode === "ready" && !revisionMatchesCard) reasons.add("stale");
+    const statusAllowsSemantic = live.status === "summarized"
+      && !live.summarizeAttemptPending
+      && live.summaryOutdated !== true
+      && revisionMatchesCard;
     if (!statusAllowsSemantic && cardRead.mode === "ready") reasons.add("stale");
     const semanticCard = cardRead.mode === "ready" && statusAllowsSemantic
       ? cardRead.card
@@ -760,6 +776,15 @@ async function readDefaultLiveSnapshot(root: string): Promise<SearchLiveSnapshot
       } : null,
       reviewParticipants: [...record.status.review.participants],
       summarizeAttemptPending: record.status.summarizeAttempt !== undefined,
+      summaryOutdated: record.status.contentRevision !== undefined
+        && record.status.contentRevision.summary.basedOnTranscriptSha256
+          !== record.status.contentRevision.transcript.sha256,
+      ...(record.status.contentRevision ? {
+        contentRevision: {
+          transcriptSha256: record.status.contentRevision.transcript.sha256,
+          summarySha256: record.status.contentRevision.summary.sha256,
+        },
+      } : {}),
     });
   }
   return {

@@ -49,7 +49,11 @@ export interface SummaryWorkResult {
   summaryWork: {
     processing: number;
     needsAttention: number;
-    attention: { meetingId: string; cursor: string } | null;
+    attention: {
+      meetingId: string;
+      cursor: string;
+      action: "retry_transcript_generation" | "retry_summary";
+    } | null;
   };
   observedAt: string;
 }
@@ -62,15 +66,28 @@ export function computeSummaryWork(
   const statuses = records
     .filter((record) => record.kind === "live" && record.status !== null)
     .map((record) => record.status!);
-  const needsAttention = statuses
-    .filter((status) => status.error?.action === "retry_summary")
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id, "en"));
-  const processing = statuses.filter((status) =>
-    status.error?.action !== "retry_summary"
-    && (status.status === "transcribed" || status.status === "summarizing")).length;
+  const needsAttention = statuses.flatMap((status) => {
+    const action = status.error?.action;
+    return action === "retry_transcript_generation" || action === "retry_summary"
+      ? [{ status, action }]
+      : [];
+  }).sort((a, b) => (
+    a.status.startedAt.localeCompare(b.status.startedAt)
+    || a.status.id.localeCompare(b.status.id, "en")
+  ));
+  const processing = statuses.filter((status) => {
+    if (
+      status.error?.action === "retry_transcript_generation"
+      || status.error?.action === "retry_summary"
+    ) return false;
+    const kind = status.summarizeAttempt?.kind;
+    if (kind === "manual_edit") return false;
+    if (kind !== undefined) return true;
+    return status.status === "transcribed" || status.status === "summarizing";
+  }).length;
   const cursor = attentionAfter ? decodeCursor(attentionAfter) : null;
   const attention = cursor
-    ? needsAttention.find((status) => isAfter(status, cursor))
+    ? needsAttention.find(({ status }) => isAfter(status, cursor))
     : needsAttention[0];
   return {
     summaryWork: {
@@ -78,8 +95,12 @@ export function computeSummaryWork(
       needsAttention: needsAttention.length,
       attention: attention
         ? {
-            meetingId: attention.id,
-            cursor: encodeCursor({ id: attention.id, startedAt: attention.startedAt }),
+            meetingId: attention.status.id,
+            cursor: encodeCursor({
+              id: attention.status.id,
+              startedAt: attention.status.startedAt,
+            }),
+            action: attention.action,
           }
         : null,
     },

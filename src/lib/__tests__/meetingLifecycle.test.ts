@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   acquireMeetingOperation,
+  isExactMeetingOperationActive,
   isMeetingOperationActive,
   resetMeetingLifecycleForTests,
   tryAcquireMeetingOperation,
@@ -93,5 +94,23 @@ describe("meeting operation coordinator", () => {
       first.release();
       rmSync(otherRoot, { recursive: true, force: true });
     }
+  });
+
+  it("serializes every content mutation while keeping status and move compatible", async () => {
+    const manual = await acquireMeetingOperation("m1", "manual_edit");
+    expect(isExactMeetingOperationActive("m1", "manual_edit")).toBe(true);
+    await expect(tryAcquireMeetingOperation("m1", "summarize")).resolves.toBeNull();
+    await expect(tryAcquireMeetingOperation("m1", "summarize_reconcile")).resolves.toBeNull();
+    await expect(tryAcquireMeetingOperation("m1", "transcript_regenerate")).resolves.toBeNull();
+    await expect(tryAcquireMeetingOperation("m1", "summary_regenerate")).resolves.toBeNull();
+    await expect(tryAcquireMeetingOperation("m1", "delete")).resolves.toBeNull();
+
+    const statusLease = await tryAcquireMeetingOperation("m1", "status");
+    const moveLease = await tryAcquireMeetingOperation("m1", "move");
+    expect(statusLease).not.toBeNull();
+    expect(moveLease).not.toBeNull();
+    statusLease?.release();
+    moveLease?.release();
+    manual.release();
   });
 });
