@@ -32,11 +32,40 @@ function renderRow(over: Partial<MeetingListItem> = {}) {
 }
 
 describe("MeetingRow — 상태 뱃지", () => {
+  it("transcript operation은 전체 스크립트 생성 중으로 구분한다", () => {
+    renderRow({ status: "summarized", contentOperation: "transcript" });
+    expect(screen.getByText("전체 스크립트 생성 중")).toBeInTheDocument();
+    expect(screen.queryByText("회의록 요약 생성 중")).not.toBeInTheDocument();
+  });
+
+  it.each(["initial", "summary"] as const)("%s operation은 회의록 요약 생성 중으로 표시한다", (contentOperation) => {
+    renderRow({ status: "summarized", contentOperation });
+    expect(screen.getByText("회의록 요약 생성 중")).toBeInTheDocument();
+    expect(screen.queryByText("전체 스크립트 생성 중")).not.toBeInTheDocument();
+  });
+
+  it("manual edit에는 public generation operation이 없으므로 생성 중으로 가장하지 않는다", () => {
+    renderRow({ status: "summarized", contentOperation: null, resummarizeInflight: false });
+    expect(screen.getByText("요약 완료")).toBeInTheDocument();
+    expect(screen.queryByText(/생성 중/)).not.toBeInTheDocument();
+  });
+
+  it("operation별 retry는 상세의 해당 content tab으로 연결한다", () => {
+    const first = renderRow({
+      error: { message: "스크립트 실패", action: "retry_transcript_generation" },
+    });
+    expect(screen.getByRole("link")).toHaveAttribute("href", "/meetings/m1?contentTab=script");
+    first.unmount();
+
+    renderRow({ error: { message: "요약 실패", action: "retry_summary" } });
+    expect(screen.getByRole("link")).toHaveAttribute("href", "/meetings/m1?contentTab=summary");
+  });
+
   it("재요약 inflight면 파생 status가 summarized여도 '요약 중'을 보인다", () => {
     // The re-summarize publisher overwrites summary.json last, so deriveStatus keeps the
     // row at `summarized` throughout the run. The durable inflight flag overlays 요약 중.
     renderRow({ status: "summarized", resummarizeInflight: true });
-    expect(screen.getByText("요약 중")).toBeInTheDocument();
+    expect(screen.getByText("회의록 요약 생성 중")).toBeInTheDocument();
     expect(screen.queryByText("요약 완료")).not.toBeInTheDocument();
   });
 

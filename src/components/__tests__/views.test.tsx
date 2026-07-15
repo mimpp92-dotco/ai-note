@@ -63,6 +63,48 @@ const SUMMARY: Summary = {
   followups: ["리뷰 미팅 잡기"],
 };
 
+const PAIR_REVISION = {
+  transcriptSha256: "a".repeat(64),
+  summarySha256: "b".repeat(64),
+};
+
+function stableContent(overrides: Record<string, unknown> = {}) {
+  return {
+    state: "stable" as const,
+    revision: PAIR_REVISION,
+    transcriptSource: "generated" as const,
+    summarySource: "generated" as const,
+    summaryOutdated: false,
+    ...overrides,
+  };
+}
+
+function editableSummary(summary: Summary = SUMMARY) {
+  return {
+    oneLine: summary.oneLine,
+    purpose: summary.purpose,
+    highlights: [...summary.highlights],
+    discussion: [...summary.discussion],
+    decisions: [...summary.decisions],
+    actionItems: summary.actionItems.map((item) => ({ ...item })),
+    risks: [...summary.risks],
+    followups: [...summary.followups],
+  };
+}
+
+function contentResource(overrides: Record<string, unknown> = {}) {
+  return {
+    transcript: "본문",
+    summary: editableSummary(),
+    revision: PAIR_REVISION,
+    transcriptSource: "generated",
+    summarySource: "generated",
+    summaryOutdated: false,
+    pairState: "stable",
+    ...overrides,
+  };
+}
+
 function stubClipboard(writeText: ReturnType<typeof vi.fn>) {
   vi.stubGlobal(
     "navigator",
@@ -792,10 +834,13 @@ describe("MeetingDetailView — 요약 상태 카드", () => {
         segments={[]}
         summary={SUMMARY}
         hasAudio={false}
+        content={stableContent()}
       />,
     );
+    fireEvent.click(screen.getByRole("tab", { name: "회의록 요약" }));
     expect(screen.getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "요약 다운로드(.md)" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "회의록 다운로드(.md)" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "JSON 다운로드" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "폴더 열기" })).toBeInTheDocument();
   });
 
@@ -842,6 +887,7 @@ describe("MeetingDetailView — information hierarchy and review freshness", () 
         segments={[]}
         summary={SUMMARY}
         hasAudio
+        content={stableContent()}
       />,
     );
 
@@ -850,12 +896,10 @@ describe("MeetingDetailView — information hierarchy and review freshness", () 
     expect(order).toEqual(["heading", "notices", "actions", "meeting-info", "tabs"]);
 
     const actions = screen.getByRole("group", { name: "회의 작업" });
-    expect(within(actions).getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
-    expect(within(actions).getByRole("button", { name: "전사 복사" })).toBeInTheDocument();
-    expect(within(actions).getByRole("link", { name: "요약 다운로드(.md)" })).toBeInTheDocument();
-    expect(within(actions).getByRole("link", { name: "JSON(.json)" })).toBeInTheDocument();
     expect(within(actions).getByRole("button", { name: "폴더 열기" })).toBeInTheDocument();
-    expect(within(actions).getByRole("button", { name: "다시 요약" })).toBeInTheDocument();
+    expect(within(actions).getByRole("link", { name: "회의록 다운로드(.md)" })).toBeInTheDocument();
+    expect(within(actions).queryByRole("button", { name: /복사|수정|다시 만들기/ })).not.toBeInTheDocument();
+    expect(within(actions).queryByRole("link", { name: /JSON/ })).not.toBeInTheDocument();
     expect(within(actions).queryByText("요약 완료")).not.toBeInTheDocument();
 
     const actionControls = [
@@ -894,6 +938,7 @@ describe("MeetingDetailView — information hierarchy and review freshness", () 
         segments={[]}
         summary={SUMMARY}
         hasAudio={false}
+        content={stableContent()}
       />,
     );
     const input = screen.getByRole("textbox", { name: "참석자" });
@@ -937,6 +982,7 @@ describe("MeetingDetailView — information hierarchy and review freshness", () 
     fireEvent.click(screen.getByRole("button", { name: "저장" }));
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("저장됨"));
 
+    fireEvent.click(screen.getByRole("tab", { name: "회의록 요약" }));
     fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     expect(writeText.mock.calls.at(-1)?.[0]).toContain("**참석자:** 딜런, 지훈");
@@ -1031,6 +1077,679 @@ describe("MeetingDetailView — information hierarchy and review freshness", () 
       })} />,
     );
     expect(pristine).toHaveValue("새 값");
+  });
+});
+
+describe("MeetingDetailView — content action hierarchy and manual editing", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("global에는 이동·폴더·combined Markdown만, 각 content action은 해당 tab footer에만 둔다", () => {
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+
+    const global = screen.getByRole("group", { name: "회의 작업" });
+    expect(within(global).getByRole("button", { name: "폴더 열기" })).toBeInTheDocument();
+    expect(within(global).getByRole("link", { name: "회의록 다운로드(.md)" })).toHaveAttribute(
+      "href",
+      "/api/meetings/m1/export?fmt=md",
+    );
+    expect(within(global).queryByRole("button", { name: /복사|수정|다시 만들기/ })).not.toBeInTheDocument();
+    expect(within(global).queryByRole("link", { name: /JSON/ })).not.toBeInTheDocument();
+
+    const script = screen.getByRole("group", { name: "전체 스크립트 작업" });
+    expect(within(script).getByRole("button", { name: "전체 스크립트 복사" })).toBeInTheDocument();
+    expect(within(script).getByRole("button", { name: "전체 스크립트 수정" })).toBeInTheDocument();
+    expect(within(script).getByRole("button", { name: "원문에서 스크립트 다시 만들기" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "회의록 요약" }));
+    const summary = screen.getByRole("group", { name: "회의록 요약 작업" });
+    expect(within(summary).getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
+    expect(within(summary).getByRole("link", { name: "JSON 다운로드" })).toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "회의록 요약 수정" })).toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "현재 스크립트로 요약 다시 만들기" })).toBeInTheDocument();
+  });
+
+  it("dirty editor에서 다른 탭 editor를 열면 현재 탭에 discard 확인을 보이고 계속 수정 focus를 복구한다", () => {
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveFocus();
+    fireEvent.change(screen.getByRole("textbox", { name: "전체 스크립트" }), {
+      target: { value: "저장하지 않은 스크립트" },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "회의록 요약" }));
+    fireEvent.click(screen.getByRole("button", { name: "회의록 요약 수정" }));
+
+    expect(screen.getByText("저장하지 않은 수정 내용을 버릴까요?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "계속 수정" }));
+    expect(screen.getByRole("tab", { name: "전체 스크립트" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveValue("저장하지 않은 스크립트");
+    expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("tab", { name: "회의록 요약" }));
+    fireEvent.click(screen.getByRole("button", { name: "회의록 요약 수정" }));
+    fireEvent.click(screen.getByRole("button", { name: "수정 내용 버리기" }));
+    expect(screen.queryByRole("textbox", { name: "전체 스크립트" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "한 줄 요약" })).toHaveFocus();
+  });
+
+  it("pristine third revision은 content probe가 canonical revision을 확인하지 못하면 기존 snapshot과 경고를 유지한다", async () => {
+    const thirdRevision = {
+      transcriptSha256: "c".repeat(64),
+      summarySha256: "d".repeat(64),
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/content") {
+        return new Response(JSON.stringify({
+          transcript: "본문",
+          summary: editableSummary(),
+          revision: PAIR_REVISION,
+          transcriptSource: "generated",
+          summarySource: "generated",
+          summaryOutdated: false,
+          pairState: "stable",
+        }), { headers: { "content-type": "application/json" } });
+      }
+      return healthResponse(input);
+    }));
+    const baseProps = {
+      id: "m1",
+      status: makeStatus({ status: "summarized" }),
+      segments: [] as never[],
+      hasAudio: false,
+    };
+    const { rerender } = render(
+      <MeetingDetailView
+        {...baseProps}
+        transcript={{ text: "본문", corrected: true }}
+        summary={SUMMARY}
+        content={stableContent()}
+      />,
+    );
+
+    rerender(
+      <MeetingDetailView
+        {...baseProps}
+        transcript={{ text: "확인되지 않은 새 본문", corrected: true }}
+        summary={{ ...SUMMARY, oneLine: "확인되지 않은 새 요약" }}
+        content={stableContent({ revision: thirdRevision })}
+      />,
+    );
+
+    expect(await screen.findByText("새 내용의 현재 revision을 확인하지 못해 확인된 내용을 유지했습니다."))
+      .toBeInTheDocument();
+    expect(screen.getByText("본문")).toBeInTheDocument();
+    expect(screen.queryByText("확인되지 않은 새 본문")).not.toBeInTheDocument();
+  });
+
+  it("pristine third revision은 content probe가 같은 canonical revision을 확인한 뒤에만 반영한다", async () => {
+    const thirdRevision = {
+      transcriptSha256: "c".repeat(64),
+      summarySha256: "d".repeat(64),
+    };
+    const thirdSummary = { ...SUMMARY, oneLine: "확인된 새 요약" };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/content") {
+        return new Response(JSON.stringify(contentResource({
+          transcript: "확인된 새 본문",
+          summary: editableSummary(thirdSummary),
+          revision: thirdRevision,
+          transcriptSource: "manual",
+          summarySource: "manual",
+        })), { headers: { "content-type": "application/json" } });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const baseProps = {
+      id: "m1",
+      status: makeStatus({ status: "summarized" }),
+      segments: [] as never[],
+      hasAudio: false,
+    };
+    const { rerender } = render(
+      <MeetingDetailView
+        {...baseProps}
+        transcript={{ text: "본문", corrected: true }}
+        summary={SUMMARY}
+        content={stableContent()}
+      />,
+    );
+
+    rerender(
+      <MeetingDetailView
+        {...baseProps}
+        transcript={{ text: "확인된 새 본문", corrected: true }}
+        summary={thirdSummary}
+        content={stableContent({
+          revision: thirdRevision,
+          transcriptSource: "manual",
+          summarySource: "manual",
+        })}
+      />,
+    );
+
+    expect(await screen.findByText("확인된 새 본문")).toBeInTheDocument();
+    expect(screen.getByText("다른 곳에서 저장된 최신 내용을 반영했습니다.")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/meetings/m1/content"))
+      .toHaveLength(1);
+  });
+
+  it("dirty editor는 third revision props와 parent refresh에도 draft를 유지하고 probe를 미룬다", async () => {
+    const thirdRevision = {
+      transcriptSha256: "c".repeat(64),
+      summarySha256: "d".repeat(64),
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => healthResponse(input));
+    vi.stubGlobal("fetch", fetchMock);
+    const baseProps = {
+      id: "m1",
+      status: makeStatus({ status: "summarized" }),
+      segments: [] as never[],
+      hasAudio: false,
+    };
+    const { rerender } = render(
+      <MeetingDetailView
+        {...baseProps}
+        transcript={{ text: "본문", corrected: true }}
+        summary={SUMMARY}
+        content={stableContent()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "전체 스크립트" }), {
+      target: { value: "보존할 dirty draft" },
+    });
+
+    rerender(
+      <MeetingDetailView
+        {...baseProps}
+        transcript={{ text: "외부 새 본문", corrected: true }}
+        summary={{ ...SUMMARY, oneLine: "외부 새 요약" }}
+        content={stableContent({ revision: thirdRevision })}
+      />,
+    );
+
+    expect(await screen.findByText(/다른 내용 변경이 감지됐지만 현재 입력은 그대로 유지했습니다/))
+      .toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveValue("보존할 dirty draft");
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/meetings/m1/content"))
+      .toHaveLength(0);
+  });
+
+  it.each([
+    ["raw fallback", { state: "missing", revision: null, transcriptSource: null, summarySource: null, summaryOutdated: null }],
+    ["ambiguous", { state: "ambiguous", revision: null, transcriptSource: null, summarySource: null, summaryOutdated: null }],
+    ["source conflict", { state: "source_conflict", revision: null, transcriptSource: null, summarySource: null, summaryOutdated: null }],
+  ] as const)("%s에는 edit/generation mutation action을 노출하지 않는다", (_label, content) => {
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "자동 전사", corrected: false }}
+        segments={[]}
+        summary={null}
+        hasAudio={false}
+        content={content}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /수정|다시 만들기/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "폴더 열기" })).toBeInTheDocument();
+  });
+
+  it("transcript PATCH 성공은 revision·본문·outdated 경고·복사 source를 즉시 갱신한다", async () => {
+    const nextRevision = {
+      transcriptSha256: "c".repeat(64),
+      summarySha256: PAIR_REVISION.summarySha256,
+    };
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "/api/meetings/m1/transcript") {
+        return new Response(JSON.stringify({
+          transcript: "수정한\n본문",
+          summary: editableSummary(),
+          revision: nextRevision,
+          transcriptSource: "manual",
+          summarySource: "generated",
+          summaryOutdated: true,
+          pairState: "stable",
+          durability: "durable",
+        }), { headers: { "content-type": "application/json" } });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "전체 스크립트" }), {
+      target: { value: "수정한\r\n본문" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 저장" }));
+
+    await waitFor(() => expect(screen.getByText(/수정한\s+본문/)).toBeInTheDocument());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/meetings/m1/transcript",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ expectedRevision: PAIR_REVISION, transcript: "수정한\n본문" }),
+      }),
+    );
+    expect(screen.getByRole("tab", { name: /회의록 요약.*요약 갱신 필요/ })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/meetings/m1/content"))
+      .toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 복사" }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("수정한\n본문"));
+  });
+
+  it("summary PATCH는 모든 editable field와 multiline item만 보내고 view·copy freshness를 즉시 갱신한다", async () => {
+    const nextRevision = {
+      transcriptSha256: PAIR_REVISION.transcriptSha256,
+      summarySha256: "d".repeat(64),
+    };
+    const nextSummary = {
+      oneLine: "새 한 줄 요약",
+      purpose: "새 목적",
+      highlights: ["여러 줄 핵심\n둘째 줄", "추가 핵심"],
+      discussion: ["새 논의"],
+      decisions: ["새 결정"],
+      actionItems: [{ owner: "지훈", task: "검토", due: "2026-07-22" }],
+      risks: ["새 리스크"],
+      followups: ["새 후속"],
+    };
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    let summaryRequest: RequestInit | undefined;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === "/api/meetings/m1/summary") {
+        summaryRequest = init;
+        return new Response(JSON.stringify({
+          transcript: "본문",
+          summary: nextSummary,
+          revision: nextRevision,
+          transcriptSource: "generated",
+          summarySource: "manual",
+          summaryOutdated: false,
+          pairState: "stable",
+          durability: "durable",
+        }), { headers: { "content-type": "application/json" } });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent({ summaryOutdated: true })}
+        initialTab="summary"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "회의록 요약 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "한 줄 요약" }), {
+      target: { value: nextSummary.oneLine },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "목적" }), {
+      target: { value: nextSummary.purpose },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "핵심 1" }), {
+      target: { value: nextSummary.highlights[0] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "핵심 추가" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "핵심 2" }), {
+      target: { value: nextSummary.highlights[1] },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "논의 내용 1" }), {
+      target: { value: nextSummary.discussion[0] },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "결정 사항 1" }), {
+      target: { value: nextSummary.decisions[0] },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "액션 아이템 1 담당자" }), {
+      target: { value: nextSummary.actionItems[0].owner },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "액션 아이템 1 할 일" }), {
+      target: { value: nextSummary.actionItems[0].task },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "액션 아이템 1 기한" }), {
+      target: { value: nextSummary.actionItems[0].due },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "리스크 1" }), {
+      target: { value: nextSummary.risks[0] },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "후속 확인 1" }), {
+      target: { value: nextSummary.followups[0] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "회의록 요약 저장" }));
+
+    await waitFor(() => expect(screen.getByText("새 한 줄 요약")).toBeInTheDocument());
+    const body = JSON.parse(String(summaryRequest?.body));
+    expect(body).toEqual({ expectedRevision: PAIR_REVISION, summary: nextSummary });
+    expect(body.summary).not.toHaveProperty("title");
+    expect(body.summary).not.toHaveProperty("topicSlug");
+    expect(body.summary).not.toHaveProperty("participants");
+    expect(screen.getByRole("tab", { name: "회의록 요약" })).toBeInTheDocument();
+    expect(screen.queryByText("요약 갱신 필요")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls.at(-1)?.[0]).toContain("새 한 줄 요약");
+    expect(writeText.mock.calls.at(-1)?.[0]).toContain("여러 줄 핵심\n둘째 줄");
+  });
+
+  it("network 오류는 확정 실패나 PATCH 재전송 대신 한 번 GET probe해 intended save를 확정한다", async () => {
+    const nextRevision = {
+      transcriptSha256: "c".repeat(64),
+      summarySha256: PAIR_REVISION.summarySha256,
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/meetings/m1/transcript" && init?.method === "PATCH") {
+        throw new Error("connection reset after commit");
+      }
+      if (url === "/api/meetings/m1/content") {
+        return new Response(JSON.stringify({
+          transcript: "probe로 확인한 본문",
+          summary: editableSummary(),
+          revision: nextRevision,
+          transcriptSource: "manual",
+          summarySource: "generated",
+          summaryOutdated: true,
+          pairState: "stable",
+        }), { headers: { "content-type": "application/json" } });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "전체 스크립트" }), {
+      target: { value: "probe로 확인한 본문" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 저장" }));
+
+    await waitFor(() => expect(screen.getByText("probe로 확인한 본문")).toBeInTheDocument());
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/meetings/m1/transcript")).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/meetings/m1/content")).toHaveLength(1);
+  });
+
+  it("invalid 2xx 뒤 probe가 old revision이면 not-saved로 확정하고 같은 draft의 수동 재시도를 연다", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "/api/meetings/m1/transcript") {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "/api/meetings/m1/content") {
+        return new Response(JSON.stringify(contentResource()), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "전체 스크립트" }), {
+      target: { value: "아직 저장되지 않은 draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 저장" }));
+
+    expect(await screen.findByText("저장되지 않은 것을 확인했습니다. 입력을 유지했으니 다시 저장할 수 있습니다."))
+      .toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveValue("아직 저장되지 않은 draft");
+    expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "전체 스크립트 저장" })).toBeEnabled();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/meetings/m1/transcript")).toHaveLength(1);
+  });
+
+  it("probe의 third revision은 conflict로 판정해 draft copy와 confirm-before-latest를 제공한다", async () => {
+    const thirdRevision = {
+      transcriptSha256: "c".repeat(64),
+      summarySha256: PAIR_REVISION.summarySha256,
+    };
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "/api/meetings/m1/transcript") throw new Error("unknown commit state");
+      if (url === "/api/meetings/m1/content") {
+        return new Response(JSON.stringify(contentResource({
+          transcript: "다른 곳에서 저장한 본문",
+          revision: thirdRevision,
+          transcriptSource: "manual",
+        })), { headers: { "content-type": "application/json" } });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "전체 스크립트" }), {
+      target: { value: "내 충돌 draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 저장" }));
+
+    expect(await screen.findByText(/다른 변경이 먼저 저장됐습니다/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveValue("내 충돌 draft");
+    fireEvent.click(screen.getByRole("button", { name: "내 입력 복사" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("내 충돌 draft"));
+    fireEvent.click(screen.getByRole("button", { name: "최신 내용 불러오기" }));
+    expect(screen.getByText("현재 입력을 버리고 서버에서 확인한 최신 내용으로 교체합니다."))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "최신 내용으로 교체" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/meetings/m1/transcript")).toHaveLength(1);
+  });
+
+  it("probe unavailable은 ambiguous로 남겨 draft를 보존하고 PATCH 자동 재전송을 막는다", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "/api/meetings/m1/transcript") {
+        return new Response(JSON.stringify({ malformed: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "/api/meetings/m1/content") return new Response(null, { status: 503 });
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "전체 스크립트" }), {
+      target: { value: "확인 불가 draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 저장" }));
+
+    expect(await screen.findByText("저장 여부를 확인할 수 없습니다. 입력을 유지했으며 저장 요청을 다시 보내지 않았습니다."))
+      .toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveValue("확인 불가 draft");
+    expect(screen.getByRole("button", { name: "전체 스크립트 저장" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "수정 취소" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "내 입력 복사" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/meetings/m1/transcript")).toHaveLength(1);
+  });
+
+  it("durability pending은 committed warning으로 editor를 닫고 같은 PATCH를 다시 보내지 않는다", async () => {
+    const nextRevision = {
+      transcriptSha256: "c".repeat(64),
+      summarySha256: PAIR_REVISION.summarySha256,
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/transcript") {
+        return new Response(JSON.stringify(contentResource({
+          transcript: "pending 저장 본문",
+          revision: nextRevision,
+          transcriptSource: "manual",
+          summaryOutdated: true,
+          durability: "pending",
+        })), { headers: { "content-type": "application/json" } });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "전체 스크립트" }), {
+      target: { value: "pending 저장 본문" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 저장" }));
+
+    expect(await screen.findByText("저장됨 · 디스크 동기화 확인 대기")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "전체 스크립트" })).not.toBeInTheDocument();
+    expect(screen.getByText("pending 저장 본문")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/meetings/m1/transcript")).toHaveLength(1);
+  });
+
+  it("summaryOutdated를 label/panel/copy에 표시하고 JSON schema 대신 UI help에 연결한다", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent({ summaryOutdated: true })}
+      />,
+    );
+    const tab = screen.getByRole("tab", { name: /회의록 요약.*요약 갱신 필요/ });
+    fireEvent.click(tab);
+    expect(screen.getByText("전체 스크립트가 변경되었지만 기존 요약은 유지됨")).toBeInTheDocument();
+    const json = screen.getByRole("link", { name: "JSON 다운로드" });
+    expect(json).toHaveAttribute("aria-describedby", expect.stringContaining("outdated"));
+    fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls.at(-1)?.[0]).toContain("현재 스크립트 변경 후 회의록 요약이 갱신되지 않음");
+  });
+
+  it("두 regeneration dialog는 exact endpoint/body를 쓰고 Cancel에 initial focus를 둔다", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes("/regenerate") || String(input).includes("/summarize")) {
+        return new Response(JSON.stringify({ ok: true, durability: "durable" }), {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+
+    const transcriptTrigger = screen.getByRole("button", { name: "원문에서 스크립트 다시 만들기" });
+    fireEvent.click(transcriptTrigger);
+    expect(screen.getByRole("button", { name: "취소" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "스크립트 다시 만들기" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/meetings/m1/transcript/regenerate",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: PAIR_REVISION, confirmReplacement: true }),
+      }),
+    ));
   });
 });
 
@@ -1263,147 +1982,120 @@ describe("SettingsForm — persisted draft/load/test state", () => {
   );
 });
 
-describe("MeetingDetailView — 다시 요약", () => {
+describe("MeetingDetailView — operation별 재생성", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("요약 완료 회의에서 '다시 요약' 확인 시 resummarize를 202로 POST하고 '요약 중'이 된다", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 202 });
+  function acceptedGenerationResponse() {
+    return new Response(JSON.stringify({ ok: true, durability: "durable" }), {
+      status: 202,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("summary generation은 current revision을 보내고 operation 관측·해제로 identical content도 완료한다", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/summarize") return acceptedGenerationResponse();
+      return healthResponse(input);
+    });
     vi.stubGlobal("fetch", fetchMock);
-    render(
-      <MeetingDetailView
-        id="m1"
-        status={makeStatus({ status: "summarized" })}
-        transcript={{ text: "본문", corrected: true }}
-        segments={[]}
-        summary={SUMMARY}
-        hasAudio={false}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // reveal confirm
-    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // confirm
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/meetings/m1/summarize",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ resummarize: true }) }),
-      ),
-    );
-    // 202 accepted → local "요약 중" while the client polls for the new summary.
-    await waitFor(() => expect(screen.getByRole("button", { name: "요약 중…" })).toBeInTheDocument());
-  });
-
-  it("재요약이 완료되어 요약 내용이 바뀌면 '요약 중' 상태가 해제된다", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 202 }));
-    const props = {
-      id: "m1",
-      status: makeStatus({ status: "summarized" }),
-      transcript: { text: "본문", corrected: true },
-      segments: [],
-      hasAudio: false,
-    };
-    const { rerender } = render(<MeetingDetailView {...props} summary={SUMMARY} />);
-    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // reveal
-    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // confirm → run
-    await waitFor(() => expect(screen.getByRole("button", { name: "요약 중…" })).toBeInTheDocument());
-
-    // A server refresh delivers a changed summary → success clears busy, reopens 다시 요약.
-    rerender(<MeetingDetailView {...props} summary={{ ...SUMMARY, oneLine: "새로 생성된 요약." }} />);
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "요약 중…" })).not.toBeInTheDocument(),
-    );
-    expect(screen.getByRole("button", { name: "다시 요약" })).toBeInTheDocument();
-  });
-
-  it("재요약 실패 시 '재요약 실패' 배너와 요약/다시 요약을 유지하고 재시도는 resummarize로 POST한다", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 202 });
-    vi.stubGlobal("fetch", fetchMock);
-    render(
-      <MeetingDetailView
-        id="m1"
-        status={makeStatus({
-          status: "summarized",
-          error: { message: "모델 응답 오류", action: "retry_summary" },
-        })}
-        transcript={{ text: "본문", corrected: true }}
-        segments={[]}
-        summary={SUMMARY}
-        hasAudio={false}
-      />,
-    );
-    // Banner reads "재요약 실패" (not "요약 실패") and shows the message.
-    expect(screen.getByText(/재요약 실패/)).toBeInTheDocument();
-    expect(screen.getByText(/모델 응답 오류/)).toBeInTheDocument();
-    // The prior summary export + 다시 요약 stay available (data not lost).
-    expect(screen.getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "다시 요약" })).toBeInTheDocument();
-    // Retry from the banner forces a re-summarize (must send resummarize:true).
-    fireEvent.click(screen.getByRole("button", { name: "재시도" }));
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/meetings/m1/summarize",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ resummarize: true }) }),
-      ),
-    );
-  });
-
-  it("실패 상태에서 재시도를 눌러도 옛 retry_summary 에러로 즉시 완료 처리하지 않는다(요약 중 유지)", async () => {
-    // Regression guard: a stale pre-run retry_summary error must NOT be read as this
-    // run's instant failure. Completion is gated on first observing the in-flight lock.
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 202 }));
-    render(
-      <MeetingDetailView
-        id="m1"
-        status={makeStatus({
-          status: "summarized",
-          error: { message: "이전 실패", action: "retry_summary" },
-        })}
-        transcript={{ text: "본문", corrected: true }}
-        segments={[]}
-        summary={SUMMARY}
-        hasAudio={false}
-        resummarizeInflight={false}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "재시도" }));
-    // Enters the in-progress state (spinner) and STAYS there — the stale error is not
-    // read as this run's instant failure, and the banner is replaced by the spinner.
-    await waitFor(() => expect(screen.getByText("요약 생성 중…")).toBeInTheDocument());
-    expect(screen.queryByText(/재요약 실패/)).not.toBeInTheDocument();
-  });
-
-  it("재요약 폴링이 in-flight 락 해제 후 나타난 retry_summary 에러를 실패로 감지한다", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 202 }));
+    const baseStatus = makeStatus({ status: "summarized" });
     const props = {
       id: "m1",
       transcript: { text: "본문", corrected: true },
       segments: [] as never[],
-      hasAudio: false,
       summary: SUMMARY,
+      content: stableContent(),
+      hasAudio: false,
     };
-    const clean = makeStatus({ status: "summarized" });
-    const { rerender } = render(<MeetingDetailView {...props} status={clean} resummarizeInflight={false} />);
-    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // reveal
-    fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // confirm → 202
-    await waitFor(() => expect(screen.getByRole("button", { name: "요약 중…" })).toBeInTheDocument());
+    const { rerender } = render(<MeetingDetailView {...props} status={baseStatus} />);
+    fireEvent.click(screen.getByRole("tab", { name: "회의록 요약" }));
+    fireEvent.click(screen.getByRole("button", { name: "현재 스크립트로 요약 다시 만들기" }));
+    fireEvent.click(screen.getByRole("button", { name: "요약 다시 만들기" }));
 
-    // A poll observes the run holding the lock (content unchanged) → stays busy.
-    rerender(<MeetingDetailView {...props} status={clean} resummarizeInflight={true} />);
-    expect(screen.getByRole("button", { name: "요약 중…" })).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/meetings/m1/summarize",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ resummarize: true, expectedRevision: PAIR_REVISION }),
+      }),
+    ));
+    await waitFor(() => expect(screen.getAllByText("요약 만드는 중…").length).toBeGreaterThan(0));
 
-    // The run fails: lock clears and a retry_summary error appears (content still same).
-    const failed = makeStatus({
-      status: "summarized",
-      error: { message: "모델 응답 오류", action: "retry_summary" },
-    });
-    rerender(<MeetingDetailView {...props} status={failed} resummarizeInflight={false} />);
-
-    await waitFor(() => expect(screen.getByText(/재요약 실패/)).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "요약 중…" })).not.toBeInTheDocument();
+    rerender(
+      <MeetingDetailView
+        {...props}
+        status={{ ...baseStatus, contentOperation: "summary" }}
+      />,
+    );
+    rerender(
+      <MeetingDetailView
+        {...props}
+        status={{ ...baseStatus, contentOperation: null }}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "현재 스크립트로 요약 다시 만들기" })).toBeEnabled();
   });
 
-  it("재요약이 데드라인을 넘기면 타임아웃 안내를 표시한다", async () => {
+  it("cold entry operation은 transcript와 summary label을 각 footer에서 구분한다", () => {
+    const baseProps = {
+      id: "m1",
+      transcript: { text: "본문", corrected: true },
+      segments: [] as never[],
+      summary: SUMMARY,
+      content: stableContent({ state: "active" }),
+      hasAudio: false,
+    };
+    const first = render(
+      <MeetingDetailView
+        {...baseProps}
+        status={{ ...makeStatus({ status: "summarized" }), contentOperation: "transcript" }}
+      />,
+    );
+    expect(screen.getByText("전체 스크립트 생성 중")).toBeInTheDocument();
+    expect(screen.getByText("스크립트 만드는 중…")).toBeInTheDocument();
+    first.unmount();
+
+    render(
+      <MeetingDetailView
+        {...baseProps}
+        initialTab="summary"
+        status={{ ...makeStatus({ status: "summarized" }), contentOperation: "summary" }}
+      />,
+    );
+    expect(screen.getByText("회의록 요약 생성 중")).toBeInTheDocument();
+    expect(screen.getByText("요약 만드는 중…")).toBeInTheDocument();
+  });
+
+  it("operation별 failure는 전용 tab에서 재시도하도록 안내하고 옛 summary를 유지한다", () => {
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({
+          status: "summarized",
+          error: { message: "스크립트 생성 오류", action: "retry_transcript_generation" },
+        })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        content={stableContent()}
+        hasAudio={false}
+      />,
+    );
+    expect(screen.getByText(/전체 스크립트 생성 실패/)).toBeInTheDocument();
+    expect(screen.getByText(/전체 스크립트 탭 하단/)).toBeInTheDocument();
+    expect(screen.queryByText("한 줄 요약입니다.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "회의록 요약" }));
+    expect(screen.getByText("한 줄 요약입니다.")).toBeInTheDocument();
+  });
+
+  it("summary generation timeout은 기존 내용을 유지하고 dialog를 다시 닫을 수 있게 한다", async () => {
     vi.useFakeTimers();
     try {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 202 }));
+      vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+        if (String(input) === "/api/meetings/m1/summarize") return acceptedGenerationResponse();
+        return healthResponse(input);
+      }));
       render(
         <MeetingDetailView
           id="m1"
@@ -1411,73 +2103,23 @@ describe("MeetingDetailView — 다시 요약", () => {
           transcript={{ text: "본문", corrected: true }}
           segments={[]}
           summary={SUMMARY}
+          content={stableContent()}
           hasAudio={false}
-          resummarizeInflight={false}
+          initialTab="summary"
         />,
       );
-      fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // reveal
-      fireEvent.click(screen.getByRole("button", { name: "다시 요약" })); // confirm → 202
-      await vi.advanceTimersByTimeAsync(0); // flush the 202 microtask
-
-      // No content change and no inflight signal ever arrives → the ceiling fires.
-      await vi.advanceTimersByTimeAsync(3 * 1_800_000 + 60_000);
-      expect(screen.getByText(/시간 내에 끝나지 않았어요/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "현재 스크립트로 요약 다시 만들기" }));
+      fireEvent.click(screen.getByRole("button", { name: "요약 다시 만들기" }));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(2 * 1_800_000 + 60_000);
+      expect(screen.getAllByText(/요약 생성이 시간 내에 끝나지 않았습니다/).length).toBeGreaterThan(0);
+      expect(screen.getByRole("button", { name: "취소" })).toBeEnabled();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("진행 중에 페이지를 새로 열면(서버 in-flight) 버튼 없이도 '요약 생성 중'으로 보인다", () => {
-    // Cold entry: no local click, but the server reports a run in flight. deriveStatus
-    // masks status as summarized (old summary.json exists) — the UI must still read busy.
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 202 }));
-    render(
-      <MeetingDetailView
-        id="m1"
-        status={makeStatus({ status: "summarized" })}
-        transcript={{ text: "본문", corrected: true }}
-        segments={[]}
-        summary={SUMMARY}
-        hasAudio={false}
-        resummarizeInflight={true}
-      />,
-    );
-    // Status card shows the spinner, and the top badge reads "요약 생성 중".
-    expect(screen.getByText("요약 생성 중…")).toBeInTheDocument();
-    expect(screen.getAllByText("요약 생성 중").length).toBeGreaterThan(0);
-    // "다시 요약" is disabled while a run is in flight (clicking it would 409).
-    const button = screen.getByRole("button", { name: "요약 중…" });
-    expect(button).toBeDisabled();
-  });
-
-  it("서버 in-flight가 해제되고 새 요약이 오면 자동으로 완료 상태가 된다(cold entry)", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 202 }));
-    const props = {
-      id: "m1",
-      status: makeStatus({ status: "summarized" }),
-      transcript: { text: "본문", corrected: true },
-      segments: [] as never[],
-      hasAudio: false,
-    };
-    const { rerender } = render(
-      <MeetingDetailView {...props} summary={SUMMARY} resummarizeInflight={true} />,
-    );
-    expect(screen.getByText("요약 생성 중…")).toBeInTheDocument();
-
-    // The run finishes: lock clears and a new summary arrives via a server refresh.
-    rerender(
-      <MeetingDetailView
-        {...props}
-        summary={{ ...SUMMARY, oneLine: "새로 생성된 요약." }}
-        resummarizeInflight={false}
-      />,
-    );
-    await waitFor(() => expect(screen.queryByText("요약 생성 중…")).not.toBeInTheDocument());
-    // Back to a normal summarized view with the re-summarize button enabled.
-    expect(screen.getByRole("button", { name: "다시 요약" })).toBeEnabled();
-  });
-
-  it("아직 요약되지 않은 회의에는 '다시 요약' 버튼이 없다", () => {
+  it("stable pair가 없는 최초 transcribed meeting에는 local regeneration action이 없다", () => {
     render(
       <MeetingDetailView
         id="m1"
@@ -1485,9 +2127,16 @@ describe("MeetingDetailView — 다시 요약", () => {
         transcript={{ text: "본문", corrected: false }}
         segments={[]}
         summary={null}
+        content={{
+          state: "missing",
+          revision: null,
+          transcriptSource: null,
+          summarySource: null,
+          summaryOutdated: null,
+        }}
         hasAudio={false}
       />,
     );
-    expect(screen.queryByRole("button", { name: "다시 요약" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /다시 만들기/ })).not.toBeInTheDocument();
   });
 });

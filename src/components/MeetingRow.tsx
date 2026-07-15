@@ -13,6 +13,18 @@ import { formatMeetingDate, STATUS_LABELS } from "@/lib/meetingLabels";
 
 type Mode = "idle" | "menu" | "editing" | "moving" | "confirming";
 
+function contentRetryHref(baseHref: string, action: StatusError["action"] | undefined): string {
+  const contentTab = action === "retry_transcript_generation"
+    ? "script"
+    : action === "retry_summary"
+      ? "summary"
+      : null;
+  if (!contentTab) return baseHref;
+  const url = new URL(baseHref, "http://localhost");
+  url.searchParams.set("contentTab", contentTab);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 // One meeting card + its row actions (kebab → 이름 수정 / 삭제). The kebab and its
 // menu are siblings of the card <Link> (interactive controls cannot nest inside an
 // anchor). 이름 수정 is offered only once summarized; 삭제 is always available.
@@ -39,6 +51,10 @@ export function MeetingRow({
 
   const canRename = meeting.status === "summarized";
   const canMove = library?.mode === "ready" && library.version !== null && library.library !== null;
+  const rowHref = contentRetryHref(
+    detailHref ?? `/meetings/${meeting.id}`,
+    meeting.error?.action,
+  );
 
   // Close the menu on an outside click (only while the menu is open, so it never
   // interferes with the edit/confirm sub-UIs).
@@ -102,7 +118,7 @@ export function MeetingRow({
   return (
     <li ref={containerRef} className={`relative min-w-0 ${mode === "menu" ? "z-30" : "z-0"}`}>
       <Link
-        href={detailHref ?? `/meetings/${meeting.id}`}
+        href={rowHref}
         className="flex w-full min-w-0 self-stretch flex-col items-start justify-between gap-2 rounded-[14px] border border-line bg-panel py-4 pl-4 pr-16 shadow-[0_1px_2px_rgba(42,36,32,.04)] transition-colors hover:bg-chrome focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:flex-row sm:items-center sm:gap-4 sm:pl-6"
       >
         <span className="w-full min-w-0">
@@ -121,6 +137,7 @@ export function MeetingRow({
         <StatusBadge
           status={meeting.status}
           error={meeting.error}
+          contentOperation={meeting.contentOperation ?? null}
           inflight={meeting.resummarizeInflight ?? false}
         />
       </Link>
@@ -229,23 +246,50 @@ export function MeetingRow({
 function StatusBadge({
   status,
   error,
+  contentOperation,
   inflight,
 }: {
   status: MeetingStatus;
   error: StatusError | null;
+  contentOperation: MeetingListItem["contentOperation"];
   inflight: boolean;
 }) {
-  // A durable re-summarize (status.summarizeAttempt) wins over the file-derived status: while
-  // it runs the old summary.json survives, so deriveStatus reports `summarized` and would
-  // otherwise mask the run. This is the same signal the detail view reads (R6).
-  if (inflight || status === "summarizing") {
+  if (contentOperation === "transcript") {
     return (
       <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
         <span
           className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent motion-reduce:animate-none"
           aria-hidden="true"
         />
-        요약 중
+        전체 스크립트 생성 중
+      </span>
+    );
+  }
+
+  // The operation-specific signal wins over file-derived summarized status. The
+  // boolean remains only as a compatibility fallback for older list payloads.
+  if (
+    contentOperation === "initial"
+    || contentOperation === "summary"
+    || inflight
+    || status === "summarizing"
+  ) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
+        <span
+          className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+        회의록 요약 생성 중
+      </span>
+    );
+  }
+
+  if (error?.action === "retry_transcript_generation") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-error/10 px-3 py-1 text-[12px] font-medium text-error">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-error" aria-hidden="true" />
+        전체 스크립트 생성 실패
       </span>
     );
   }
@@ -254,7 +298,7 @@ function StatusBadge({
     return (
       <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-error/10 px-3 py-1 text-[12px] font-medium text-error">
         <span className="inline-block h-1.5 w-1.5 rounded-full bg-error" aria-hidden="true" />
-        요약 실패
+        회의록 요약 생성 실패
       </span>
     );
   }
