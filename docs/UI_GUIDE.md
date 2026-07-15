@@ -160,11 +160,26 @@
 
 ### 상세 (2탭)
 - **정보 순서**: 목록으로 → 제목 → 날짜·상태 chip·위치 metadata → 이동/attention/lifecycle notice → utility action bar → `회의 정보`(audio·참석자) → tabs → 선택 panel 순서다. 제목은 action과 같은 flex row에서 폭을 경쟁하지 않고, metadata와 notice action은 mobile에서 wrap/stack한다.
-- **Action bar**: Ready library의 회의 이동과 요약 복사·전사 복사·Markdown/JSON 다운로드·폴더 열기·다시 요약을 한 `회의 작업` group으로 묶는다. 모든 visible sibling은 rectangular radius, 최소 44px 높이, 같은 gap/alignment를 사용한다. 재요약 확인/error panel은 group 바로 아래에 열리고 busy 중 confirm/cancel을 막는다. 복사와 폴더 열기는 immediate success/failure를 `aria-live`로 알리며 detached OS viewer는 `열기 요청됨`까지만 표현한다.
+- **Global action bar**: 상단 `회의 작업`에는 전역 동작인 **회의 이동 / 폴더 열기 / 회의록 다운로드(.md)**만 둔다. 복사·수정·재생성·JSON은 넣지 않는다. 모든 visible sibling은 rectangular radius, 최소 44px 높이, 같은 gap/alignment를 사용한다. 폴더 열기는 immediate success/failure를 `aria-live`로 알리며 detached OS viewer는 `열기 요청됨`까지만 표현한다.
 - **회의 정보**: audio와 참석자 form은 긴 transcript 뒤가 아니라 action bar와 tabs 사이에 둔다. Mobile은 stack하고, 넓은 화면에서만 두 column `items-start`로 배치해 억지 equal-height 빈 공간을 만들지 않는다. 참석자 저장 실패는 입력을 보존한 inline status로 보이고, 성공 response의 검증된 participants를 reload 없이 copy/export에 즉시 반영한다. Parent refresh는 pristine field만 동기화하고 dirty draft를 덮지 않는다.
 - **Tabs keyboard/ARIA**: 공유 horizontal controlled Tabs가 stable `tab`/`tabpanel` id, `aria-controls`/`aria-labelledby`, selected-only `tabIndex=0`과 panel 렌더를 소유한다. Left/Right는 wrap하며 automatic activation, Home/End는 first/last로 이동한다. Click도 선택+focus를 맞추고 Tab key는 가로 탐색 handler가 가로막지 않는다.
-- **전체 스크립트** 탭: 교정본(`transcript.md`). 아직 교정 전이면 raw를 "교정 전 원문 · 자동 전사"로 표시(전사 후 빈 탭 금지). 세그먼트 타임스탬프 표시.
-- **회의록 요약** 탭: `summary.json` 렌더(요약/목적/논의/결정/액션아이템/리스크/후속) + **내보내기(export) 버튼**.
+- **전체 스크립트 footer**: 현재 저장된 교정본과 세그먼트 뒤에 divider를 두고 **전체 스크립트 복사 / 전체 스크립트 수정 / 원문에서 스크립트 다시 만들기**를 이 순서로 둔다. 최초 교정 전 fallback은 `교정 전 원문 · 자동 전사`로 표시해 빈 탭을 만들지 않는다.
+- **회의록 요약 footer**: 요약/목적/핵심/논의/결정/액션 아이템/리스크/후속 뒤에 divider를 두고 **요약 복사 / JSON 다운로드 / 회의록 요약 수정 / 현재 스크립트로 요약 다시 만들기**를 이 순서로 둔다. 제목과 참석자는 이 editor에서 바꾸지 않고 각각 기존 제목 수정과 `회의 정보` 참석자 입력을 사용한다.
+- **전체 스크립트 editor**: 하나의 multiline textarea로 현재 교정본을 lossless하게 편집한다. CRLF만 LF로 정규화하고 비어 있거나 UTF-8 1 MiB 초과면 입력에 focus한 채 저장을 막는다. Helper는 “교정된 스크립트만 바뀌며 녹음 원본과 자동 전사 원문은 유지됩니다”를 명시한다.
+- **회의록 요약 editor**: 한 줄 요약·목적도 multiline textarea로 제공한다. 핵심/논의 내용/결정 사항/리스크/후속 확인은 **항목마다 별도 multiline textarea**와 추가·삭제 control을 갖고 newline을 항목 구분자로 split하지 않는다. 액션 아이템은 항목별 담당자·할 일·기한을 유지하며 빈 목록 항목 또는 세 필드 중 빈 값에 inline validation+focus를 제공한다. Internal title/topicSlug/summary participants는 field로 노출하지 않는다.
+- **요약 최신성**: 전체 스크립트 저장·재생성 뒤 기존 요약은 삭제하지 않는다. 달라진 경우 tab label을 `회의록 요약 · 요약 갱신 필요`로 바꾸고 panel 상단에 **요약 갱신 필요 → 전체 스크립트가 변경되었지만 기존 요약은 유지됨 → 회의록 요약을 수정하거나 현재 스크립트로 다시 만들 수 있습니다** 순서로 표시한다. Summary 직접 저장 또는 현재 스크립트 기준 재생성 뒤 warning을 제거한다. 요약 복사와 combined Markdown에는 warning을 포함한다. JSON은 현재 저장된 summary schema를 그대로 내려받으므로 link를 warning에 연결하고 “스크립트보다 오래된 내용일 수 있음”을 설명한다.
+- **저장 state machine**: `editing → saving → verifying? → saved|validation|conflict|error|ambiguous`다. Saving은 `저장 중…`, 응답이 없거나 성공 body가 검증되지 않으면 `저장 여부 확인 중…`을 알리고 read-only probe를 사용한다. Busy primary label은 `저장 확인 중…`이며 입력과 cancel을 disable한다. 성공은 `저장됨`, committed durability pending은 `저장됨 · 디스크 동기화 확인 대기`다. 저장되지 않음이 확인되면 draft를 유지하고 같은 저장을 다시 시도할 수 있다.
+- **저장 충돌·판정 불가**: Revision conflict는 “다른 변경이 먼저 저장됐습니다”와 **내 입력 복사 / 최신 내용 불러오기**를 제공하고, 실제 교체 전 “현재 입력을 버리고…” 확인과 **최신 내용으로 교체 / 취소**를 한 번 더 요구한다. 다른 content operation은 draft를 유지하고 작업 종료 뒤 재시도하도록 안내한다. Source conflict·ambiguous는 draft를 유지하고 새로고침/폴더 확인 또는 복사를 안내하며 blind PATCH retry나 discard를 허용하지 않는다. 일반 저장 실패는 draft와 focus를 유지해 다시 시도할 수 있다.
+- **독립 재생성 dialog**: `전체 스크립트 다시 만들기`는 “자동 전사 원문에서 교정된 전체 스크립트를 다시 만듭니다. 현재 스크립트는 대체되고 기존 요약은 유지되지만 요약 갱신이 필요할 수 있습니다.”, `회의록 요약 다시 만들기`는 “현재 저장된 전체 스크립트로 회의록 요약만 다시 만듭니다. 스크립트는 바뀌지 않고 현재 수동 요약은 대체됩니다.”를 사용한다. Action은 각각 **취소 / 스크립트 다시 만들기**, **취소 / 요약 다시 만들기**다. 취소가 initial focus이고 Escape/backdrop 취소는 trigger로 focus를 복귀한다. Request/생성 중에는 dialog dismiss와 두 action을 모두 막고 현재 저장된 pair는 계속 읽기·복사·다운로드할 수 있게 한다.
+- **Unsaved navigation guard**: Dirty content editor는 목록 링크, rail/drawer, guarded router, browser back/forward와 `beforeunload`를 같은 layout-level blocker로 보호한다. Same meeting pathname의 query-only 이동만 허용한다. Content만 있으면 `수정 내용이 저장되지 않았습니다`, unsaved audio도 있으면 `녹음과 수정 내용이 저장되지 않았습니다` dialog에 잃을 항목을 함께 열거한다. **계속 편집**이 initial focus이고 dirty일 때만 **수정 내용 버리고 이동** 또는 **녹음과 수정 내용 버리고 이동**을 제공한다. Cancel 뒤 원 trigger로 focus를 돌린다.
+- **Saving/verifying navigation**: 이동 요청을 pending으로 유지하고 “저장 결과를 확인한 뒤 이동합니다”를 표시한다. 이때 discard action은 없으며 Escape/cancel은 현재 화면에 머문다. 저장 성공으로 blocker가 사라지면 pending navigation을 한 번 commit하고, 실패가 dirty로 돌아오면 그때 discard 선택을 제공한다. Ambiguous가 해소되지 않으면 이동하지 않는다.
+- **Responsive footer·focus**: Desktop과 mobile 모두 footer action은 content 아래에서 `flex-wrap`하고 44×44px target, visible focus ring, `min-w-0`/break rules를 유지한다. 320px에서는 tab label과 action이 여러 줄·여러 행으로 자연스럽게 reflow하되 horizontal scroll을 만들지 않는다. Editor를 열면 첫 textarea, save 성공/cancel 뒤에는 해당 수정 trigger, generation dialog 취소 뒤에는 generation trigger로 focus를 돌린다.
+
+#### 수동 편집 browser 검증 기준선
+
+- ADR 0020의 synthetic Playwright fixture로 `1440×900`, `390×844`, `320×700`을 검증했다. 실제 사용자 데이터·외부 network를 사용하지 않았고 assertion pass, console error 0, horizontal overflow 0이었다.
+- 세 viewport 모두 global/tab-local button 목록, 최소 44px target, transcript 저장 뒤 outdated label, multiline summary item 보존, summary 저장 뒤 fresh 전환을 통과했다. Generation dialog는 취소 initial focus·Escape trigger 복귀·취소 시 generation request 0건을 확인했다.
+- Dirty edit에서 목록, mobile drawer의 설정, browser back을 막고 draft를 보존했다. Guard는 **계속 편집**에 initial focus를 두고 cancel 뒤 원 link로 복귀했으며 explicit **수정 내용 버리고 이동**에서만 browser back을 정확히 한 번 commit했다.
 
 ### 단어 관리(단어장)
 - **2탭**(각 탭 카운트 표기): **일반 용어** / **교정쌍**. 상단 1줄 설명(브랜드명 미포함).
@@ -172,7 +187,7 @@
 - 교정쌍: **잘못 인식된 표기(전) → 올바른 표기(후)** 두 필드(둘 다 필수, `trim` 후 비어있지 않아야 추가 활성). 320–375px에서는 보이는 전/후 label과 input을 세로로 쌓고 `sm` 이상에서만 한 줄로 둔다. 결과의 긴 전/후 값은 truncate하지 않고 wrap한다. 중복 `from`·`from===to`는 스킵/경고.
 - 저장 모델: **명시적 "저장" 버튼**(자동저장 아님). 두 탭은 로컬 state로 함께 편집되고 하단 단일 버튼으로 1회 저장. 변경 시 "변경됨", 저장 후 "저장됨", 실패 시 `role="status"` 인라인 에러(로컬 state 보존).
 - Initial GET은 `loading|ready|load_error`를 구분한다. Non-2xx·network·invalid body는 빈 단어장으로 낮추지 않고 editor/replace-save를 잠근 뒤 재시도를 제공한다. 저장은 `ready && dirty && !saving`에서만 가능하고 성공 body로 정규화하며 실패 시 draft를 보존한다.
-- 안내: "새 회의는 자동 반영 · 기존 회의는 상세의 '다시 요약'으로 갱신".
+- 안내: "새 회의는 자동 반영 · 기존 회의는 상세의 '원문에서 스크립트 다시 만들기'로 교정본 갱신". 단어장은 summary-only 생성에는 적용되지 않는다.
 
 ### 설정 화면 · 내 정보
 

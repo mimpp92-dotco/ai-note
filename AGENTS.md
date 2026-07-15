@@ -9,11 +9,11 @@
 ```mermaid
 flowchart LR
     R["src · Recorder UI"] -->|audio.webm| W["whisper · STT"]
-    W -->|raw.md| S["요약 워커 · 로컬 CLI/Ollama"]
-    S -->|transcript.md · summary.json| V["열람 · 내보내기"]
+    W -->|raw.md| S["최초 교정·요약 / 독립 재생성 · 로컬 CLI/Ollama"]
+    S -->|transcript.md · summary.json| V["열람 · 수동 수정 · 내보내기"]
 ```
 
-- 흐름: `src`(녹음/API) → `whisper`(HTTP 127.0.0.1) → 요약 워커(로컬 CLI/Ollama) → 열람·내보내기. 단일 writer 소유권은 아래 CRITICAL 참조.
+- 흐름: `src`(녹음/API) → `whisper`(HTTP 127.0.0.1) → 최초 교정·요약 또는 종류별 독립 재생성(로컬 CLI/Ollama) → 열람·수동 수정·내보내기. 단일 writer 소유권은 아래 CRITICAL 참조.
 - 모듈별 상세: [src/CLAUDE.md](src/CLAUDE.md) · [whisper/CLAUDE.md](whisper/CLAUDE.md) · [scripts/CLAUDE.md](scripts/CLAUDE.md).
 - 결정 기록(ADR): [docs/decisions/](docs/decisions/) · AI 기능 품질: [evals/](evals/).
 
@@ -42,12 +42,12 @@ Claude Code 세션이면 위 절차를 `/setup` 커맨드로 대신 실행할 �
 
 ### CRITICAL — 반드시 지킬 것
 - **TDD**: 새 기능은 테스트 먼저 작성 → 통과하는 구현.
-- **원본 불가침**: `audio.webm`·`raw.md`·`segments.json`은 생성 후 수정 금지. `transcript.md`·`summary.json`은 재생성 가능.
+- **원본 불가침**: `audio.webm`·`raw.md`·`segments.json`은 생성 후 수정 금지. `transcript.md`·`summary.json`만 재생성·수동 수정 가능한 파생물이다.
 - **원자적·내구 쓰기**: 모든 아티팩트는 temp 파일 → file `fsync` → `rename` → parent-directory `fsync`로 쓴다. `rename`이 논리적 commit 지점이며 결과는 `not_committed | committed_durable | committed_best_effort | committed_durability_pending`으로 구분한다. rename 뒤 sync 실패를 rollback하거나 미커밋으로 오인하지 않는다(ADR 0011).
-- **파일 소유권(단일 writer)**: `status.json`=app-api만, `data/library.json`=library repository만, `raw.md`/`segments.json`=whisper만, `transcript.md`/`summary.json`=app summarize publisher만, `meeting-tombstones/`=app lifecycle만. 남의 파일을 쓰지 않는다. Workspace/folder/placement는 중앙 registry metadata이며 `data/meetings/{id}/` 경로는 이동하지 않는다. 사용자 지정 제목은 `status.json.titleOverride`로 app-api가 소유(ADR 0008).
+- **파일 소유권(단일 writer)**: `status.json`=app-api만, `data/library.json`=library repository만, `raw.md`/`segments.json`=whisper만, `transcript.md`/`summary.json`=app summarize publisher만, `meeting-tombstones/`=app lifecycle만. 남의 파일을 쓰지 않는다. Workspace/folder/placement는 중앙 registry metadata이며 `data/meetings/{id}/` 경로는 이동하지 않는다. 사용자 지정 제목은 `status.json.titleOverride`, 참석자는 `status.json.review`의 전용 app-api surface가 소유하며 summary editor가 `title`/`topicSlug`/`summary.participants`를 수정하지 않는다(ADR 0008, 0021).
 - **영구 삭제 fence**: 회의 삭제는 `meeting-tombstones/{id}.json` durable rename을 logical commit으로 삼는다. Tombstone은 live directory보다 우선하며 모든 reader/writer/worker/scanner가 재생성을 fail-closed해야 한다. Malformed/unreadable/symlink marker는 임의 복구하지 말 것. Placement·deterministic trash·late producer orphan은 operation→artifact write lease 순서의 lazy sweep으로 정리하고 tombstone은 영구 보존한다(ADR 0015).
 - **원자 finalize**: request body 전에 hidden `.finalize-{id}` intent를 durable create-exclusive하고, audio+initial status+immutable receipt를 staging에서 완성한 뒤 directory rename으로 publish한다. Published same-ID retry는 body를 읽거나 `audio.webm`을 덮지 않고 receipt 기반 probe/recovery를 수행한다. Placement pending/unavailable은 generic default reconcile에서 defer하며 post-publish remux·placement·dispatch 실패는 artifact commit을 되돌리지 않는다(ADR 0016).
-- **요약 pair 발행**: `summarizeCore`는 staging payload만 만들고 `summarizePublisher`만 canonical `transcript.md`/`summary.json`을 쓴다. Adapter/202 전 durable `summarizeAttempt`를 commit하고, `summary.json`을 completion marker로 마지막 발행한다. Pair consumer는 artifact read lease, publisher/delete/cleanup은 write lease를 사용한다. Lock 순서 `meeting operation → artifact RW → status queue → library queue`를 거슬러 획득하지 말 것(ADR 0013).
+- **편집 가능한 파생 pair 발행**: API/UI/adapter는 canonical `transcript.md`/`summary.json`을 직접 쓰지 않고 `summarizePublisher`만 두 파일을 함께 발행한다. 최초 생성만 불변 `raw.md` 교정 뒤 그 결과로 요약한다. 이후 `transcript_regenerate`는 `raw.md` 교정만 실행해 기존 summary를 보존하고, `summary_regenerate`는 현재 canonical transcript만 사용해 summary만 만든다. 수동 transcript/summary 저장도 반대편 artifact를 그대로 포함한 full-pair payload를 발행한다. Transcript 변경은 summary를 자동 생성하지 않고 `summaryOutdated`를 파생시키며, summary 수동 저장·재생성만 현재 transcript 기준 fresh 상태를 만든다. Adapter/202 또는 수동 발행 전 durable `summarizeAttempt`를 commit하고 `summary.json`을 completion marker로 마지막 발행한다. Pair consumer는 artifact read lease, publisher/delete/cleanup은 write lease를 사용하며 lock 순서 `meeting operation → artifact RW → status queue → library queue`를 거슬러 획득하지 말 것(ADR 0013, 0021).
 - **Library 직렬화**: `library.json`의 bootstrap/reconcile/mutation은 absolute canonical path 기준 process-global queue에서만 수행한다. Public mutation token은 `libraryId + revision`; durability pending 동안 후속 mutation은 fail-closed한다. 손상·상위 버전·I/O 오류 registry를 자동 bootstrap/sanitize하지 않는다.
 - **Library 복구**: corrupt에서만 latest fingerprint를 요구하는 명시적 rebuild를 허용한다(ADR 0017). `libraryRecoveryPlanner`의 action을 같은 library queue 안에서 실행하고 original→private archive→new canonical 순서와 양쪽 namespace sync를 지킨다. Intent phase는 atomic replace하며 active marker를 truncate하지 않는다. Unsupported/I/O/conflict를 rebuild로 낮추지 말고 archive는 자동 삭제하지 않는다. 새 `libraryId` 수용 시 client generation epoch를 올려 old poll/mutation/page/dialog/source URL을 전부 폐기한다.
 - **앱은 API 키를 저장하지 않는다**: 교정·요약은 백그라운드 워커가 사용자의 로컬 CLI(claude/codex)나 Ollama로 수행한다. 앱 코드에 Anthropic/OpenAI **API 키·유료 API 호출**을 넣지 말 것 — 로컬 CLI/모델만($0 원칙).
