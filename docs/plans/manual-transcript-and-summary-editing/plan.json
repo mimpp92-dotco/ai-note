@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "slug": "manual-transcript-and-summary-editing",
   "base": {
-    "ref": "execute/meeting-assistant-dormant",
+    "ref": "execute/manual-transcript-and-summary-editing",
     "sha": "4ca1db3fef0a1936fc7cc71ee995448306cd4164"
   },
   "sourceRequest": "요약 완료 후 전체 스크립트와 회의록 요약을 각각 직접 수정할 수 있게 한다. 최초 생성만 raw 교정과 요약을 연속 실행하고, 이후 전체 스크립트 재생성은 raw에서 교정본만, 회의록 요약 재생성은 현재 스크립트에서 요약만 만든다. 글로벌·스크립트·요약 버튼 위계를 분리하고 저장 결과 확인, summary freshness, typed error, unsaved navigation guard, synthetic browser QA를 포함한다.",
