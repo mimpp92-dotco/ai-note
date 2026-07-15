@@ -687,6 +687,46 @@
         "원본 불가침, 단일 writer, local guard, tombstone, 비용 0 원칙과 모순되는 서술이 필요하면 중단",
         "allowedPaths 밖 수정이 필요하면 중단"
       ]
+    },
+    {
+      "id": 8,
+      "name": "final-gate-summarize-core-boundary-repair",
+      "file": "phase-8-final-gate-summarize-core-boundary-repair.md",
+      "requirements": ["R1", "R4"],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "src/lib/summarize.ts",
+        "src/lib/summarizeCore.ts",
+        "scripts/__tests__/meeting-summarize.test.mjs"
+      ],
+      "allowedPaths": ["src/lib/summarize.ts"],
+      "forbiddenPaths": [
+        "data/**",
+        ".env*",
+        "glossary.json",
+        "whisper/**",
+        "src/lib/summarizeCore.ts",
+        "src/lib/summarizePublisher.ts",
+        "src/services/llm/**",
+        "scripts/__tests__/meeting-summarize.test.mjs"
+      ],
+      "testPolicy": {"mode": "required"},
+      "tddMode": "not-required",
+      "verifyLevel": "targeted",
+      "verifyCommands": [
+        "npm test -- scripts/__tests__/meeting-summarize.test.mjs",
+        "npm run typecheck"
+      ],
+      "requiredEvidence": ["scope-check", "test-green"],
+      "blockIf": [
+        "기존 producer-inventory 테스트를 수정하거나 약화해야 하면 중단",
+        "최초 생성 외 transcript_regenerate 또는 summary_regenerate 동작을 바꿔야 하면 중단",
+        "correction 1회와 summary 최대 2회 호출 예산을 바꿔야 하면 중단",
+        "summarizeCore 또는 publisher에 I/O나 새 writer를 추가해야 하면 중단",
+        "새 dependency, provider, API-key surface 또는 외부 network가 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
     }
   ],
   "finalGate": [

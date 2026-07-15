@@ -303,6 +303,7 @@ POST /api/meetings/{id}/summarize
 | 5 | unsaved-edit-navigation-guard | R7, R8, R9 | generic blocker, audio+content guard, committed synthetic fixture·Playwright feature spec | RTL + harness TDD |
 | 6 | synthetic-browser-qa | R7, R8, R9 | Playwright 두 spec compatibility와 provider browser-back interception repair, temp snapshot desktop/mobile hierarchy·focus·overflow·guard | unit TDD + browser evidence |
 | 7 | docs-adr-and-final-contract | R10 | README·정본·UI·ADR 0021 | links |
+| 8 | final-gate-summarize-core-boundary-repair | R1, R4 | 최초 생성의 `summarizeCore` producer 경계 복원, 독립 재생성 경로 보존 | 기존 producer-inventory RED + typecheck |
 
 ## 실행 방법
 
@@ -314,6 +315,7 @@ POST /api/meetings/{id}/summarize
 - Phase는 검증 가능한 checkpoint이며 구현 phase는 TDD 증거를 남긴다.
 - source baseline은 Playwright harness와 execute-worktree dependency resolution이 검증·커밋된 `4ca1db3fef0a1936fc7cc71ee995448306cd4164`이다. 그 뒤에는 이 plan directory만 바뀔 수 있으며 `/execute` preflight가 다른 delta를 거부한다.
 - browser phase는 repository 밖 격리된 temporary snapshot과 synthetic meeting만 사용한다. amended Phase 6의 두 spec과 RecorderSessionProvider source/test 밖을 수정하거나 실제 workspace `data/`에 접근해야 하면 중단한다.
+- 최초 7개 phase 완료 뒤 full `npm test`가 기존 producer-inventory 회귀를 검출했다. amended Phase 8은 이미 실패가 관측된 테스트를 바꾸지 않고 `src/lib/summarize.ts`의 최초 생성 경계만 복원한 뒤 finalGate 전체를 다시 실행한다.
 - 새 세션에서 실행 전 `npm run test:e2e:doctor`로 local Chromium 준비 상태를 확인할 수 있다. 실패하면 `npm run test:e2e:install`을 명시적으로 한 번 실행한 뒤 다시 확인한다.
 - finalGate: `npm test` · `npm run typecheck` · `npm run lint` · `npm run build` · `npm run check:links`
 - `/execute` 전 worktree는 깨끗해야 한다. 이 plan 개정 커밋 뒤에는 clean 상태를 다시 확인하고 실제 실행은 사용자가 새 세션에서 시작한다.
