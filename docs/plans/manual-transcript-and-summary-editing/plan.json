@@ -589,7 +589,9 @@
         "src/app/api/meetings/*/transcript/route.ts",
         "src/app/api/meetings/*/summary/route.ts"
       ],
-      "allowedPaths": [],
+      "allowedPaths": [
+        "e2e/manual-transcript-and-summary-editing.spec.ts"
+      ],
       "forbiddenPaths": [
         "data/**",
         ".env*",
@@ -597,6 +599,10 @@
         "src/**",
         "scripts/**",
         "whisper/**",
+        "playwright.config.ts",
+        "e2e/global-setup.mjs",
+        "e2e/smoke.spec.ts",
+        "e2e/support/**",
         "docs/decisions/**",
         "docs/plans/**",
         "docs/ARCHITECTURE.md",
@@ -605,11 +611,11 @@
         "package.json",
         "package-lock.json"
       ],
-      "testPolicy": {"mode": "exempt", "reason": "앞선 phase가 TDD로 구현하고 커밋한 Playwright 시나리오를 모델 없이 실행하는 verify-only 단계다. 제품 파일은 수정하지 않고 command-owned evidence만 Git local journal에 남긴다."},
-      "executionMode": "verify-only",
+      "testPolicy": {"mode": "required"},
+      "tddMode": "enforced",
       "verifyLevel": "targeted",
       "verifyCommands": ["npm run test:e2e"],
-      "requiredEvidence": ["scope-check", "test-green", "browser"],
+      "requiredEvidence": ["scope-check", "tdd-red-green", "test-green", "browser"],
       "requiresBrowser": true,
       "dataPolicy": "synthetic-only",
       "blockIf": [
@@ -617,6 +623,7 @@
         "workspace의 실제 data, glossary, env secret 중 하나라도 읽어야 하면 중단",
         "npm run test:e2e:doctor가 pinned Playwright 또는 matching Chromium을 확인하지 못하면 중단",
         "실제 Whisper, LLM, 외부 network 호출이 필요하면 중단",
+        "Playwright spec 한 파일 밖 수정이나 fixture 값 복제가 필요하면 중단",
         "browser 검증 명령이 product tree를 수정하거나 command-owned evidence 밖에 산출물을 써야 하면 중단",
         "desktop-1440, mobile-390, mobile-320 중 하나라도 검증할 수 없으면 중단"
       ]
