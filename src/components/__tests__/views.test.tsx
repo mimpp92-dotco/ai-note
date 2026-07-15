@@ -1420,7 +1420,7 @@ describe("MeetingDetailView — 다시 요약", () => {
       await vi.advanceTimersByTimeAsync(0); // flush the 202 microtask
 
       // No content change and no inflight signal ever arrives → the ceiling fires.
-      await vi.advanceTimersByTimeAsync(3 * 600_000 + 60_000);
+      await vi.advanceTimersByTimeAsync(3 * 1_800_000 + 60_000);
       expect(screen.getByText(/시간 내에 끝나지 않았어요/)).toBeInTheDocument();
     } finally {
       vi.useRealTimers();

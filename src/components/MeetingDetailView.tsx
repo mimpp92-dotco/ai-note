@@ -59,12 +59,12 @@ export interface MeetingDetailData {
 }
 
 // The server may run up to three sequential LLM calls per (re)summarize — correction,
-// summary, and an optional fallback summary — each capped at 600s
+// summary, and an optional fallback summary — each capped at 30 min
 // (LLM_GENERATION_TIMEOUT_MS in src/services/llm/exec.ts, kept in sync by this
 // derivation). Poll past that worst case before declaring a timeout so a slow
-// long-meeting re-summarize (the exact case the 600s cap exists for) isn't falsely
+// long-meeting re-summarize (the exact case the 30 min cap exists for) isn't falsely
 // reported as failed. Not imported from exec.ts: that module pulls in node:child_process.
-const RESUMMARIZE_TIMEOUT_MS = 3 * 600_000 + 30_000; // ~30.5 min
+const RESUMMARIZE_TIMEOUT_MS = 3 * 1_800_000 + 30_000; // ~90.5 min
 
 const ACTION_CONTROL_CLASS =
   "inline-flex min-h-11 shrink-0 items-center justify-center rounded-md border border-line bg-panel px-3 py-2 text-[13px] font-medium text-accent transition-colors hover:bg-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-50";
