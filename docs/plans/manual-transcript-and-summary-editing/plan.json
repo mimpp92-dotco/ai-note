@@ -590,7 +590,8 @@
         "src/app/api/meetings/*/summary/route.ts"
       ],
       "allowedPaths": [
-        "e2e/manual-transcript-and-summary-editing.spec.ts"
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/smoke.spec.ts"
       ],
       "forbiddenPaths": [
         "data/**",
@@ -601,7 +602,6 @@
         "whisper/**",
         "playwright.config.ts",
         "e2e/global-setup.mjs",
-        "e2e/smoke.spec.ts",
         "e2e/support/**",
         "docs/decisions/**",
         "docs/plans/**",
@@ -623,7 +623,7 @@
         "workspace의 실제 data, glossary, env secret 중 하나라도 읽어야 하면 중단",
         "npm run test:e2e:doctor가 pinned Playwright 또는 matching Chromium을 확인하지 못하면 중단",
         "실제 Whisper, LLM, 외부 network 호출이 필요하면 중단",
-        "Playwright spec 한 파일 밖 수정이나 fixture 값 복제가 필요하면 중단",
+        "허용된 Playwright spec 두 파일 밖 수정이나 fixture 값 복제가 필요하면 중단",
         "browser 검증 명령이 product tree를 수정하거나 command-owned evidence 밖에 산출물을 써야 하면 중단",
         "desktop-1440, mobile-390, mobile-320 중 하나라도 검증할 수 없으면 중단"
       ]
