@@ -28,7 +28,7 @@ test("synthetic library shell is usable without external traffic", async ({ page
   await expect(page).toHaveTitle("AI NOTE");
   await expect(page.locator("main#main")).toBeVisible();
   await expect(page.getByText("회의 녹음 → 로컬 전사 → 회의록 요약.")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "모든 회의", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /· 모든 회의$/u })).toBeVisible();
   await expect(page.getByRole("heading", { name: "회의 목록" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "아직 회의록이 없습니다" })).toHaveCount(0);
 });

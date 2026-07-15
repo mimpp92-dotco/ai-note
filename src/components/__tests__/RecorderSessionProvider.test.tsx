@@ -155,6 +155,18 @@ function dispatchNativeCancel(dialog: HTMLElement) {
   fireEvent(dialog, new Event("cancel", { cancelable: true }));
 }
 
+function createTraverseEvent(destination: string) {
+  const event = new Event("navigate", { cancelable: true }) as Event & {
+    navigationType: "traverse";
+    destination: { url: string };
+  };
+  Object.defineProperties(event, {
+    navigationType: { value: "traverse" },
+    destination: { value: { url: new URL(destination, window.location.href).href } },
+  });
+  return event;
+}
+
 describe("RecorderSessionProvider", () => {
   beforeEach(() => {
     navigation.push.mockReset();
@@ -387,6 +399,103 @@ describe("RecorderSessionProvider", () => {
     fireEvent.click(screen.getByRole("button", { name: "수정 내용 버리고 이동" }));
     expect(discard).toHaveBeenCalledTimes(1);
     expect(back).toHaveBeenCalledTimes(1);
+    back.mockRestore();
+  });
+
+  it("stops blocked fallback popstate before a later router listener and resumes it once", async () => {
+    window.history.replaceState({}, "", "/meetings/m1");
+    const observedPaths: string[] = [];
+    const routerPopstate = () => observedPaths.push(window.location.pathname);
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {
+      window.history.replaceState({}, "", "/settings");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    const discard = vi.fn();
+
+    try {
+      render(<App blockerPhase="dirty" onContentDiscard={discard} />);
+      window.addEventListener("popstate", routerPopstate);
+      window.history.pushState({}, "", "/settings");
+      act(() => window.dispatchEvent(new PopStateEvent("popstate")));
+
+      expect(observedPaths).toEqual([]);
+      expect(window.location.pathname).toBe("/meetings/m1");
+      expect(await screen.findByRole("dialog", { name: "수정 내용이 저장되지 않았습니다" }))
+        .toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "수정 내용 버리고 이동" }));
+      expect(discard).toHaveBeenCalledTimes(1);
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(observedPaths).toEqual(["/settings"]);
+      expect(window.location.pathname).toBe("/settings");
+    } finally {
+      window.removeEventListener("popstate", routerPopstate);
+      back.mockRestore();
+    }
+  });
+
+  it("cancels Navigation API traversal before popstate and resumes the original back once", async () => {
+    window.history.replaceState({}, "", "/meetings/m1");
+    const browserNavigation = new EventTarget();
+    vi.stubGlobal("navigation", browserNavigation);
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {
+      const resumed = createTraverseEvent("/settings");
+      browserNavigation.dispatchEvent(resumed);
+      if (resumed.defaultPrevented) return;
+      window.history.replaceState({}, "", "/settings");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    const discard = vi.fn();
+
+    try {
+      render(<App blockerPhase="dirty" onContentDiscard={discard} />);
+      const blocked = createTraverseEvent("/settings");
+      act(() => browserNavigation.dispatchEvent(blocked));
+
+      expect(blocked.defaultPrevented).toBe(true);
+      expect(window.location.pathname).toBe("/meetings/m1");
+      expect(await screen.findByRole("dialog", { name: "수정 내용이 저장되지 않았습니다" }))
+        .toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "수정 내용 버리고 이동" }));
+      expect(discard).toHaveBeenCalledTimes(1);
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(window.location.pathname).toBe("/settings");
+    } finally {
+      back.mockRestore();
+    }
+  });
+
+  it("cancels Navigation API traversal while unsaved audio remains", async () => {
+    window.history.replaceState({}, "", "/meetings/m1");
+    const browserNavigation = new EventTarget();
+    vi.stubGlobal("navigation", browserNavigation);
+    render(<App full={false} />);
+    const session = getRecorderSession();
+    await act(async () => session.start());
+    await waitFor(() => expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/));
+
+    const blocked = createTraverseEvent("/settings");
+    act(() => browserNavigation.dispatchEvent(blocked));
+
+    expect(blocked.defaultPrevented).toBe(true);
+    expect(window.location.pathname).toBe("/meetings/m1");
+    expect(screen.getByRole("dialog", { name: "녹음이 아직 저장되지 않았습니다" }))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "계속 녹음" }));
+    expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/);
+  });
+
+  it("removes the Navigation API traversal listener with the provider", () => {
+    window.history.replaceState({}, "", "/meetings/m1");
+    const browserNavigation = new EventTarget();
+    vi.stubGlobal("navigation", browserNavigation);
+    const view = render(<App blockerPhase="dirty" />);
+    view.unmount();
+
+    const traversal = createTraverseEvent("/settings");
+    browserNavigation.dispatchEvent(traversal);
+    expect(traversal.defaultPrevented).toBe(false);
   });
 
   it("returns from permanent discard confirmation to its connected trigger", async () => {

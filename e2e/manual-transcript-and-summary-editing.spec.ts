@@ -1,10 +1,19 @@
 import type { Locator, Page, TestInfo } from "@playwright/test";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-import {
-  MANUAL_EDITING_WORKSPACE_ID,
-  manualEditingMeetingForProject,
-} from "../scripts/e2e-manual-editing-fixture.mjs";
 import { expect, test } from "./support/synthetic-test";
+
+type ManualEditingFixtureModule = typeof import("../scripts/e2e-manual-editing-fixture.mjs");
+
+const importRuntimeModule = new Function(
+  "specifier",
+  "return import(specifier)",
+) as (specifier: string) => Promise<ManualEditingFixtureModule>;
+const fixtureModule = importRuntimeModule(pathToFileURL(join(
+  __dirname,
+  "../scripts/e2e-manual-editing-fixture.mjs",
+)).href);
 
 async function attachMilestone(page: Page, testInfo: TestInfo, name: string) {
   await testInfo.attach(`browser-screenshot:${name}`, {
@@ -32,6 +41,10 @@ test("manual transcript and summary editing keeps hierarchy, freshness, and navi
     { type: "requirement", description: "R9" },
   ],
 }, async ({ page }, testInfo) => {
+  const {
+    MANUAL_EDITING_WORKSPACE_ID,
+    manualEditingMeetingForProject,
+  } = await fixtureModule;
   const fixture = manualEditingMeetingForProject(testInfo.project.name);
   const detailPath = `/meetings/${fixture.meetingId}?sourceWorkspace=${MANUAL_EDITING_WORKSPACE_ID}&sourceView=all`;
   const generationRequests: string[] = [];
@@ -44,8 +57,10 @@ test("manual transcript and summary editing keeps hierarchy, freshness, and navi
   });
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "모든 회의", exact: true })).toBeVisible();
-  await page.goto(detailPath);
+  await expect(page.getByRole("heading", { level: 1, name: /· 모든 회의$/u })).toBeVisible();
+  const detailLink = page.getByRole("link").filter({ hasText: fixture.title });
+  await expect(detailLink).toHaveAttribute("href", detailPath);
+  await detailLink.click();
   await expect(page.getByRole("heading", { name: fixture.title })).toBeVisible();
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
     origin: new URL(page.url()).origin,
@@ -187,5 +202,5 @@ test("manual transcript and summary editing keeps hierarchy, freshness, and navi
   expect(await page.evaluate(() => (
     (window as typeof window & { __syntheticHistoryBackCount?: number }).__syntheticHistoryBackCount
   ))).toBe(1);
-  await expect(page.getByRole("heading", { name: "모든 회의", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /· 모든 회의$/u })).toBeVisible();
 });

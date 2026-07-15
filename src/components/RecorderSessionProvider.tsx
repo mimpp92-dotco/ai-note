@@ -643,7 +643,41 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
   }, [blockerRevision, hasUnsavedAudio]);
 
   useEffect(() => {
-    const onPopState = () => {
+    const queueBlockedNavigation = (current: string, destination: string) => {
+      navigationCommitInProgressRef.current = false;
+      setPendingNavigation({
+        current,
+        destination,
+        trigger: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+        commit: () => {
+          suppressNextPopRef.current = true;
+          window.history.back();
+        },
+      });
+    };
+    const browserNavigation = (
+      window as typeof window & { navigation?: EventTarget }
+    ).navigation;
+    const onNavigate = (rawEvent: Event) => {
+      const event = rawEvent as Event & {
+        navigationType?: unknown;
+        destination?: { url?: unknown };
+      };
+      if (
+        event.navigationType !== "traverse"
+        || !event.cancelable
+        || typeof event.destination?.url !== "string"
+        || suppressNextPopRef.current
+      ) return;
+      const current = currentUrlRef.current;
+      const destination = event.destination.url;
+      const audioBlocked = hasUnsavedAudio && !isScopeOnlyNavigation(current, destination);
+      const contentBlocked = blockedContentNavigation(current, destination).length > 0;
+      if (!audioBlocked && !contentBlocked) return;
+      event.preventDefault();
+      queueBlockedNavigation(current, destination);
+    };
+    const onPopState = (event: PopStateEvent) => {
       const destination = window.location.href;
       if (suppressNextPopRef.current) {
         suppressNextPopRef.current = false;
@@ -657,21 +691,17 @@ export function RecorderSessionProvider({ children }: { children: ReactNode }) {
         currentUrlRef.current = destination;
         return;
       }
+      event.stopImmediatePropagation();
       const restore = current;
       window.history.pushState(window.history.state, "", restore);
-      navigationCommitInProgressRef.current = false;
-      setPendingNavigation({
-        current,
-        destination,
-        trigger: document.activeElement instanceof HTMLElement ? document.activeElement : null,
-        commit: () => {
-          suppressNextPopRef.current = true;
-          window.history.back();
-        },
-      });
+      queueBlockedNavigation(current, destination);
     };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
+    browserNavigation?.addEventListener("navigate", onNavigate);
+    window.addEventListener("popstate", onPopState, true);
+    return () => {
+      browserNavigation?.removeEventListener("navigate", onNavigate);
+      window.removeEventListener("popstate", onPopState, true);
+    };
   }, [blockedContentNavigation, blockerRevision, hasUnsavedAudio]);
 
   useEffect(() => {
