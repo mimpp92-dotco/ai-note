@@ -33,7 +33,16 @@ Whisper와 LLM 교정·요약은 100% 정확하지 않다. 현재 앱은 전체 
 - **R7 — 버튼 위계**: 두 탭과 무관한 작업만 상세 최상단에 두고, 스크립트 전용 작업과 요약 전용 작업은 각각 해당 탭 하단 action footer에 둔다.
 - **R8 — 오류·이탈·접근성 UX**: validation, busy, revision conflict, 결과 확인 중, durability pending, interrupted, ambiguous를 구분하고 unsaved navigation guard와 파괴 동작 확인을 제공한다.
 - **R9 — synthetic browser QA**: 실제 사용자 data를 읽지 않는 격리된 임시 snapshot으로 desktop/mobile action hierarchy, stale 안내, focus, navigation guard, overflow를 검증한다.
-- **R10 — 문서화**: 제품·아키텍처·UI 문서와 새 ADR 0020을 독립 생성 파이프라인·freshness·오류·버튼 위계 계약에 맞춘다.
+- **R10 — 문서화**: 제품·아키텍처·UI 문서와 새 ADR 0021을 독립 생성 파이프라인·freshness·오류·버튼 위계 계약에 맞춘다.
+
+## 브라우저 검증 원칙
+
+- 결정적 synthetic QA의 필수 backend는 repository가 exact version으로 소유한 Playwright와 matching Chromium이다. `npm run test:e2e:doctor`가 준비 상태를 read-only로 확인하고 `npm run test:e2e`가 실제 완료 gate를 수행한다.
+- Chrome DevTools MCP는 기존 로그인·tab·extension 상태가 필요한 정성 탐색이나 사람이 보면서 확인하는 추가 점검에만 선택적으로 쓴다. `/execute` preflight, synthetic fixture, screenshot manifest, 완료 판정의 필수 조건도 아니고 Playwright의 fallback도 아니다.
+- Phase 5가 synthetic fixture와 feature spec을 제품 변경과 함께 커밋한다. Phase 6은 `executionMode=verify-only`라 모델을 호출하거나 파일을 고치지 않고 이미 커밋된 browser suite만 실행한다.
+- Playwright는 `ai-note`에 이미 설치된 개발 의존성이다. 새 clone에서는 `npm install` 뒤 browser binary를 한 번 `npm run test:e2e:install`로 준비한다. 실행 중 자동 다운로드나 package mutation은 하지 않는다.
+- Next.js나 앱 코드가 바뀔 때마다 Chrome DevTools MCP adapter를 보수하지 않는다. Browser revision 변경은 exact `@playwright/test` version을 의도적으로 올리고 lockfile 갱신 → matching browser 설치 → doctor → 전체 E2E 순서로 검증할 때만 발생한다.
+- 모든 browser test는 OS temp의 runner-owned source snapshot과 synthetic library만 사용한다. 실제 workspace `data/`, `.env*`, `glossary.json`, 실행 중인 dev server, Whisper, LLM, 외부 network는 사용하지 않는다.
 
 ## 데이터·상태 계약
 
@@ -291,9 +300,9 @@ POST /api/meetings/{id}/summarize
 | 2 | independent-transcript-and-summary-generation | R1, R4, R5, R6 | initial/transcript/summary generation 분리, exact LLM call counts, async operation kind | generation/API TDD |
 | 3 | freshness-consumers-and-export | R6, R8 | index stale policy, search/chat warning, Markdown/JSON, public operation DTO | consumer/API TDD |
 | 4 | detail-action-hierarchy-and-editors | R2, R3, R4, R6, R7, R8 | global/tab footer 위계, editors, probe/conflict, stale banner, confirmations | RTL + build |
-| 5 | unsaved-edit-navigation-guard | R8 | generic blocker registration, audio+content composition, link/back/beforeunload guard | RTL TDD |
-| 6 | synthetic-browser-qa | R7, R8, R9 | temp snapshot synthetic meeting, desktop/mobile hierarchy·focus·overflow·guard | browser evidence |
-| 7 | docs-adr-and-final-contract | R10 | README·정본·UI·ADR 0020 | links |
+| 5 | unsaved-edit-navigation-guard | R7, R8, R9 | generic blocker, audio+content guard, committed synthetic fixture·Playwright feature spec | RTL + harness TDD |
+| 6 | synthetic-browser-qa | R7, R8, R9 | model-free temp snapshot Playwright suite, desktop/mobile hierarchy·focus·overflow·guard | verify-only browser evidence |
+| 7 | docs-adr-and-final-contract | R10 | README·정본·UI·ADR 0021 | links |
 
 ## 실행 방법
 
@@ -303,9 +312,11 @@ POST /api/meetings/{id}/summarize
 
 - publishStrategy: `single-pr`
 - Phase는 검증 가능한 checkpoint이며 구현 phase는 TDD 증거를 남긴다.
-- browser phase는 repository 밖 격리된 temporary snapshot과 synthetic meeting만 사용한다. 실제 workspace `data/`에 접근해야 하면 중단한다.
+- source baseline은 Playwright harness와 execute-worktree dependency resolution이 검증·커밋된 `4ca1db3fef0a1936fc7cc71ee995448306cd4164`이다. 그 뒤에는 이 plan directory만 바뀔 수 있으며 `/execute` preflight가 다른 delta를 거부한다.
+- browser phase는 repository 밖 격리된 temporary snapshot과 synthetic meeting만 사용한다. 실제 workspace `data/`에 접근하거나 product tree를 수정해야 하면 중단한다.
+- 새 세션에서 실행 전 `npm run test:e2e:doctor`로 local Chromium 준비 상태를 확인할 수 있다. 실패하면 `npm run test:e2e:install`을 명시적으로 한 번 실행한 뒤 다시 확인한다.
 - finalGate: `npm test` · `npm run typecheck` · `npm run lint` · `npm run build` · `npm run check:links`
-- `/execute` 전 worktree가 깨끗해야 한다. 현재 plan 밖의 timeout 관련 미커밋 변경은 사용자 작업으로 보존되어 있으므로 별도로 commit 또는 정리한 뒤 실행한다.
+- `/execute` 전 worktree는 깨끗해야 한다. 이 plan 개정 커밋 뒤에는 clean 상태를 다시 확인하고 실제 실행은 사용자가 새 세션에서 시작한다.
 
 ## 문서 업데이트 대상
 
@@ -316,7 +327,7 @@ POST /api/meetings/{id}/summarize
 - `docs/ARCHITECTURE.md`
 - `docs/UI_GUIDE.md`
 - `docs/decisions/README.md`
-- 신규 `docs/decisions/0020-manual-transcript-and-summary-editing.md`
+- 신규 `docs/decisions/0021-manual-transcript-and-summary-editing.md`
 
 ## 고정된 가정
 

@@ -1,8 +1,17 @@
 {
   "schemaVersion": 1,
   "slug": "manual-transcript-and-summary-editing",
+  "base": {
+    "ref": "execute/meeting-assistant-dormant",
+    "sha": "4ca1db3fef0a1936fc7cc71ee995448306cd4164"
+  },
   "sourceRequest": "요약 완료 후 전체 스크립트와 회의록 요약을 각각 직접 수정할 수 있게 한다. 최초 생성만 raw 교정과 요약을 연속 실행하고, 이후 전체 스크립트 재생성은 raw에서 교정본만, 회의록 요약 재생성은 현재 스크립트에서 요약만 만든다. 글로벌·스크립트·요약 버튼 위계를 분리하고 저장 결과 확인, summary freshness, typed error, unsaved navigation guard, synthetic browser QA를 포함한다.",
   "publishStrategy": "single-pr",
+  "executionState": {
+    "summaryLedger": "local",
+    "journal": "git-dir",
+    "statusCommits": "none"
+  },
   "requirements": [
     {
       "id": "R1",
@@ -118,8 +127,8 @@
       "source": "repository-contract",
       "acceptance": [
         "README, PRD, ARCHITECTURE, UI_GUIDE, AGENTS, src/CLAUDE가 새 동작을 설명한다.",
-        "새 ADR 0020이 immutable raw, editable derived pair, contentRevision, independent regeneration, probe, navigation guard 결정을 기록한다.",
-        "기존 ADR 0003, 0008, 0009, 0013, 0018은 수정하지 않고 새 ADR에서 관계를 명시한다.",
+        "새 ADR 0021이 immutable raw, editable derived pair, contentRevision, independent regeneration, probe, navigation guard 결정을 기록한다.",
+        "기존 ADR 0003, 0008, 0009, 0013, 0018, 0020은 수정하지 않고 새 ADR에서 관계를 명시한다.",
         "npm run check:links가 통과한다."
       ]
     }
@@ -134,10 +143,12 @@
     "noPaidApiOrApiKey": true
   },
   "browserEvidence": {
-    "preferredBackend": "chrome-devtools",
-    "fallbackBackends": ["in-app-browser"],
+    "mode": "playwright",
+    "preflightCommand": "npm run test:e2e:doctor",
+    "verifyCommand": "npm run test:e2e",
     "requiredArtifacts": ["screenshots", "assertions", "console"],
-    "viewports": ["desktop-1440", "mobile-390", "mobile-320"]
+    "viewports": ["desktop-1440", "mobile-390", "mobile-320"],
+    "dataPolicy": "synthetic-only"
   },
   "phases": [
     {
@@ -465,10 +476,21 @@
       "id": 5,
       "name": "unsaved-edit-navigation-guard",
       "file": "phase-5-unsaved-edit-navigation-guard.md",
-      "requirements": ["R8"],
+      "requirements": ["R7", "R8", "R9"],
       "requiredFiles": [
         "AGENTS.md",
         "docs/UI_GUIDE.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "package.json",
+        "playwright.config.ts",
+        "scripts/e2e-harness.mjs",
+        "e2e/smoke.spec.ts",
+        "e2e/support/evidence-reporter.ts",
+        "e2e/support/synthetic-test.ts",
+        "src/domain/library.ts",
+        "src/domain/meeting.ts",
+        "src/domain/summarySchema.ts",
+        "src/lib/__tests__/library.test.ts",
         "src/components/RecorderSessionProvider.tsx",
         "src/components/RecorderNavigation.tsx",
         "src/components/MeetingDetailView.tsx",
@@ -485,7 +507,16 @@
         "src/components/MeetingContentEditors.tsx",
         "src/components/__tests__/RecorderSessionProvider.test.tsx",
         "src/components/__tests__/MeetingContentEditors.test.tsx",
-        "src/components/__tests__/views.test.tsx"
+        "src/components/__tests__/views.test.tsx",
+        "playwright.config.ts",
+        "scripts/e2e-manual-editing-fixture.mjs",
+        "scripts/__tests__/e2e-manual-editing-fixture.test.mjs",
+        "scripts/__tests__/e2e-evidence-contract.test.ts",
+        "e2e/global-setup.mjs",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/smoke.spec.ts",
+        "e2e/support/evidence-contract.ts",
+        "e2e/support/evidence-reporter.ts"
       ],
       "forbiddenPaths": [
         "data/**",
@@ -503,15 +534,26 @@
       "verifyLevel": "targeted",
       "verifyCommands": [
         "npm test -- src/components/__tests__/RecorderSessionProvider.test.tsx src/components/__tests__/MeetingContentEditors.test.tsx src/components/__tests__/views.test.tsx",
+        "npm test -- scripts/__tests__/e2e-manual-editing-fixture.test.mjs scripts/__tests__/e2e-evidence-contract.test.ts",
         "npm run typecheck",
         "npm run lint"
       ],
       "requiredEvidence": ["scope-check", "tdd-red-green", "test-green"],
+      "produces": [
+        "scripts/e2e-manual-editing-fixture.mjs",
+        "scripts/__tests__/e2e-manual-editing-fixture.test.mjs",
+        "scripts/__tests__/e2e-evidence-contract.test.ts",
+        "e2e/global-setup.mjs",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/support/evidence-contract.ts"
+      ],
       "blockIf": [
         "saving 또는 verifying 중인 content mutation을 discard하고 이동해야 하면 중단",
         "unsaved audio와 content draft 중 하나를 조용히 버려야 하면 중단",
         "sidebar link, programmatic router, popstate, beforeunload 중 하나를 보호할 수 없으면 중단",
         "AppDialog 또는 LibraryNavigation shared primitive 수정이 필요하면 중단",
+        "synthetic browser fixture가 runner-owned snapshot 밖을 읽거나 써야 하면 중단",
+        "browser contract 작성에 실제 사용자 data, 기존 dev server, Whisper, LLM 또는 외부 network가 필요하면 중단",
         "allowedPaths 밖 수정이 필요하면 중단"
       ]
     },
@@ -523,7 +565,20 @@
       "requiredFiles": [
         "AGENTS.md",
         "package.json",
+        "playwright.config.ts",
         "docs/UI_GUIDE.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "scripts/run-e2e.mjs",
+        "scripts/e2e-manual-editing-fixture.mjs",
+        "e2e/global-setup.mjs",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/smoke.spec.ts",
+        "e2e/support/evidence-contract.ts",
+        "e2e/support/evidence-reporter.ts",
+        "e2e/support/synthetic-test.ts",
         "src/domain/library.ts",
         "src/app/meetings/*/page.tsx",
         "src/components/MeetingDetailView.tsx",
@@ -534,7 +589,7 @@
         "src/app/api/meetings/*/transcript/route.ts",
         "src/app/api/meetings/*/summary/route.ts"
       ],
-      "allowedPaths": ["docs/qa-evidence/manual-transcript-and-summary-editing/**"],
+      "allowedPaths": [],
       "forbiddenPaths": [
         "data/**",
         ".env*",
@@ -550,18 +605,19 @@
         "package.json",
         "package-lock.json"
       ],
-      "testPolicy": {"mode": "exempt", "reason": "이 phase는 앞선 TDD 구현을 repository 밖 synthetic snapshot에서 실제 browser로 검증하며 제품 파일은 수정하지 않고 전용 synthetic evidence 경로만 허용한다."},
+      "testPolicy": {"mode": "exempt", "reason": "앞선 phase가 TDD로 구현하고 커밋한 Playwright 시나리오를 모델 없이 실행하는 verify-only 단계다. 제품 파일은 수정하지 않고 command-owned evidence만 Git local journal에 남긴다."},
+      "executionMode": "verify-only",
       "verifyLevel": "targeted",
-      "verifyCommands": ["npm run build"],
-      "requiredEvidence": ["scope-check", "browser"],
+      "verifyCommands": ["npm run test:e2e"],
+      "requiredEvidence": ["scope-check", "test-green", "browser"],
       "requiresBrowser": true,
       "dataPolicy": "synthetic-only",
       "blockIf": [
         "repository 밖 temporary snapshot과 synthetic data root를 격리할 수 없으면 중단",
         "workspace의 실제 data, glossary, env secret 중 하나라도 읽어야 하면 중단",
-        "browser backend를 사용할 수 없으면 중단",
+        "npm run test:e2e:doctor가 pinned Playwright 또는 matching Chromium을 확인하지 못하면 중단",
         "실제 Whisper, LLM, 외부 network 호출이 필요하면 중단",
-        "browser 검증을 위해 전용 synthetic evidence 경로 밖 repository 파일을 수정해야 하면 중단",
+        "browser 검증 명령이 product tree를 수정하거나 command-owned evidence 밖에 산출물을 써야 하면 중단",
         "desktop-1440, mobile-390, mobile-320 중 하나라도 검증할 수 없으면 중단"
       ]
     },
@@ -584,6 +640,7 @@
         "docs/decisions/0009-async-resummarize-failure-visibility.md",
         "docs/decisions/0013-durable-summarize-pair-publication.md",
         "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
         "scripts/check-links.mjs"
       ],
       "allowedPaths": [
@@ -594,7 +651,7 @@
         "docs/ARCHITECTURE.md",
         "docs/UI_GUIDE.md",
         "docs/decisions/README.md",
-        "docs/decisions/0020-manual-transcript-and-summary-editing.md"
+        "docs/decisions/0021-manual-transcript-and-summary-editing.md"
       ],
       "forbiddenPaths": [
         "data/**",
@@ -610,9 +667,9 @@
       "verifyLevel": "targeted",
       "verifyCommands": ["npm run check:links"],
       "requiredEvidence": ["scope-check"],
-      "produces": ["docs/decisions/0020-manual-transcript-and-summary-editing.md"],
+      "produces": ["docs/decisions/0021-manual-transcript-and-summary-editing.md"],
       "blockIf": [
-        "기존 ADR 0003, 0008, 0009, 0013, 0018 수정이 필요하면 중단하고 새 ADR 0020에서 관계를 설명",
+        "기존 ADR 0003, 0008, 0009, 0013, 0018, 0020 수정이 필요하면 중단하고 새 ADR 0021에서 관계를 설명",
         "문서 갱신을 위해 runtime source 수정이 필요하면 중단",
         "원본 불가침, 단일 writer, local guard, tombstone, 비용 0 원칙과 모순되는 서술이 필요하면 중단",
         "allowedPaths 밖 수정이 필요하면 중단"

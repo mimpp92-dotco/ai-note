@@ -1,6 +1,6 @@
 # Phase 7 — docs-adr-and-final-contract
 
-구현·테스트·synthetic browser evidence로 확인된 수동 편집, 독립 transcript/summary generation, freshness, save probe, 버튼 위계, navigation guard를 사람·에이전트 정본과 새 ADR 0020에 반영한다. 기존 ADR은 과거 결정으로 보존한다.
+구현·테스트·synthetic browser evidence로 확인된 수동 편집, 독립 transcript/summary generation, freshness, save probe, 버튼 위계, navigation guard를 사람·에이전트 정본과 새 ADR 0021에 반영한다. 브라우저 검증 기반은 ADR 0020을 그대로 따르고 기존 ADR은 과거 결정으로 보존한다.
 
 ## 읽어야 할 파일
 
@@ -17,6 +17,7 @@
 - `docs/decisions/0009-async-resummarize-failure-visibility.md`
 - `docs/decisions/0013-durable-summarize-pair-publication.md`
 - `docs/decisions/0018-meeting-knowledge-index-and-chatbot.md`
+- `docs/decisions/0020-deterministic-synthetic-browser-verification.md`
 - `scripts/check-links.mjs`
 
 ## 요구사항
@@ -32,7 +33,7 @@
 - `docs/ARCHITECTURE.md`
 - `docs/UI_GUIDE.md`
 - `docs/decisions/README.md`
-- `docs/decisions/0020-manual-transcript-and-summary-editing.md`
+- `docs/decisions/0021-manual-transcript-and-summary-editing.md`
 
 ## 금지 및 중단 조건
 
@@ -44,7 +45,7 @@
 - `whisper/**`
 - `docs/decisions/000*.md`
 - `docs/decisions/001*.md`
-- 기존 ADR 0003, 0008, 0009, 0013, 0018 수정이 필요하면 중단하고 새 ADR 0020에서 관계를 설명한다.
+- 기존 ADR 0003, 0008, 0009, 0013, 0018, 0020 수정이 필요하면 중단하고 새 ADR 0021에서 관계를 설명한다.
 - 문서 갱신을 위해 runtime source 수정이 필요하면 중단한다.
 - 원본 불가침, 단일 writer, local guard, tombstone, 비용 0 원칙과 모순되는 서술이 필요하면 중단한다.
 - 허용 범위 밖 파일 수정이 필요하면 중단한다.
@@ -79,7 +80,7 @@
    - 두 destructive generation dialog의 copy, cancel initial focus, busy dismiss 차단.
    - generic unsaved navigation guard, audio+content combined dialog, saving/verifying behavior.
    - desktop/mobile footer, 44px, overflow, focus 규칙.
-6. `docs/decisions/0020-manual-transcript-and-summary-editing.md`를 새로 작성한다.
+6. `docs/decisions/0021-manual-transcript-and-summary-editing.md`를 새로 작성한다.
    - 결정: immutable raw와 editable derived transcript/summary 구분.
    - 결정: 최초만 combined pipeline, 이후 independent transcript-only/summary-only generation.
    - 결정: full pair publisher를 유지하면서 unchanged opposite artifact를 함께 발행.
@@ -89,8 +90,8 @@
    - 결정: manual interruption은 LLM retry error가 아님.
    - 결정: global/tab-local action hierarchy와 unsaved navigation guard.
    - 버린 대안: raw 직접 수정, 별도 override 파일, last-write-wins, post-initial combined regenerate, transcript change 직후 silent summary refresh, stale summary current indexing, network error blind retry, newline-split list editor, navigation loss 허용.
-   - ADR 0003/0008/0009/0013/0018과의 관계.
-7. `docs/decisions/README.md`에 0020 링크와 한 줄 요약을 추가한다. 파일을 먼저 만든 뒤 링크를 추가한다.
+   - ADR 0003/0008/0009/0013/0018과의 관계 및 ADR 0020의 deterministic Playwright 기반을 그대로 사용한다는 점.
+7. `docs/decisions/README.md`에 0021 링크와 한 줄 요약을 추가한다. 파일을 먼저 만든 뒤 링크를 추가한다.
 8. 모든 문서에서 title과 participants는 기존 전용 writer를 유지하고 internal topicSlug/summary.participants는 편집하지 않는다고 일치시킨다.
 9. 사용자 문서는 `raw.md`, attempt kind, SHA-256 같은 내부 용어 대신 “최초 자동 전사 원문”, “현재 전체 스크립트”, “요약 갱신 필요”를 사용한다. 아키텍처·ADR만 exact field/operation을 기록한다.
 10. phase 6 browser evidence의 실제 label, mobile layout, focus 결과와 문서 copy를 대조한다. 계획 문구가 구현/evidence와 다르면 문서가 아니라 허용된 문서 범위 안에서 실제 동작을 정확히 서술한다.
@@ -107,7 +108,7 @@
 ## 문서 최신화
 
 - 이 phase 자체가 최종 문서 최신화 단계다.
-- 기존 ADR은 수정하지 않는다. 현재 결정의 정제·확장은 ADR 0020만 소유한다.
+- 기존 ADR은 수정하지 않는다. 현재 기능 결정은 ADR 0021이 소유하고 browser harness 결정은 ADR 0020이 소유한다.
 - 사용자 문서는 path, attempt ID, raw provider/fs output을 노출하지 않는다.
 
 ## 완료 게이트

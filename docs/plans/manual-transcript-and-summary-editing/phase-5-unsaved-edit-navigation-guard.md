@@ -1,11 +1,22 @@
 # Phase 5 — unsaved-edit-navigation-guard
 
-기존 recorder navigation guard에 generic unsaved-content blocker 등록을 추가해 긴 transcript/summary draft가 sidebar, 목록, programmatic router, browser back/forward, reload로 사라지지 않게 한다. 녹음 원본 보호 동작은 그대로 유지하고 두 blocker가 동시에 존재하는 경우도 명시적으로 합성한다.
+기존 recorder navigation guard에 generic unsaved-content blocker 등록을 추가해 긴 transcript/summary draft가 sidebar, 목록, programmatic router, browser back/forward, reload로 사라지지 않게 한다. 녹음 원본 보호 동작은 그대로 유지하고 두 blocker가 동시에 존재하는 경우도 명시적으로 합성한다. 구현이 끝난 같은 checkpoint에서 runner-owned snapshot용 synthetic fixture와 Playwright 시나리오를 커밋해 다음 verify-only phase가 모델이나 Chrome session 없이 검증만 수행할 수 있게 한다.
 
 ## 읽어야 할 파일
 
 - `AGENTS.md`
 - `docs/UI_GUIDE.md`
+- `docs/decisions/0020-deterministic-synthetic-browser-verification.md`
+- `package.json`
+- `playwright.config.ts`
+- `scripts/e2e-harness.mjs`
+- `e2e/smoke.spec.ts`
+- `e2e/support/evidence-reporter.ts`
+- `e2e/support/synthetic-test.ts`
+- `src/domain/library.ts`
+- `src/domain/meeting.ts`
+- `src/domain/summarySchema.ts`
+- `src/lib/__tests__/library.test.ts`
 - `src/components/RecorderSessionProvider.tsx`
 - `src/components/RecorderNavigation.tsx`
 - `src/components/MeetingDetailView.tsx`
@@ -17,7 +28,9 @@
 
 ## 요구사항
 
+- R7: global/tab-local 작업 위계를 deterministic Playwright 시나리오로 고정한다.
 - R8: dirty/saving/verifying content editor와 unsaved audio를 모든 navigation surface에서 안전하게 보호한다.
+- R9: 실제 사용자 data를 읽지 않는 synthetic fixture·assertion·evidence 계약을 구현한다.
 
 ## 허용 범위
 
@@ -28,6 +41,15 @@
 - `src/components/__tests__/RecorderSessionProvider.test.tsx`
 - `src/components/__tests__/MeetingContentEditors.test.tsx`
 - `src/components/__tests__/views.test.tsx`
+- `playwright.config.ts`
+- `scripts/e2e-manual-editing-fixture.mjs`
+- `scripts/__tests__/e2e-manual-editing-fixture.test.mjs`
+- `scripts/__tests__/e2e-evidence-contract.test.ts`
+- `e2e/global-setup.mjs`
+- `e2e/manual-transcript-and-summary-editing.spec.ts`
+- `e2e/smoke.spec.ts`
+- `e2e/support/evidence-contract.ts`
+- `e2e/support/evidence-reporter.ts`
 
 ## 금지 및 중단 조건
 
@@ -44,6 +66,8 @@
 - unsaved audio와 content draft 중 하나를 조용히 버려야 하면 중단한다.
 - sidebar link, programmatic router, popstate, beforeunload 중 하나를 보호할 수 없으면 중단한다.
 - AppDialog 또는 LibraryNavigation shared primitive 수정이 필요하면 중단한다.
+- synthetic browser fixture가 runner-owned snapshot 밖을 읽거나 써야 하면 중단한다.
+- browser contract 작성에 실제 사용자 data, 기존 dev server, Whisper, LLM 또는 외부 network가 필요하면 중단한다.
 - 허용 범위 밖 파일 수정이 필요하면 중단한다.
 
 ## 작업
@@ -70,6 +94,25 @@
 10. `popstate`는 blocker가 있으면 current URL을 복원하고 dialog를 연다. confirm 후 suppress-next-pop 규칙으로 정확히 한 번 destination으로 이동한다.
 11. programmatic push/replace/back, sidebar `GuardedLink`, detail back link가 같은 pending navigation과 focus-return 계약을 사용한다. tab 전환은 route navigation이 아니므로 guard를 열지 않는다.
 12. blocker 등록 순서나 React Strict Mode effect 재실행이 duplicate dialog, double discard, double navigation을 만들지 않게 idempotent registry update를 사용한다.
+13. `scripts/e2e-manual-editing-fixture.mjs`에 test-only bootstrap을 구현한다.
+   - `AI_NOTE_E2E_SNAPSHOT_ROOT`가 `scripts/e2e-harness.mjs`의 runner-owned absolute root 검사를 통과한 경우에만 그 아래 `data/`를 쓴다.
+   - source repository, 실제 `data/`, `.env*`, `glossary.json`, HOME을 탐색하거나 symlink로 연결하지 않는다.
+   - desktop-1440, mobile-390, mobile-320 전용 meeting ID를 각각 하나씩 만들고 명백한 가짜 한국어 제목·참석자·긴 transcript·multiline summary만 사용한다.
+   - 세 meeting은 같은 valid synthetic library에 배치하되 각 viewport가 자기 meeting만 수정해 project 간 mutation이 섞이지 않게 한다.
+   - app data API가 처음 호출되기 전 한 번만 bootstrap하고, 같은 fixture 재호출은 exact sentinel을 확인한 뒤 idempotent하게 종료한다. 알 수 없는 기존 내용이 있으면 덮어쓰지 않고 실패한다.
+14. `e2e/global-setup.mjs`가 위 fixture를 모든 E2E 실행에 일관되게 설치하도록 `playwright.config.ts`에 연결한다. 기존 empty-library smoke는 synthetic library shell smoke로 바꿔 feature spec과 함께 실행해도 순서 의존 없이 통과하게 한다.
+15. evidence contract를 확장한다.
+   - `e2e/support/evidence-contract.ts`는 Playwright test annotation의 `requirement` 값을 정규화해 manifest `coveredRequirements`를 결정하고 annotation이 없는 smoke-only 실행은 기존 synthetic smoke ID로 하위 호환한다.
+   - evidence reporter는 fixture ID를 `ai-note-synthetic-library-v1`로 기록하고 같은 viewport의 여러 success screenshot을 덮어쓰지 않고 모두 hash/size와 함께 보존한다.
+   - console error, unhandled page error, unexpected external request, 누락 viewport 또는 누락 attachment는 계속 실패다.
+16. `e2e/manual-transcript-and-summary-editing.spec.ts`에 R7/R8/R9 annotation을 붙이고 세 project에서 같은 semantic flow를 검증한다.
+   - top global group과 두 tab footer의 exact action, legacy global regenerate 부재, 긴 content overflow와 44px target을 확인한다.
+   - transcript local PATCH 저장 뒤 화면/copy가 바뀌고 summary 내용은 보존된 채 `요약 갱신 필요`가 나타나는지 확인한다.
+   - summary multiline item을 항목 하나로 수정·저장한 뒤 transcript 불변과 fresh 복귀를 확인한다.
+   - 두 regeneration dialog는 confirm하지 않고 copy, Cancel initial focus, Escape/trigger focus return만 확인해 실제 LLM을 호출하지 않는다.
+   - dirty editor에서 detail back/sidebar/browser back을 막고 discard 전 draft 보존, cancel focus return, 명시적 discard 후 단 한 번 이동을 확인한다.
+   - desktop fresh/stale와 mobile action/dialog/overflow milestone을 synthetic screenshot으로 첨부한다.
+17. feature spec은 `e2e/support/synthetic-test.ts`의 자동 console/network/success evidence fixture를 사용한다. `npm run test:e2e` 전체 suite가 smoke와 feature spec을 함께 세 viewport에서 실행하도록 유지하며 test ordering에 의존하지 않는다.
 
 ## 테스트 (먼저 작성)
 
@@ -84,6 +127,10 @@
 - Recorder regression GREEN: recorder-only scope navigation, stop-and-stay, discard, retained Blob, upload, beforeunload/popstate, focus return 테스트가 그대로 통과한다.
 - Tab RED: dirty editor tab 전환은 navigation dialog를 열지 않고 draft를 유지한다.
 - Focus RED: cancel/Escape는 original link/button trigger, confirmed navigation은 destination heading 정책을 유지한다.
+- Fixture RED: unsafe/missing snapshot root, symlink, non-empty unknown data, viewport fixture 누락을 거부하고 valid empty snapshot에 세 synthetic meeting만 idempotent하게 만든다.
+- Suite isolation RED: global setup 뒤 smoke와 manual feature spec의 실행 순서가 바뀌어도 각 viewport가 자기 meeting만 수정하고 결과가 같아야 한다.
+- Evidence RED: R7/R8/R9 annotation을 manifest requirement로 수집하고 같은 viewport의 milestone screenshot을 모두 보존한다. invalid annotation과 누락 viewport/console/network attachment는 통과시키지 않는다.
+- Browser scenario는 이 phase에서 source contract로 커밋한다. 실제 Chromium 실행·screenshot/hash/console evidence 검증은 바로 다음 model-free verify-only phase가 단독 소유한다.
 
 ## 문서 최신화
 
@@ -94,6 +141,7 @@
 
 ```bash
 npm test -- src/components/__tests__/RecorderSessionProvider.test.tsx src/components/__tests__/MeetingContentEditors.test.tsx src/components/__tests__/views.test.tsx
+npm test -- scripts/__tests__/e2e-manual-editing-fixture.test.mjs scripts/__tests__/e2e-evidence-contract.test.ts
 npm run typecheck
 npm run lint
 ```
