@@ -3,6 +3,8 @@ node_modules/
 out/
 next-env.d.ts
 tsconfig.tsbuildinfo
+test-results/
+playwright-report/
 
 # internal build scaffolding — never published
 BUILD_PLAN.md

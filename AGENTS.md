@@ -20,7 +20,7 @@ flowchart LR
 ## 기술 스택
 - Next.js 15 (App Router) · TypeScript strict · Tailwind CSS
 - 로컬 whisper 서비스: Python(**uv로 3.11/3.12 핀 venv**, 시스템 3.14 금지), mlx-whisper large-v3(폴백 faster-whisper), `127.0.0.1`
-- 테스트: Vitest(+ RTL/jsdom component test). Playwright e2e는 MVP-0 제외.
+- 테스트: Vitest(+ RTL/jsdom component test) + 고정 버전 Playwright/Chromium synthetic browser 회귀. Chrome DevTools MCP는 선택적 정성 검토 전용이며 자동 gate가 아니다(ADR 0020).
 - 저장: 로컬 파일(`data/meetings/{id}/`) — DB 없음.
 
 ## 설치 (Installation)
@@ -32,7 +32,7 @@ flowchart LR
 2. **✗ 전제 설치(OS 감지 후 실제 실행 — 사용자에게 보이게, sudo/확인 필요할 수 있음)**:
    - `ffmpeg` — macOS `brew install ffmpeg` · Debian/Ubuntu `sudo apt install ffmpeg` · Windows `choco install ffmpeg`.
    - `uv` — https://docs.astral.sh/uv/ 설치 스크립트(또는 macOS `brew install uv`). whisper venv/모델은 `npm run dev`가 런타임에 처리한다(여기서 `uv sync`·모델 다운로드 하지 말 것).
-3. **의존성** — `npm install`.
+3. **의존성** — `npm install`. 이 단계에서 Playwright package는 설치되지만 browser binary는 자동 다운로드하지 않는다. Synthetic browser QA를 실행할 개발/CI 환경만 최초 1회 `npm run test:e2e:install`을 실행한다(일반 앱 사용에는 불필요).
 4. **요약기 준비(자동화 불가한 유일한 수동 단계)** — Claude/Codex CLI 또는 로컬 Ollama 중 하나. 이미 있으면 그대로 두고, 없으면 하나 준비: `claude` 로그인 · `codex` · `ollama serve` + `ollama pull <model>`. **provider 선택·검증은 `npm run dev` 기동 후 앱 Settings 화면에서** 한다(설치 시점엔 서버 미기동이라 API 설정 불가; `data/settings.json`은 app-api 단일 writer라 직접 쓰지 않는다).
 5. **검증(포그라운드로 붙잡지 말 것)** — `node scripts/setup.mjs`(전부 ✓) + `npm run build`. 실제 구동 확인은 `LOCAL_STT_MODEL=base npm run dev`(백그라운드)로 띄운 뒤 `http://localhost:3000` / `GET /api/whisper/health`. `npm run dev`는 long-lived + 첫 모델 다운로드라 검증용으로 붙잡으면 안 된다.
 
@@ -57,6 +57,7 @@ Claude Code 세션이면 위 절차를 `/setup` 커맨드로 대신 실행할 �
 - **로컬 서비스 경계**: Ollama/Whisper egress는 explicit-port `http://127.0.0.1|localhost`만, redirect 금지. App→Whisper는 path 대신 `{meetingId,dispatchId}`만 보낸다. Whisper는 fixed data root에서 경로를 파생하고 service-owned durable claim으로 same-pair dedupe/resume한다.
 - **전사 dispatch/completion**: app은 Whisper 호출 전 `status.transcriptionDispatch` proposed ID를 durable commit하고 retry/restart에서 같은 ID를 재사용한다. Whisper는 `segments.json` 먼저, `raw.md` 마지막 순서로 발행한다. Consumer는 matching service claim의 `raw_published` + `durable|best_effort` + audio identity를 확인하기 전 partial segments/raw를 읽지 말 것(ADR 0014).
 - **로컬 데이터 취급**: `data/`·`glossary.json`은 로컬 전용(gitignored, 커밋 금지) — 오디오·전사·요약·단어장(사람 이름 등 PII 포함 가능)은 디스크를 떠나지 않는다. 요약/내보내기물의 토큰·이메일·전화·URL **scrub은 지향 목표이나 현재 미구현**이며, 로컬 단일 사용자 hand-off 문서(`export`)엔 의도적으로 미적용한다(ADR 0007). 공유/업로드 표면이 생기면 그때 scrub을 강제한다.
+- **Synthetic browser QA 경계**: 반복 가능 UI gate는 repository-owned Playwright command만 사용한다. `data/`·`glossary.json`·`.env*`·실제 Whisper/LLM·외부 network를 사용하지 않고 runner-owned 임시 snapshot과 empty data만 쓴다. 성공 screenshot/assertion/console manifest는 `test-results/` 또는 execute local journal에만 두며 Git에 커밋하지 않는다. Chrome DevTools MCP는 로그인 세션/정성 탐색이 꼭 필요할 때만 보조로 사용하고 자동 검증을 대체하지 않는다(ADR 0020).
 
 ### 일반 규칙
 - 컴포넌트는 `src/components/`, 타입은 `src/types/`(또는 `src/domain/`), 유틸은 `src/lib/`, 외부 래퍼는 `src/services/`.
@@ -64,6 +65,7 @@ Claude Code 세션이면 위 절차를 `/setup` 커맨드로 대신 실행할 �
 
 ## 개발 프로세스
 - 모델 다운로드·긴 전사·`uv`/`npm install` 같은 무거운 작업은 **런타임에만**. 테스트·스모크는 tiny 모델/FAKE 스텁으로.
+- Playwright/Chromium 갱신은 `package.json`의 exact version을 의도적으로 바꾼 뒤 browser 재설치 → doctor → 전체 E2E 순서로만 한다. 앱/Next 변경 때마다 Chrome DevTools MCP를 갱신하거나 별도 adapter를 보수하지 않는다.
 
 ## 명령어
 ```bash
@@ -71,6 +73,9 @@ npm run dev         # next dev + 로컬 whisper 동시 기동(concurrently)
 npm run build       # 프로덕션 빌드 (시크릿 없이 통과해야 함)
 npm run lint        # ESLint
 npm test            # vitest run (+ component test), watch 금지
+npm run test:e2e:install # 최초 1회: 고정 Playwright 버전의 Chromium 설치
+npm run test:e2e:doctor  # 읽기 전용: Node/package/browser 정합 확인
+npm run test:e2e     # synthetic snapshot의 Chromium 3-viewport 회귀
 npm run typecheck   # tsc --noEmit
 npm run check:links # docs/context 마크다운 죽은 링크 0
 ```

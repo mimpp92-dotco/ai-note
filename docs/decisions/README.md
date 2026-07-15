@@ -8,8 +8,8 @@
 ## 새 ADR 추가
 
 ```bash
-cp docs/decisions/0000-template.md docs/decisions/0019-내-결정.md
-$EDITOR docs/decisions/0019-내-결정.md   # 5칸 채우고 아래 목록에 추가
+cp docs/decisions/0000-template.md docs/decisions/0021-내-결정.md
+$EDITOR docs/decisions/0021-내-결정.md   # 5칸 채우고 아래 목록에 추가
 ```
 
 ## 목록
@@ -33,3 +33,4 @@ $EDITOR docs/decisions/0019-내-결정.md   # 5칸 채우고 아래 목록에 �
 | [0017](0017-corrupt-library-rebuild-and-generation-reset.md) | Corrupt library 원본 보존형 재구축과 client generation reset | 채택됨 |
 | [0018](0018-meeting-knowledge-index-and-chatbot.md) | 파생 지식 인덱스와 근거 기반 회의 챗봇 | 채택됨 |
 | [0019](0019-meeting-assistant-dormant.md) | 회의 도우미(챗봇) UI를 flag로 dormant, 코드·계약 보존(0018 유지) | 채택됨 |
+| [0020](0020-deterministic-synthetic-browser-verification.md) | 반복 browser gate는 격리 synthetic Playwright, Chrome DevTools MCP는 선택적 정성 검토 | 채택됨 |

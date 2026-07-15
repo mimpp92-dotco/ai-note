@@ -107,6 +107,16 @@ npm run typecheck
 npm run check:links
 ```
 
+Contributors running deterministic browser regression install the pinned Chromium build once, then use the read-only doctor and repository-owned Playwright command:
+
+```bash
+npm run test:e2e:install  # one-time browser binary install
+npm run test:e2e:doctor   # Node/package/browser compatibility only; no mutation
+npm run test:e2e          # Chromium at desktop 1440 + mobile 390/320
+```
+
+The E2E command runs against an allowlisted temporary snapshot with an empty `data/` directory, synthetic `HOME`, disabled worker, disconnected synthetic Whisper state, no configured model, and no external browser traffic. It never copies `data/`, `glossary.json`, `.env*`, or credentials. Screenshots and the evidence manifest are local ignored output under `test-results/`. Chrome DevTools MCP is optional for qualitative inspection of an existing Chrome session; it is not the repeatable browser gate. See [ADR 0020](docs/decisions/0020-deterministic-synthetic-browser-verification.md).
+
 ## Configuration
 
 Copy `.env.example` to `.env.local` and adjust as needed. Common knobs:
@@ -128,7 +138,8 @@ Manage domain terms and "misheard → correct" pairs in the app's **단어 관�
 | `src/` | Next.js app — recorder UI, API routes, domain contracts |
 | `whisper/` | Local STT service (Python, `127.0.0.1`) |
 | `docs/` | PRD · ARCHITECTURE · UI_GUIDE + decision records |
-| `scripts/` | dev tooling (link checker) |
+| `scripts/` | dev tooling (setup/link checks + isolated Playwright harness) |
+| `e2e/` | synthetic Chromium scenarios and command-owned evidence reporter |
 
 Module boundaries & data flow → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Working with an AI agent? Start at [AGENTS.md](AGENTS.md).
 

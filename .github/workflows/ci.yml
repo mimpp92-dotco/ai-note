@@ -28,3 +28,19 @@ jobs:
         run: npm run check:links
       - name: Build (build-green — 시크릿/DB/env 없이 통과)
         run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright Chromium
+        run: npm exec playwright install --with-deps chromium
+      - name: Verify Playwright environment
+        run: npm run test:e2e:doctor
+      - name: Synthetic browser regression
+        run: npm run test:e2e

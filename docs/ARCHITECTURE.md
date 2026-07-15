@@ -12,6 +12,8 @@ src/
 └── services/          # whisper 클라이언트(프록시) 등 외부 래퍼
 whisper/               # 로컬 Python whisper 서비스(uv 3.11/3.12 핀 venv)
 scripts/               # check-links.mjs (링크 무결성 체커)
+e2e/                   # synthetic Playwright scenario + evidence reporter
+playwright.config.ts   # Chromium 3-viewport, isolated webServer 계약
 .claude/commands/      # meeting-summarize.md
 data/meetings/{id}/    # 런타임 산출물(gitignore, fixtures 제외)
 data/meetings/{id}/knowledge-card.json # meeting별 재생성 가능한 검색 파생물
@@ -21,6 +23,12 @@ data/user-profile.json # optional 개인화 프로필(app-api 단일 writer, LLM
 data/knowledge/corpus-map.json # bounded 전체 검색 후보 projection
 fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fallback
 ```
+
+## Synthetic browser QA 경계
+
+반복 가능한 시각/상호작용 gate의 정본은 `npm run test:e2e`다. `run-e2e.mjs`가 매 실행마다 loopback port와 OS temp snapshot을 소유하고, snapshot에는 allowlist된 `src/`(비활성 worker entrypoint 제외)·`public/`·build metadata와 새 empty `data/`만 복사한다. `node_modules`는 dependency root로만 연결하며 `data/`, `glossary.json`, `.env*`, Git metadata와 runtime 산출물은 복사하지 않는다. App child는 synthetic `HOME`, scrubbed env, `AI_NOTE_DISABLE_WORKER=1`로 실행되고 Whisper target은 같은 임시 Next server의 존재하지 않는 `/health`로 고정돼 실제 로컬 Whisper/LLM/CLI에 닿지 않는다. 서버 bind는 `127.0.0.1`; Next 15 Route Handler authority와 local Host guard를 일치시키기 위해 browser URL만 동등한 loopback 이름 `localhost`를 쓴다.
+
+`e2e/support/synthetic-test.ts`가 각 scenario의 성공 screenshot, console error, 외부 browser request를 자동 수집한다. Reporter는 desktop-1440/mobile-390/mobile-320 coverage, assertion pass, console error 0, external network 0, SHA-256/byte size를 가진 `manifest.json`을 생성한다. 평상시 산출물은 gitignored `test-results/`, `/execute`에서는 runner-owned Git local journal만 사용한다. Chrome DevTools MCP는 existing Chrome session이 필요한 정성 탐색에만 선택적으로 사용하며 이 gate나 evidence를 대체하지 않는다. 상세 결정은 ADR [0020](decisions/0020-deterministic-synthetic-browser-verification.md)을 따른다.
 
 ## 프로세스 & 데이터 흐름
 ```
