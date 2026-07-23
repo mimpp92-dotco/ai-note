@@ -13,7 +13,7 @@
 1. **녹음** — 브라우저 마이크로 오디오만 캡처(실시간 자막 없음). 레벨미터·타이머로 "녹음되고 있음" 확인, 페이지 이탈 경고.
 2. **배치 전사** — 녹음 종료 시 로컬 whisper(mlx large-v3)가 전체 오디오를 한 번에 전사. 세그먼트 타임스탬프 포함.
 3. **최초 교정 + 요약** — 전사가 끝나면 앱의 백그라운드 워커가 로컬 CLI(claude/codex)나 Ollama로 최초 자동 전사 원문을 오타·문단 교정한 전체 스크립트와, 그 스크립트에 근거한 구조화 요약을 차례로 만든다. 이 결합 파이프라인은 최초 생성에만 사용하며 외부 API 키는 필요 없다(구독/로컬 모델, 비용 $0).
-4. **2탭 상세·수동 수정** — 웹에서 회의별 상세를 **전체 스크립트 / 회의록 요약** 두 탭으로 열람하고 각각 직접 수정·저장한다. 요약의 목록 항목은 항목별 multiline 입력으로 편집하며 제목은 목록의 전용 제목 수정, 참석자는 상세 `회의 정보` 입력에서만 바꾼다.
+4. **2탭 상세·수동 수정** — 웹에서 회의별 상세를 **전체 스크립트 / 회의록 요약** 두 탭으로 열람하고 각각 직접 수정·저장한다. 선택된 탭의 로컬 작업은 tablist 바로 다음, 경고와 본문보다 앞에 둔다. 수정 중에는 읽기 본문을 하나의 multiline textarea로 교체하며, 요약은 생성된 heading·bullet을 포함한 전체 읽기 본문을 자유 plain text 하나로 편집한다. 제목은 목록의 전용 제목 수정, 참석자는 상세 `회의 정보` 입력에서만 바꾼다.
 5. **내보내기(export)** — 완성된 회의록 요약을 열람하고 파일로 내보낸다. 이후 활용(공유·아카이브 등)은 사용자가 결정한다.
 6. **회의록 관리** — 회의 목록에서 요약 완료된 회의의 **제목 수정**(AI 자동 제목을 사람이 교정, `titleOverride`로 보존)과 불필요한 회의록 **영구 삭제**(인라인 확인).
 7. **단어 관리(단어장) + 좌측 네비게이션** — 도메인 용어와 '잘못 인식→올바른 표기' 교정쌍을 웹 **단어 관리** 탭에서 관리(LLM 교정 단계에 반영, whisper STT 아님). 좌측 사이드바로 회의·단어·설정을 오간다.
@@ -39,7 +39,7 @@ chunk-append 크래시 복구 + 디코드 게이트 · 전체 상태 FSM + stale
 
 - **자동 요약 워커**: 전사가 끝난 최초 한 번만 앱이 백그라운드 워커로 사용자의 로컬 CLI(claude/codex)나 Ollama를 호출해 교정본과 그 교정본의 요약을 만든다. 이후 스크립트·요약 생성은 상세에서 사용자가 종류별로 명시적으로 시작하며 서로를 자동 재생성하지 않는다. 외부 API 키를 저장하지 않는다(구독/로컬 모델).
 - **자동 전사 on stop**: 녹음 종료 시 앱이 whisper 전사까지는 자동 위임 → 터미널 전에 원본 스크립트가 앱에 뜬다.
-- **검색·질문 경계**(질문/챗봇 표면은 현재 dormant, ADR 0019 — 아래는 보존되는 계약): 단순 검색은 LLM을 호출하지 않고 `knowledge-card.json`/`corpus-map.json`과 query-time live metadata만 사용한다(전사 전문 미열람). 질문은 새 API-key surface 없이 저장된 CLI/Ollama 설정을 재사용하며, 서버는 bounded tool output과 citation provenance를 검증한다. 챗봇 도구 계층에만 discovery 전용 `search_transcripts`가 있어 bounded snippet으로 전사 본문을 훑지만 citation credit은 주지 않는다. 프로필·검색 파생물은 `data/`에만 저장하고 대화 history는 서버 파일에 저장하지 않는다. Claude/Codex CLI를 선택하면 전달된 bounded prompt/evidence의 provider 처리는 사용자가 로그인한 CLI의 정책을 따르며, Ollama는 explicit loopback만 허용한다.
+- **검색·질문 경계**(질문/챗봇 표면은 현재 dormant, ADR 0019 — 아래는 보존되는 계약): 단순 검색은 LLM을 호출하지 않고 `knowledge-card.json`/`corpus-map.json`과 query-time live metadata만 사용한다(전사 전문 미열람). 수동 자유 본문은 `회의록 본문`으로 검색하지만 그 text에서 action item·담당자·기한을 추론하지 않는다. 질문은 새 API-key surface 없이 저장된 CLI/Ollama 설정을 재사용하며, 서버는 bounded tool output과 citation provenance를 검증한다. 챗봇 도구 계층에만 discovery 전용 `search_transcripts`가 있어 bounded snippet으로 전사 본문을 훑지만 citation credit은 주지 않는다. 프로필·검색 파생물은 `data/`에만 저장하고 대화 history는 서버 파일에 저장하지 않는다. Claude/Codex CLI를 선택하면 전달된 bounded prompt/evidence의 provider 처리는 사용자가 로그인한 CLI의 정책을 따르며, Ollama는 explicit loopback만 허용한다.
 - **중단 안전 저장**: 녹음 종료 저장은 body 전에 intent를 고정하고 audio+initial status를 한 directory로 publish한다. 응답 유실 뒤 같은 meeting ID로 재시도하면 원본 오디오를 덮지 않고 playback·위치·전사 상태를 복구한다.
 - **범위별 recorder 위치·복구 UX**: Ready의 Workspace All/미분류는 해당 workspace 미분류, folder는 exact folder를 녹음 시작 순간 ID로 고정한다. Last-good은 마지막 위치를 요청하되 실제 배치가 unavailable/fallback일 수 있음을 먼저 알리고, fresh global fallback은 조직 위치 없이 저장한다. 응답 유실·5xx에서는 같은 ID를 body 없이 probe한 뒤 미게시가 확인된 경우에만 보존 Blob을 다시 전송한다. 저장 결과는 원본 내구성·실제 위치·재생 준비·전사를 각각 표시한다.
 - **원본 불가침**: `audio.webm`·`raw.md`·`segments.json`은 불변. `transcript.md`·`summary.json`은 언제든 재생성 가능.

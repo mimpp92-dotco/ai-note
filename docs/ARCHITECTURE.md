@@ -68,7 +68,7 @@ flowchart LR
 
 ## 회의 지식 인덱스 계약
 
-`knowledge-card.json` v1은 `meetingId`, `sourceHashes.summary/transcript`, summary content, action-item search metadata, `reviewParticipants`, `mentionedPeople`을 가진다. `reviewParticipants`는 생성 당시 `status.review` snapshot일 뿐이며 v1 `mentionedPeople`은 placeholder가 아닌 action item owner 같은 deterministic source만 사용한다. transcript/summary SHA-256은 한 artifact lease 안에서 한 번 읽은 in-memory byte pair로 계산한다. `corpus-map.json` v1은 card의 bounded `meetingId`/one-line/purpose/highlights/mentioned-people projection만 포함하고 전체 transcript, absolute path, title/status/location/review snapshot을 포함하지 않는다. 내부 read mode는 `missing|ready|stale|corrupt|io_error`, public aggregate는 `ready|partial|unavailable`과 safe reason `missing|stale|corrupt|io_error`만 노출한다.
+`knowledge-card.json` v1은 `meetingId`, `sourceHashes.summary/transcript`, summary content, action-item search metadata, `reviewParticipants`, `mentionedPeople`을 가진다. Summary content의 optional `body`는 additive라 기존 body 없는 v1 bytes도 그대로 읽는다. Manual body card는 `body`를 그대로 담고 structured semantic field와 `actionItems`를 빈 상태로 유지하며 body text에서 owner·due·participant를 추론하지 않는다. `reviewParticipants`는 생성 당시 `status.review` snapshot일 뿐이며 v1 `mentionedPeople`은 placeholder가 아닌 structured action item owner 같은 deterministic source만 사용한다. transcript/summary SHA-256은 한 artifact lease 안에서 한 번 읽은 in-memory byte pair로 계산한다. `corpus-map.json` v1은 card의 bounded `meetingId`/one-line/purpose/highlights/mentioned-people와 optional body projection을 포함한다. Body projection은 Unicode character 기준 4,000자로 제한하며 전체 transcript, absolute path, title/status/location/review snapshot을 포함하지 않는다. 내부 read mode는 `missing|ready|stale|corrupt|io_error`, public aggregate는 `ready|partial|unavailable`과 safe reason `missing|stale|corrupt|io_error`만 노출한다.
 
 Card write는 caller의 meeting operation owner 아래 `safe meeting ID → tombstone fence → artifact write lease → tombstone 재확인 → status와 source pair read → atomic replace` 순서를 따른다. Corrupt/unreadable status, deleted/ambiguous tombstone, unsafe record, missing/malformed/ambiguous pair는 live card로 복구하지 않고 fail-closed한다. Rename이 card/corpus의 logical commit이며 parent sync가 일시 실패한 `pending`도 committed 결과로 유지하고 rollback이나 blind rewrite를 하지 않는다.
 
@@ -88,7 +88,7 @@ Library/classification snapshot과 card snapshot 사이의 최신성 경쟁은 �
 
 Date/workspace/folder/status/action-item filter는 score 계산 전에 적용한다. Ranking은 `src/lib/meetingSearch.ts`의 명시적 field-weight table과 exact-phrase bonus가 정본이며, 동점은 `startedAt` 최신순 → meeting ID 영문 오름차순이다. Public match reason은 상위 3개의 user-facing field label과 query 주변 180자 이하 plain-text excerpt만 포함하고 HTML/Markdown, score, absolute path, raw filesystem/provider output을 포함하지 않는다. `mentionedPeople`은 action-item owner처럼 결정적으로 만든 hint일 뿐 임의 인명 인식 결과로 설명하지 않는다.
 
-기본 검색 source는 `corpus-map.json`과 `knowledge-card.json`이며 `transcript.md` 전체를 매 요청마다 읽지 않는다. Search card freshness는 canonical pair의 completion marker인 current `summary.json` 해시, current `summarizeAttempt`, `contentRevision` pair hash와 `basedOnTranscriptSha256`를 함께 사용한다. Pair publisher가 transcript와 summary를 한 generation으로 발행하고 summary를 마지막에 commit한다는 계약에 의존한다. Ready이면서 summary가 current transcript 기준 fresh인 card만 semantic field를 제공한다. Outdated/stale/missing/corrupt card는 본문을 제공하지 않지만 current live title/date/status/location/review participants는 검색할 수 있고 aggregate는 `partial`이다. Corpus 자체가 missing/corrupt/I/O로 읽히지 않으면 `unavailable`이며 결과를 반환하지 않는다.
+기본 검색 source는 `corpus-map.json`과 `knowledge-card.json`이며 `transcript.md` 전체를 매 요청마다 읽지 않는다. Search card freshness는 canonical pair의 completion marker인 current `summary.json` 해시, current `summarizeAttempt`, `contentRevision` pair hash와 `basedOnTranscriptSha256`를 함께 사용한다. Pair publisher가 transcript와 summary를 한 generation으로 발행하고 summary를 마지막에 commit한다는 계약에 의존한다. Ready이면서 summary가 current transcript 기준 fresh인 card만 semantic field를 제공한다. Manual `body`는 고정 weight 85의 `회의록 본문` field로 정규화·랭킹하고 plain-text deterministic excerpt를 반환한다. `hasActionItem` filter는 structured `actionItems`의 존재만 보며 body text를 parse하지 않는다. Outdated/stale/missing/corrupt card는 본문을 제공하지 않지만 current live title/date/status/location/review participants는 검색할 수 있고 aggregate는 `partial`이다. Corpus 자체가 missing/corrupt/I/O로 읽히지 않으면 `unavailable`이며 결과를 반환하지 않는다.
 
 검색은 library/classified-status snapshot에서 후보를 만들고 card를 읽은 뒤 current library/status snapshot을 다시 읽는다. 두 snapshot의 `libraryId+revision`이 다르면 혼합 generation을 반환하지 않고 no-store `409 {error:{code:"search_retry",message}}`로 낮춘다. Public result 직전 current classifier와 tombstone을 다시 확인해 tombstoned/ambiguous/unsafe/corrupt/missing-status meeting을 제외하고 title/status/location/review participants는 반드시 마지막 live snapshot에서 투영한다.
 
@@ -329,20 +329,29 @@ StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `re
 **FSM 6상태:** `recording → recorded → transcribing → transcribed → summarizing → summarized`. 임의 상태에서 오류 시 `error{message,action}` 세팅(상태는 유지); 복구=사용자가 "재시도" → 직전 정상 상태로 재진입. `recording`은 클라이언트 임시 상태, 서버 영속은 `recorded`부터.
 
 ## summary.json 스키마
-정본(happy): `{title, topicSlug, oneLine, purpose, participants[], highlights[], discussion[], decisions[], actionItems[{owner,task,due}], risks[], followups[]}`. zod로 검증. **happy + fallback 두 픽스처 커밋.**
+정본(happy): `{title, topicSlug, oneLine, purpose, participants[], highlights[], discussion[], decisions[], actionItems[{owner,task,due}], risks[], followups[], body?}`. zod로 검증. **happy + fallback 두 픽스처 커밋.** Body 없는 legacy structured summary는 migration 없이 계속 읽는다.
 
 **중요 — fallback도 이 스키마를 준수해야 한다.** 재사용 `fallback_summary`의 `structured`는 `actionItems`를 객체로 주지만 **`purpose`가 없고 `highlights`가 빠져 있다.** summarize-core는:
 - `purpose` 필드를 항상 포함(fallback 시 `""`).
 - `highlights`를 항상 포함(fallback 시 `structured`에 `discussion[:3]` 등으로 채움).
 - `participants`는 **비운다(`[]`)** — 참석자는 `status.review`(사용자 입력)만 authoritative. 모델이 전사에서 주운 이름을 자동 기록 금지(거짓 attendees edge·프라이버시).
 
-## 편집 가능한 파생 콘텐츠 revision·freshness (ADR 0021)
+Generated summary는 structured mode다. 편집 시작 시 다음 결정적 plain-text projection을 사용한다.
+
+- Block 순서는 `요약` → `목적` → `논의 내용` → `결정 사항` → `액션 아이템` → `리스크` → `후속 확인`이다. 빈 block은 생략한다.
+- `요약` block은 non-empty `oneLine` 다음에 highlights를 `- {item}`으로 잇고 별도 핵심 heading을 만들지 않는다. 일반 목록도 `- {item}`, action item은 `- {owner} — {task} (기한: {due})`다.
+- Item 내부 개행은 바꾸지 않는다. Line은 LF 하나, block 사이는 LF 두 개이며 synthetic trailing LF를 붙이지 않는다. 표시 제목·`topicSlug`·participants는 projection에 넣지 않는다.
+- Existing `body`는 변환·trim·heading parse 없이 그대로 반환한다. Manual body는 CRLF만 LF로 정규화하고 whitespace-only를 거부한다.
+
+Manual freeform mode에서 `body`는 하나의 current editable truth다. Body가 있으면 `oneLine`/`purpose`는 `""`, highlights/discussion/decisions/actionItems/risks/followups는 `[]`여야 하며 non-empty structured editable content와의 dual truth는 schema가 거부한다. `title`, `topicSlug`, canonical `participants`는 보존되지만 summary body writer가 수정하지 않는다. Summary regeneration은 body 없는 새 structured summary로 교체한다.
+
+## 편집 가능한 파생 콘텐츠 revision·freshness (ADR 0021, 0022)
 
 - `contentRevision.transcript`는 `{source:"generated|manual",sha256,updatedAt}`, `contentRevision.summary`는 여기에 `basedOnTranscriptSha256`를 더한다. `summaryOutdated`는 저장 필드가 아니라 `contentRevision.summary.basedOnTranscriptSha256 !== contentRevision.transcript.sha256`으로만 파생한다.
 - `contentRevision`이 없는 legacy stable pair는 현재 두 canonical byte hash, `source:"generated"`, `status.updatedAt`, summary base=current transcript hash인 **virtual fresh revision**으로 읽는다. 이 호환 해석은 read가 status write를 유발하지 않는다.
 - Stable pair read는 artifact byte hash와 persisted/virtual `contentRevision` hash를 대조한다. 불일치는 `source_conflict`이고 transcript/summary를 plausible pair로 노출하지 않는다. `summaryOutdated`가 true여도 pair 자체는 stable하며 기존 summary bytes를 삭제하지 않는다.
 - Transcript 직접 저장·재생성은 summary bytes와 summary revision metadata를 보존한다. Transcript hash가 달라지면 summary가 outdated가 되고, 같으면 기존 freshness를 유지한다. Summary 직접 저장·재생성은 current transcript hash를 `basedOnTranscriptSha256`로 기록해 fresh로 만든다.
-- Summary 수동 편집 DTO는 `oneLine`, `purpose`, `highlights`, `discussion`, `decisions`, `actionItems[{owner,task,due}]`, `risks`, `followups`만 허용한다. Canonical `title`, `topicSlug`, `summary.participants`는 저장 시 기존 값을 보존하고 unknown field는 거부한다. 표시 제목은 title route/`titleOverride`, 참석자는 review route/`status.review.participants`가 계속 유일한 사용자 writer다.
+- Summary 수동 편집 DTO는 freeform `body`만 허용한다. Canonical `title`, `topicSlug`, `summary.participants`는 저장 시 기존 값을 보존하고 structured editable field는 빈 값으로 바꾸며 unknown/internal field는 거부한다. 표시 제목은 title route/`titleOverride`, 참석자는 review route/`status.review.participants`가 계속 유일한 사용자 writer다.
 
 ## 수동 content API·저장 확인
 
@@ -350,13 +359,17 @@ StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `re
 
 | Route | 요청 계약 | 성공 계약 |
 |---|---|---|
-| `GET /api/meetings/{id}/content` | body 없는 read-only probe | `{transcript,summary,revision,transcriptSource,summarySource,summaryOutdated,pairState:"stable"}` |
+| `GET /api/meetings/{id}/content` | body 없는 read-only probe | `{transcript,summaryBody,revision,transcriptSource,summarySource,summaryOutdated,pairState:"stable"}` |
 | `PATCH /api/meetings/{id}/transcript` | strict `{expectedRevision,transcript}`, raw body 2 MiB; transcript는 CRLF→LF 정규화 후 non-empty·UTF-8 1 MiB 이하 | stable content resource + `durability:durable|best_effort|pending` |
-| `PATCH /api/meetings/{id}/summary` | strict `{expectedRevision,summary:EditableSummary}`, raw body 512 KiB | stable content resource + `durability:durable|best_effort|pending` |
+| `PATCH /api/meetings/{id}/summary` | strict `{expectedRevision,body}`, raw/serialized request 512 KiB; body는 CRLF→LF만 정규화하고 whitespace-only 거부 | stable content resource + `durability:durable|best_effort|pending` |
 
-- Expected pair가 current와 다르면 last-write-wins를 하지 않고 `409 content_revision_conflict`다. 다른 content mutation은 `409 content_operation_in_progress`, revision source 불일치는 `409 content_source_conflict`, 모순 상태는 `409 content_state_ambiguous`, 안전한 저장/판정 불가는 `503 content_save_unavailable`다. Validation/body cap, missing/deleted meeting, local guard 오류는 공통 typed envelope를 따른다. Public error는 path·hash·attempt/provider/fs output을 포함하지 않는다.
+- Summary UI는 전송 직전 exact `JSON.stringify({expectedRevision,body})`의 UTF-8 byte length가 512 KiB를 넘으면 network 전에 막고 body byte 정보·구체적 오류를 textarea와 연결한다. Body의 공백, section heading, bullet 문자와 내부 개행은 저장 과정에서 trim하거나 재구성하지 않는다.
+- Expected pair가 current와 다르면 last-write-wins를 하지 않고 `409 content_revision_conflict`다. 다른 content mutation은 `409 content_operation_in_progress`, revision source 불일치는 `409 content_source_conflict`, 모순 상태는 `409 content_state_ambiguous`, 안전한 저장/판정 불가는 `503 content_save_unavailable`다. Whitespace/invalid request는 400, request cap은 413, missing/deleted meeting은 404 typed envelope로 구분한다. Public error는 path·hash·attempt/provider/fs output을 포함하지 않는다.
 - Client state는 `editing → saving → verifying? → saved|validation|conflict|error|ambiguous`다. Network failure나 invalid 2xx body는 같은 PATCH를 재전송하지 않고 GET probe를 수행한다. Probe가 intended content면 saved, pre-save revision이면 not-saved라 같은 draft로 재시도 가능, 제3 revision이면 conflict다. Probe 자체가 불명확하면 draft를 보존한 ambiguous 상태로 막고 `내 입력 복사`만 안전하게 제공한다.
 - Parent refresh는 dirty/saving/verifying draft를 덮지 않는다. Pristine local save 뒤 predecessor revision refresh는 무시하고, 알 수 없는 제3 revision은 content probe가 같은 canonical revision을 확인한 경우에만 수용한다.
+- 선택 tabpanel은 tab-local action/status → outdated warning → confirmed body 또는 editor 순서다. Transcript action은 copy/edit/raw 재생성, summary action은 copy/JSON/edit/current-transcript 재생성 순서를 고정한다. Editor가 열리면 confirmed read body를 single textarea로 교체하며 둘을 동시에 렌더하지 않는다. 열린 draft 중 copy·JSON·combined Markdown은 마지막 confirmed 저장본을 사용하고 action status가 그 차이를 알린다.
+- Editor 소유 tab은 idle/error/conflict/missing이면 `수정 중`, saving이면 `저장 중`, verifying이면 `저장 확인 중`, ambiguous이면 `저장 확인 필요`를 표시하고 summary의 `요약 갱신 필요` token을 함께 보존한다. Dirty cancel/editor 전환은 `계속 수정`을 첫 control로 둔 inline 확인을 거치고 명시적 discard 전에는 draft를 바꾸지 않는다. Saving/verifying에는 discard를 허용하지 않는다.
+- Validation/413은 textarea와 exact draft를 유지한다. Missing/deleted는 더 저장할 수 없어 draft copy만 안전하며, operation-in-progress는 같은 draft로 나중에 재시도한다. Revision conflict는 draft copy 뒤 확인된 latest 교체를 별도 확인하고, source/ambiguous는 copy와 fail-closed reload만 제공한다. Network/invalid success는 위 read-only probe 결과 전까지 PATCH를 재전송하지 않는다.
 
 ## 최초 생성·독립 재생성
 
@@ -368,7 +381,7 @@ StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `re
 | `transcript_regenerate` | immutable `raw.md` + current glossary로 correction **1회만**; summary LLM 없음 | 새 transcript + unchanged current summary | transcript source=generated; summary metadata 보존, 달라진 transcript면 outdated; index refresh 없음 |
 | `summary_regenerate` | current canonical transcript로 summary만 생성(스키마 fallback이면 1회 추가 가능); raw/glossary/correction 미사용 | unchanged current transcript + 새 summary | summary source=generated, current transcript 기준 fresh; 성공 뒤 index refresh |
 | `manual_edit` transcript | LLM 호출 없음 | normalized manual transcript + unchanged current summary | transcript source=manual; 달라지면 outdated; index refresh 없음 |
-| `manual_edit` summary | LLM 호출 없음 | unchanged current transcript + editable fields를 반영한 summary | summary source=manual, current transcript 기준 fresh; 성공 뒤 index refresh |
+| `manual_edit` summary | LLM 호출 없음 | unchanged current transcript + preserved title/topicSlug/participants + normalized body + empty structured editable fields | summary source=manual, current transcript 기준 fresh; 성공 뒤 index refresh |
 
 - Transcript 재생성은 `POST /api/meetings/{id}/transcript/regenerate` strict `{expectedRevision,confirmReplacement:true}`다. Summary 재생성은 기존 endpoint `POST /api/meetings/{id}/summarize` strict `{resummarize:true,expectedRevision}`를 summary-only 의미로 사용한다. Initial은 `resummarize:false` 또는 생략, expected revision 없음인 기존 미생성 조건에서만 수락한다.
 - Generation route는 durable/best-effort attempt acceptance 뒤에만 `202 {ok:true,durability}`를 반환하고 백그라운드 실행한다. Namespace durability pending은 launch 0이다. Public `contentOperation`은 `initial → initial`, `transcript_regenerate → transcript`, `summary_regenerate|legacy resummarize → summary`, `manual_edit → null`로 투영해 목록·상세가 작업 종류를 구분한다.
@@ -378,8 +391,8 @@ StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `re
 
 ## Freshness consumer 정책
 
-- Detail은 outdated summary를 그대로 렌더하되 tab/panel에 `요약 갱신 필요`를 표시한다. Transcript copy는 current transcript다. Summary copy와 combined Markdown export에는 warning을 포함한다. JSON export는 canonical summary schema를 그대로 내보내므로 warning을 주입하지 않고 UI 설명으로 현재 스크립트보다 오래될 수 있음을 알린다.
-- Knowledge card write/read는 current content hashes와 `contentRevision`을 대조하고 outdated summary를 `stale`로 취급한다. Transcript 변경만으로 stale card/corpus를 current로 다시 발행하지 않는다. Fresh summary 직접 저장·재생성·initial 성공 뒤에만 independent index refresh를 시도하며 실패는 canonical pair를 rollback하지 않는다.
+- Detail은 outdated summary를 그대로 렌더하되 tab/panel에 `요약 갱신 필요`를 표시한다. Transcript copy는 current transcript다. Summary copy와 combined Markdown export에는 warning을 포함하고 manual body를 자동 heading으로 다시 감싸지 않는다. JSON export는 optional body와 비워진 structured field를 포함한 canonical summary schema를 그대로 내보내며 `summaryOutdated` 같은 UI field를 주입하지 않는다.
+- Knowledge card write/read는 current content hashes와 `contentRevision`을 대조하고 outdated summary를 `stale`로 취급한다. Fresh manual body는 card·bounded corpus·raw summary/card chat evidence의 current content이며 structured action/people을 꾸며내지 않는다. Transcript 변경만으로 stale card/corpus를 current로 다시 발행하지 않는다. Fresh summary 직접 저장·재생성·initial 성공 뒤에만 independent index refresh를 시도하며 실패는 canonical pair를 rollback하지 않는다.
 - AI 없는 검색은 outdated meeting의 summary semantic card를 ranking/filter 본문에서 제외하지만 current live title/date/status/location/review participants는 검색할 수 있게 유지하고 aggregate status를 `partial`, reason을 `stale`로 낮춘다.
 - Chat의 summary/card read는 outdated summary에 citation credit을 주지 않고 unavailable/stale warning으로 낮춘다. Current transcript discovery/chunk/full read는 계속 허용하되 `stale_evidence` degradation을 기록하므로 답변이 오래된 summary를 fresh evidence로 가장하지 않는다.
 
