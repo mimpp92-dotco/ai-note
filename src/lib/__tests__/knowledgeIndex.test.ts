@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { resetArtifactLeaseStateForTests } from "@/lib/artifactLease";
 import type { StatusJson } from "@/domain/meeting";
+import type { Summary } from "@/domain/summary";
 import {
   buildCorpusMap,
   buildKnowledgeCard,
@@ -73,7 +74,7 @@ function status(overrides: Partial<StatusJson> = {}): StatusJson {
   };
 }
 
-function sourceBytes(overrides: { transcript?: string; summary?: typeof summary } = {}) {
+function sourceBytes(overrides: { transcript?: string; summary?: Summary } = {}) {
   const transcript = encoder.encode(overrides.transcript ?? "회의 전사 원문\n");
   const summaryBytes = encoder.encode(JSON.stringify(overrides.summary ?? summary));
   return { transcript, summary: summaryBytes };
@@ -138,6 +139,48 @@ describe("knowledge-card projection", () => {
     expect(card.mentionedPeople).not.toContain("지수");
   });
 
+  it("keeps a manual body as the only semantic content without inferring structure or people", () => {
+    const body = `액션 아이템\n- 민수 — 배포하기 (기한: 금요일)\n\n${"가".repeat(5_000)}`;
+    const manual: Summary = {
+      title: "수동 회의",
+      topicSlug: "manual",
+      participants: ["보존된 메타데이터"],
+      body,
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      discussion: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      followups: [],
+    };
+    const source = sourceBytes({ summary: manual });
+    const card = buildKnowledgeCard({
+      meetingId: "meeting-1",
+      source,
+      status: status(),
+    });
+    const projection = buildCorpusMap([card]).cards[0];
+
+    expect(card.content).toEqual({
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      discussion: [],
+      decisions: [],
+      risks: [],
+      followups: [],
+      body,
+    });
+    expect(card.actionItems).toEqual([]);
+    expect(card.mentionedPeople).toEqual([]);
+    expect(projection.body).toBe(Array.from(body).slice(0, 4_000).join(""));
+    expect(Array.from(projection.body ?? "")).toHaveLength(4_000);
+    expect(card.sourceHashes).toEqual(hashKnowledgeSourcePair(source));
+    expect(isKnowledgeCardStale(card, hashKnowledgeSourcePair(source))).toBe(false);
+  });
+
   it("marks a card stale when either source hash changes", () => {
     const source = sourceBytes();
     const card = buildKnowledgeCard({ meetingId: "meeting-1", source, status: status() });
@@ -177,6 +220,7 @@ describe("corpus and live metadata projections", () => {
     expect(serialized).not.toContain("딜런");
     expect(serialized.length).toBeLessThan(10_000);
     expect(corpus.cards[0].highlights.length).toBeLessThanOrEqual(8);
+    expect(corpus.cards[0]).not.toHaveProperty("body");
   });
 
   it("lets live title/status/location/review replace every stale index snapshot", () => {
@@ -203,6 +247,7 @@ describe("corpus and live metadata projections", () => {
       reviewParticipants: ["현재 검토자"],
       mentionedPeople: ["민수"],
     });
+    expect(projection.content).not.toHaveProperty("body");
     expect(JSON.stringify(projection)).not.toContain("오래된 제목");
     expect(JSON.stringify(projection)).not.toContain("딜런");
   });

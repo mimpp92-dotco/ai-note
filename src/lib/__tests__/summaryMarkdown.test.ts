@@ -72,6 +72,31 @@ describe("formatSummaryMarkdown", () => {
     expect(outdated).toContain(warning);
     expect(outdated.indexOf(warning)).toBeLessThan(outdated.indexOf("이번 주 우선순위를 정렬했다."));
   });
+
+  it("renders a manual body verbatim without rebuilding structured headings", () => {
+    const body = "사용자가 지울 수 있는 제목\n\n- 자유 bullet\n\n결정사항\n직접 쓴 내용";
+    const summary = makeSummary({
+      title: "수동 회의",
+      body,
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      discussion: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      followups: [],
+    });
+
+    expect(formatSummaryMarkdown(summary, ["현재 참석자"], {
+      summaryOutdated: true,
+    })).toBe(
+      "# 수동 회의\n\n"
+      + "> ⚠️ 현재 스크립트 변경 후 회의록 요약이 갱신되지 않음\n\n"
+      + "**참석자:** 현재 참석자\n\n"
+      + `${body}\n`,
+    );
+  });
 });
 
 describe("formatMeetingMarkdown", () => {
@@ -96,5 +121,24 @@ describe("formatMeetingMarkdown", () => {
       /^# 주간 회의 2026-07-08\n\n> ⚠️ 현재 스크립트 변경 후 회의록 요약이 갱신되지 않음/u,
     );
     expect(md).toContain("## 전체 전사\n\n현재 전사\n");
+  });
+
+  it("keeps the manual body ahead of the current transcript without synthetic summary sections", () => {
+    const body = "내 자유 본문\n\n직접 만든 섹션";
+    const md = formatMeetingMarkdown(makeSummary({
+      body,
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      discussion: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      followups: [],
+    }), "현재 전사", ["현재 참석자"]);
+
+    expect(md).toContain(`**참석자:** 현재 참석자\n\n${body}\n\n## 전체 전사`);
+    expect(md).not.toContain("## 핵심");
+    expect(md).not.toContain("## 결정사항");
   });
 });

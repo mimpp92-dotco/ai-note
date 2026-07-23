@@ -24,6 +24,12 @@ export function formatSummaryMarkdown(
   const parts: string[] = [`# ${summary.title}`];
 
   if (options.summaryOutdated === true) parts.push(OUTDATED_SUMMARY_WARNING);
+  if (summary.body !== undefined) {
+    if (participants.length) parts.push(`**참석자:** ${participants.join(", ")}`);
+    parts.push(summary.body);
+    const markdown = parts.join("\n\n");
+    return summary.body.endsWith("\n") ? markdown : `${markdown}\n`;
+  }
   if (summary.oneLine) parts.push(`> ${summary.oneLine}`);
 
   const meta: string[] = [];

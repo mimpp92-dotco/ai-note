@@ -17,6 +17,7 @@ export const knowledgeCardSchema = z.object({
   content: z.object({
     oneLine: z.string(), purpose: z.string(), highlights: stringList,
     discussion: stringList, decisions: stringList, risks: stringList, followups: stringList,
+    body: z.string().optional(),
   }).strict(),
   actionItems: z.array(actionItemSearchMetadataSchema),
   reviewParticipants: stringList,
@@ -29,6 +30,7 @@ export const corpusCardProjectionSchema = z.object({
   purpose: z.string(),
   highlights: stringList,
   mentionedPeople: stringList,
+  body: z.string().optional(),
 }).strict();
 
 export const corpusMapSchema = z.object({

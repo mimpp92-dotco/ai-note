@@ -167,6 +167,50 @@ describe("knowledge-card repository", () => {
       mode: "ready",
       card: { meetingId: "meeting-1", mentionedPeople: ["민수"] },
     });
+    const read = await repository.readKnowledgeCard("meeting-1");
+    expect(read.mode === "ready" && read.card.content).not.toHaveProperty("body");
+  });
+
+  it("round-trips a manual body through the full card and bounded corpus projection", async () => {
+    const id = "meeting-manual-body";
+    const body = `자유 회의록\n\n${"나".repeat(5_000)}`;
+    await seedMeeting(id, {
+      summaryText: `${JSON.stringify({
+        ...summary,
+        body,
+        oneLine: "",
+        purpose: "",
+        highlights: [],
+        discussion: [],
+        decisions: [],
+        actionItems: [],
+        risks: [],
+        followups: [],
+      })}\n`,
+    });
+    const current = JSON.parse(await readFile(meetingPaths(id).status, "utf8")) as StatusJson;
+    const repository = createKnowledgeIndexRepository({
+      dataRoot: dataRoot(),
+      loadClassifiedMeetingRecords: async () => [liveRecord(id, current)],
+    });
+
+    await expect(writeCard(id, repository)).resolves.toMatchObject({
+      card: {
+        content: { body },
+        actionItems: [],
+        mentionedPeople: [],
+      },
+    });
+    await expect(repository.readKnowledgeCard(id)).resolves.toMatchObject({
+      mode: "ready",
+      card: { content: { body } },
+    });
+    const rebuilt = await repository.rebuildCorpusMap();
+    expect(rebuilt.corpusMap.cards[0].body).toBe(Array.from(body).slice(0, 4_000).join(""));
+    await expect(repository.readCorpusMap()).resolves.toMatchObject({
+      mode: "ready",
+      corpusMap: { cards: [{ meetingId: id, body: Array.from(body).slice(0, 4_000).join("") }] },
+    });
   });
 
   it("keeps a post-rename pending card committed without rollback or blind rewrite", async () => {

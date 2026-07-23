@@ -23,10 +23,45 @@ describe("knowledge index contracts", () => {
     expect(knowledgeCardSchema.parse(card)).toEqual(card);
   });
 
+  it("additively parses a manual summary body without changing old v1 cards", () => {
+    const manual = {
+      ...card,
+      content: {
+        oneLine: "",
+        purpose: "",
+        highlights: [],
+        discussion: [],
+        decisions: [],
+        risks: [],
+        followups: [],
+        body: "사용자가 만든 제목\n\n- 자유 본문",
+      },
+      actionItems: [],
+      mentionedPeople: [],
+    };
+
+    expect(knowledgeCardSchema.parse(manual)).toEqual(manual);
+    expect(knowledgeCardSchema.parse(card)).toEqual(card);
+  });
+
   it("limits corpus map cards to summary projections", () => {
     const projection = { meetingId: "meeting-1", oneLine: "한 줄", purpose: "목적", highlights: ["핵심"], mentionedPeople: ["민수"] };
     expect(corpusMapSchema.parse({ schemaVersion: 1, cards: [projection] }).cards[0]).toEqual(projection);
     expect(() => corpusMapSchema.parse({ schemaVersion: 1, cards: [{ ...projection, discussion: ["상세"] }] })).toThrow();
+  });
+
+  it("additively parses a bounded corpus body while preserving bodyless v1 projections", () => {
+    const legacy = {
+      meetingId: "meeting-1",
+      oneLine: "한 줄",
+      purpose: "목적",
+      highlights: ["핵심"],
+      mentionedPeople: ["민수"],
+    };
+    const manual = { ...legacy, oneLine: "", purpose: "", highlights: [], mentionedPeople: [], body: "자유 본문" };
+
+    expect(corpusMapSchema.parse({ schemaVersion: 1, cards: [legacy] }).cards[0]).toEqual(legacy);
+    expect(corpusMapSchema.parse({ schemaVersion: 1, cards: [manual] }).cards[0]).toEqual(manual);
   });
 
   it("keeps reviewed participants separate from deterministic mentions", () => {

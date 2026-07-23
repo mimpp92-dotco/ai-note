@@ -189,6 +189,83 @@ describe("artifact evidence tools", () => {
     expect(item.cardJson).not.toContain("오래된 참석자");
   });
 
+  it("returns a manual body in card and raw summary evidence without inventing structured semantics", async () => {
+    const body = "자유 본문\n\n액션 아이템처럼 보이는 문장: 민수 금요일";
+    const manualCard = card(MEETING);
+    manualCard.content = {
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      discussion: [],
+      decisions: [],
+      risks: [],
+      followups: [],
+      body,
+    };
+    manualCard.actionItems = [];
+    manualCard.mentionedPeople = [];
+    const rawSummary = JSON.stringify({
+      title: "수동 회의",
+      topicSlug: "manual",
+      participants: [],
+      body,
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      discussion: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      followups: [],
+    });
+    const executor = createChatToolExecutor({
+      mode: "normal",
+      dependencies: dependencies({
+        readKnowledgeCard: vi.fn().mockResolvedValue({ mode: "ready", card: manualCard }),
+        readArtifactPair: vi.fn().mockResolvedValue({
+          transcript: "현재 전사",
+          summary: rawSummary,
+          state: "stable",
+          summaryOutdated: false,
+        }),
+      }),
+    });
+
+    const cardResult = await executor.execute(call(
+      "read_knowledge_cards",
+      { meetingIds: [MEETING] },
+      "manual-card",
+    ));
+    const summaryResult = await executor.execute(call(
+      "read_summaries",
+      { meetingIds: [MEETING] },
+      "manual-summary",
+    ));
+    expect(cardResult).toMatchObject({
+      status: "ok",
+      data: { items: [{ status: "ready" }] },
+    });
+    if (cardResult.status !== "ok") throw new Error("expected card success");
+    const cardJson = JSON.parse(
+      (cardResult.data as { items: Array<{ cardJson: string }> }).items[0].cardJson,
+    );
+    expect(cardJson).toMatchObject({
+      content: { body, oneLine: "", highlights: [] },
+      actionItems: [],
+      mentionedPeople: [],
+    });
+    expect(summaryResult.status).toBe("ok");
+    if (summaryResult.status !== "ok") throw new Error("expected summary success");
+    const summaryJson = (
+      summaryResult.data as { items: Array<{ summary: string }> }
+    ).items[0].summary;
+    expect(JSON.parse(summaryJson)).toMatchObject({
+      body,
+      oneLine: "",
+      actionItems: [],
+    });
+  });
+
   it.each([
     ["missing", "artifact_missing"],
     ["stale", "card_stale"],

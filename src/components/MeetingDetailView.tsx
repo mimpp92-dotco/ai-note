@@ -15,12 +15,9 @@ import { CopyButton } from "@/components/CopyButton";
 import { LibraryLocationPicker } from "@/components/LibraryLocationPicker";
 import {
   type EditorStatus,
-  type SummaryEditorDraft,
   SummaryEditor,
   TranscriptEditor,
-  createSummaryEditorDraft,
   normalizeTranscriptDraft,
-  summaryDraftToEditable,
 } from "@/components/MeetingContentEditors";
 import { useOptionalLibrary } from "@/components/LibraryProvider";
 import { GuardedLink as Link } from "@/components/RecorderNavigation";
@@ -32,12 +29,13 @@ import { Tabs, type TabItem } from "@/components/Tabs";
 import { type LlmReadiness, getLlmReadiness } from "@/components/healthStatus";
 import { useHealth } from "@/components/useHealth";
 import type { ErrorAction, MeetingStatus, ReviewInput } from "@/domain/meeting";
-import type { EditableSummary, Summary } from "@/domain/summary";
+import type { Summary } from "@/domain/summary";
 import { resolvePostMoveDetailSource } from "@/lib/detailSource";
 import { formatLocationBreadcrumb } from "@/lib/libraryClient";
 import type { LibraryMeetingScope } from "@/lib/libraryQuery";
 import { formatMeetingDate, STATUS_LABELS } from "@/lib/meetingLabels";
 import { formatDuration } from "@/lib/recorder";
+import { summaryBodyFromSummary } from "@/lib/summaryBody";
 import { formatSummaryMarkdown } from "@/lib/summaryMarkdown";
 
 export interface Segment {
@@ -110,7 +108,7 @@ interface ConfirmedContent {
 
 interface ContentResource {
   transcript: string;
-  summary: EditableSummary;
+  summaryBody: string;
   revision: ContentPairRevision;
   transcriptSource: "generated" | "manual";
   summarySource: "generated" | "manual";
@@ -119,39 +117,9 @@ interface ContentResource {
   durability?: "durable" | "best_effort" | "pending";
 }
 
-function summaryEditable(summary: Summary): EditableSummary {
-  return {
-    oneLine: summary.oneLine,
-    purpose: summary.purpose,
-    highlights: [...summary.highlights],
-    discussion: [...summary.discussion],
-    decisions: [...summary.decisions],
-    actionItems: summary.actionItems.map((item) => ({ ...item })),
-    risks: [...summary.risks],
-    followups: [...summary.followups],
-  };
-}
-
-function emptyEditableSummary(): EditableSummary {
-  return {
-    oneLine: "",
-    purpose: "",
-    highlights: [],
-    discussion: [],
-    decisions: [],
-    actionItems: [],
-    risks: [],
-    followups: [],
-  };
-}
-
 function sameRevision(left: ContentPairRevision, right: ContentPairRevision): boolean {
   return left.transcriptSha256 === right.transcriptSha256
     && left.summarySha256 === right.summarySha256;
-}
-
-function sameEditableSummary(left: EditableSummary, right: EditableSummary): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -162,43 +130,13 @@ function isSha256(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
-function parseEditableSummary(value: unknown): EditableSummary | null {
-  if (!isRecord(value)) return null;
-  const exactKeys = [
-    "oneLine",
-    "purpose",
-    "highlights",
-    "discussion",
-    "decisions",
-    "actionItems",
-    "risks",
-    "followups",
-  ];
-  if (Object.keys(value).length !== exactKeys.length || exactKeys.some((key) => !(key in value))) return null;
-  const stringLists = ["highlights", "discussion", "decisions", "risks", "followups"] as const;
-  if (typeof value.oneLine !== "string" || typeof value.purpose !== "string") return null;
-  if (stringLists.some((key) => (
-    !Array.isArray(value[key])
-    || !value[key].every((item) => typeof item === "string")
-  ))) return null;
-  if (!Array.isArray(value.actionItems) || !value.actionItems.every((item) => (
-    isRecord(item)
-    && Object.keys(item).length === 3
-    && typeof item.owner === "string"
-    && typeof item.task === "string"
-    && typeof item.due === "string"
-  ))) return null;
-  return value as unknown as EditableSummary;
-}
-
 function parseContentResource(value: unknown, durabilityRequired: boolean): ContentResource | null {
   if (!isRecord(value)) return null;
-  const summary = parseEditableSummary(value.summary);
   const revision = value.revision;
   const durability = value.durability;
   if (
     typeof value.transcript !== "string"
-    || !summary
+    || typeof value.summaryBody !== "string"
     || !isRecord(revision)
     || Object.keys(revision).length !== 2
     || !isSha256(revision.transcriptSha256)
@@ -212,7 +150,7 @@ function parseContentResource(value: unknown, durabilityRequired: boolean): Cont
   ) return null;
   const allowed = new Set([
     "transcript",
-    "summary",
+    "summaryBody",
     "revision",
     "transcriptSource",
     "summarySource",
@@ -223,7 +161,7 @@ function parseContentResource(value: unknown, durabilityRequired: boolean): Cont
   if (Object.keys(value).some((key) => !allowed.has(key))) return null;
   return {
     transcript: value.transcript,
-    summary,
+    summaryBody: value.summaryBody,
     revision: {
       transcriptSha256: revision.transcriptSha256,
       summarySha256: revision.summarySha256,
@@ -261,9 +199,23 @@ function incomingConfirmed(
 }
 
 function resourceToConfirmed(resource: ContentResource, canonical: Summary): ConfirmedContent {
+  const summary = summaryBodyFromSummary(canonical) === resource.summaryBody
+    ? canonical
+    : {
+        ...canonical,
+        body: resource.summaryBody,
+        oneLine: "",
+        purpose: "",
+        highlights: [],
+        discussion: [],
+        decisions: [],
+        actionItems: [],
+        risks: [],
+        followups: [],
+      };
   return {
     transcript: resource.transcript,
-    summary: { ...canonical, ...resource.summary },
+    summary,
     revision: resource.revision,
     transcriptSource: resource.transcriptSource,
     summarySource: resource.summarySource,
@@ -274,16 +226,14 @@ function resourceToConfirmed(resource: ContentResource, canonical: Summary): Con
 function contentResourceMatches(
   mode: EditorMode,
   resource: ContentResource,
-  intended: string | EditableSummary,
+  intended: string,
   before: ConfirmedContent,
 ): boolean {
   if (mode === "transcript") {
-    return typeof intended === "string"
-      && resource.transcript === intended
-      && sameEditableSummary(resource.summary, summaryEditable(before.summary));
+    return resource.transcript === intended
+      && resource.summaryBody === summaryBodyFromSummary(before.summary);
   }
-  return typeof intended !== "string"
-    && sameEditableSummary(resource.summary, intended)
+  return resource.summaryBody === intended
     && resource.transcript === before.transcript;
 }
 
@@ -353,13 +303,13 @@ export function MeetingDetailView({
   const [tab, setTab] = useState<"script" | "summary">(initialTab);
   const [confirmed, setConfirmed] = useState<ConfirmedContent | null>(() => firstIncoming);
   const [transcriptDraft, setTranscriptDraft] = useState(() => firstIncoming?.transcript ?? transcript.text);
-  const [summaryDraft, setSummaryDraft] = useState<SummaryEditorDraft>(() => createSummaryEditorDraft(
-    firstIncoming ? summaryEditable(firstIncoming.summary) : emptyEditableSummary(),
-  ));
+  const [summaryDraft, setSummaryDraft] = useState(
+    () => firstIncoming ? summaryBodyFromSummary(firstIncoming.summary) : "",
+  );
   const [editorMode, setEditorMode] = useState<EditorMode | null>(null);
   const [saveStage, setSaveStage] = useState<SaveStage>("idle");
   const [editorStatus, setEditorStatus] = useState<EditorStatus | null>(null);
-  const [saveOutcome, setSaveOutcome] = useState<"none" | "conflict" | "ambiguous">("none");
+  const [saveOutcome, setSaveOutcome] = useState<"none" | "conflict" | "ambiguous" | "missing">("none");
   const [focusRequest, setFocusRequest] = useState(0);
   const [discardRequest, setDiscardRequest] = useState<{ next: EditorMode | null } | null>(null);
   const [latestConfirming, setLatestConfirming] = useState(false);
@@ -401,6 +351,7 @@ export function MeetingDetailView({
   const summaryGenerationTriggerRef = useRef<HTMLButtonElement>(null);
   const generationCancelRef = useRef<HTMLButtonElement>(null);
   const generationReturnFocusRef = useRef<HTMLElement | null>(null);
+  const continueEditingRef = useRef<HTMLButtonElement>(null);
 
   confirmedRef.current = confirmed;
   const incoming = incomingConfirmed(content, transcript, summary);
@@ -409,7 +360,7 @@ export function MeetingDetailView({
     ? JSON.stringify({
         revision: incoming.revision,
         transcript: incoming.transcript,
-        summary: summaryEditable(incoming.summary),
+        summaryBody: summaryBodyFromSummary(incoming.summary),
         transcriptSource: incoming.transcriptSource,
         summarySource: incoming.summarySource,
         summaryOutdated: incoming.summaryOutdated,
@@ -419,7 +370,7 @@ export function MeetingDetailView({
   const transcriptDirty = confirmed !== null
     && normalizeTranscriptDraft(transcriptDraft) !== confirmed.transcript;
   const summaryDirty = confirmed !== null
-    && !sameEditableSummary(summaryDraftToEditable(summaryDraft), summaryEditable(confirmed.summary));
+    && summaryDraft.replace(/\r\n/gu, "\n") !== summaryBodyFromSummary(confirmed.summary);
   const activeEditorDirty = editorMode === "transcript" ? transcriptDirty : editorMode === "summary" ? summaryDirty : false;
   const draftProtected = activeEditorDirty || saveStage !== "idle";
   draftProtectedRef.current = draftProtected;
@@ -428,7 +379,7 @@ export function MeetingDetailView({
     ?? (resummarizeInflight ? "summary" : null);
   const effectiveOperation = localGeneration?.kind ?? externalOperation;
   const pairBusy = content?.state === "active";
-  const editorLocked = saveStage !== "idle" || saveOutcome === "ambiguous";
+  const editorLocked = saveStage !== "idle" || saveOutcome !== "none";
   const serverMutationActive = effectiveOperation !== null || pairBusy;
   const canRenderMutationControls = confirmed !== null
     && (content?.state === "stable" || content?.state === "active");
@@ -442,7 +393,7 @@ export function MeetingDetailView({
     const mode = editorMode;
     if (!snapshot || !mode) return;
     if (mode === "transcript") setTranscriptDraft(snapshot.transcript);
-    else setSummaryDraft(createSummaryEditorDraft(summaryEditable(snapshot.summary)));
+    else setSummaryDraft(summaryBodyFromSummary(snapshot.summary));
     setEditorMode(null);
     setSaveStage("idle");
     setEditorStatus(null);
@@ -528,7 +479,7 @@ export function MeetingDetailView({
       confirmedRef.current = candidate;
       setConfirmed(candidate);
       setTranscriptDraft(candidate.transcript);
-      setSummaryDraft(createSummaryEditorDraft(summaryEditable(candidate.summary)));
+      setSummaryDraft(summaryBodyFromSummary(candidate.summary));
       return;
     }
     if (sameRevision(candidate.revision, current.revision)) return;
@@ -565,7 +516,7 @@ export function MeetingDetailView({
           confirmedRef.current = next;
           setConfirmed(next);
           setTranscriptDraft(next.transcript);
-          setSummaryDraft(createSummaryEditorDraft(summaryEditable(next.summary)));
+          setSummaryDraft(summaryBodyFromSummary(next.summary));
           setExternalSyncStatus({ kind: "success", message: "다른 곳에서 저장된 최신 내용을 반영했습니다." });
         } else {
           setExternalSyncStatus({
@@ -659,10 +610,15 @@ export function MeetingDetailView({
     setFocusRequest((value) => value + 1);
   };
 
+  useEffect(() => {
+    if (!discardRequest) return;
+    continueEditingRef.current?.focus();
+  }, [discardRequest]);
+
   const resetDraft = (mode: EditorMode, snapshot = confirmedRef.current) => {
     if (!snapshot) return;
     if (mode === "transcript") setTranscriptDraft(snapshot.transcript);
-    else setSummaryDraft(createSummaryEditorDraft(summaryEditable(snapshot.summary)));
+    else setSummaryDraft(summaryBodyFromSummary(snapshot.summary));
   };
 
   const focusEditorTrigger = (mode: EditorMode) => {
@@ -681,7 +637,7 @@ export function MeetingDetailView({
     confirmedRef.current = next;
     setConfirmed(next);
     setTranscriptDraft(next.transcript);
-    setSummaryDraft(createSummaryEditorDraft(summaryEditable(next.summary)));
+    setSummaryDraft(summaryBodyFromSummary(next.summary));
     setSaveStage("idle");
     setSaveOutcome("none");
     setEditorStatus(null);
@@ -695,6 +651,7 @@ export function MeetingDetailView({
         ? { kind: "warning", message: "저장됨 · 디스크 동기화 확인 대기" }
         : { kind: "success", message: "저장됨" },
     });
+    setTab(mode === "transcript" ? "script" : "summary");
     focusEditorTrigger(mode);
   };
 
@@ -717,7 +674,7 @@ export function MeetingDetailView({
 
   const verifyUnknownSave = async (
     mode: EditorMode,
-    intended: string | EditableSummary,
+    intended: string,
     before: ConfirmedContent,
   ) => {
     setSaveStage("verifying");
@@ -757,9 +714,31 @@ export function MeetingDetailView({
 
   const handleSaveRefusal = async (response: Response) => {
     const error = publicError(await responseBody(response));
-    if (response.status === 400 || response.status === 413 || error?.code === "invalid_request") {
+    if (response.status === 413) {
       setSaveStage("idle");
-      setEditorStatus({ kind: "error", message: "입력 내용을 확인하세요. 수정 중인 내용은 유지했습니다." });
+      setEditorStatus({
+        kind: "error",
+        message: "저장 요청이 512 KiB 한도를 넘었습니다. 입력은 유지했습니다. 길이를 줄인 뒤 다시 저장하세요.",
+      });
+      focusEditor();
+      return;
+    }
+    if (response.status === 400 || error?.code === "invalid_request") {
+      setSaveStage("idle");
+      setEditorStatus({
+        kind: "error",
+        message: "입력 내용을 확인할 수 없어 저장하지 못했습니다. 수정 중인 내용은 유지했습니다.",
+      });
+      focusEditor();
+      return;
+    }
+    if (response.status === 404 || error?.code === "meeting_not_found") {
+      setSaveStage("idle");
+      setSaveOutcome("missing");
+      setEditorStatus({
+        kind: "error",
+        message: "회의가 없거나 삭제되어 더 이상 저장할 수 없습니다. 입력은 유지했으니 복사해 보관하세요.",
+      });
       focusEditor();
       return;
     }
@@ -773,6 +752,7 @@ export function MeetingDetailView({
         kind: "warning",
         message: `${operationLabel(error.operation)} 중에는 저장할 수 없습니다. 입력을 유지했으니 작업이 끝난 뒤 다시 시도하세요.`,
       });
+      focusEditor();
       return;
     }
     if (error?.code === "content_source_conflict" || error?.code === "content_state_ambiguous") {
@@ -784,12 +764,12 @@ export function MeetingDetailView({
     focusEditor();
   };
 
-  const saveContent = async (mode: EditorMode, intended: string | EditableSummary) => {
+  const saveContent = async (mode: EditorMode, intended: string) => {
     const before = confirmedRef.current;
     if (!before || !canStartMutation || editorLocked || saveOutcome !== "none") return;
     const unchanged = mode === "transcript"
-      ? typeof intended === "string" && intended === before.transcript
-      : typeof intended !== "string" && sameEditableSummary(intended, summaryEditable(before.summary));
+      ? intended === before.transcript
+      : intended === summaryBodyFromSummary(before.summary);
     if (unchanged) {
       resetDraft(mode, before);
       setEditorMode(null);
@@ -803,7 +783,7 @@ export function MeetingDetailView({
     const endpoint = mode === "transcript" ? "transcript" : "summary";
     const payload = mode === "transcript"
       ? { expectedRevision: before.revision, transcript: intended }
-      : { expectedRevision: before.revision, summary: intended };
+      : { expectedRevision: before.revision, body: intended };
     let response: Response;
     try {
       response = await fetch(`/api/meetings/${id}/${endpoint}`, {
@@ -917,13 +897,14 @@ export function MeetingDetailView({
       confirmedRef.current = next;
       setConfirmed(next);
       setTranscriptDraft(next.transcript);
-      setSummaryDraft(createSummaryEditorDraft(summaryEditable(next.summary)));
+      setSummaryDraft(summaryBodyFromSummary(next.summary));
       setSaveStage("idle");
       setSaveOutcome("none");
       setLatestConfirming(false);
       setEditorMode(null);
       setEditorStatus(null);
       if (mode) {
+        setTab(mode === "transcript" ? "script" : "summary");
         setContentNotice({ scope: mode, status: { kind: "success", message: "최신 내용을 불러왔습니다." } });
         focusEditorTrigger(mode);
       }
@@ -1022,10 +1003,10 @@ export function MeetingDetailView({
 
   const draftCopyText = editorMode === "transcript"
     ? transcriptDraft
-    : JSON.stringify(summaryDraftToEditable(summaryDraft), null, 2);
+    : summaryDraft;
   const editorSupplemental: ReactNode = (
     <>
-      {(saveOutcome === "conflict" || saveOutcome === "ambiguous") && (
+      {saveOutcome !== "none" && (
         <div className="mt-3 rounded-[12px] border border-line bg-soft p-3">
           <div className="flex flex-wrap gap-2">
             <CopyButton text={draftCopyText} label="내 입력 복사" />
@@ -1085,7 +1066,7 @@ export function MeetingDetailView({
   const readOnlyWorkNotice = effectiveOperation
     ? "작업 중에도 복사와 다운로드는 현재 저장된 내용을 사용합니다."
     : null;
-  const editControlDisabled = serverMutationActive || saveStage !== "idle" || saveOutcome === "ambiguous";
+  const editControlDisabled = serverMutationActive || saveStage !== "idle" || saveOutcome !== "none";
   const generationControlDisabled = !canStartMutation || editorMode !== null || saveOutcome !== "none";
   const safeCombinedExport = confirmed !== null
     && (content?.state === "stable" || content?.state === "active");
@@ -1104,12 +1085,16 @@ export function MeetingDetailView({
     : effectiveOperation === "initial" || effectiveOperation === "summary"
       ? "회의록 요약 생성 중"
       : STATUS_LABELS[status.status];
-  const scriptFooterStatus = effectiveOperation === "transcript"
+  const scriptActionStatus = editorMode === "transcript"
+    ? "전체 스크립트 복사와 회의록 다운로드는 마지막으로 확인된 저장 내용을 사용합니다."
+    : effectiveOperation === "transcript"
     ? "스크립트 만드는 중…"
     : contentNotice?.scope === "transcript"
       ? contentNotice.status.message
       : readOnlyWorkNotice ?? mutationReason;
-  const summaryFooterStatus = effectiveOperation === "summary"
+  const summaryActionStatus = editorMode === "summary"
+    ? "요약 복사, JSON 다운로드와 회의록 다운로드는 마지막으로 확인된 저장 내용을 사용합니다."
+    : effectiveOperation === "summary"
     ? "요약 만드는 중…"
     : contentNotice?.scope === "summary"
       ? contentNotice.status.message
@@ -1117,28 +1102,8 @@ export function MeetingDetailView({
 
   const scriptPanel = (
     <div className="space-y-6">
-      <ScriptTab transcript={currentTranscriptView} segments={segments} />
-      {editorMode === "transcript" && confirmed && (
-        <TranscriptEditor
-          id={id}
-          value={transcriptDraft}
-          onChange={(value) => {
-            setTranscriptDraft(value);
-            setEditorStatus(null);
-            setSaveOutcome("none");
-          }}
-          onSave={(value) => void saveContent("transcript", value)}
-          onCancel={requestEditorCancel}
-          busy={saveStage !== "idle"}
-          saveDisabled={saveOutcome !== "none"}
-          cancelDisabled={saveOutcome === "ambiguous"}
-          status={editorStatus}
-          supplemental={editorSupplemental}
-          focusRequest={focusRequest}
-        />
-      )}
       {currentTranscript.trim() && (
-        <footer className="space-y-3 border-t border-line pt-5">
+        <div className="space-y-3">
           <div role="group" aria-label="전체 스크립트 작업" className="flex flex-wrap items-center gap-2">
             <CopyButton text={currentTranscript} label="전체 스크립트 복사" />
             {canRenderMutationControls && (
@@ -1146,11 +1111,11 @@ export function MeetingDetailView({
                 <button
                   ref={transcriptEditTriggerRef}
                   type="button"
-                  disabled={editControlDisabled}
+                  disabled={editControlDisabled || editorMode === "transcript"}
                   onClick={() => requestEditor("transcript")}
                   className={ACTION_CONTROL_CLASS}
                 >
-                  전체 스크립트 수정
+                  {editorMode === "transcript" ? "전체 스크립트 수정 중" : "전체 스크립트 수정"}
                 </button>
                 <button
                   ref={transcriptGenerationTriggerRef}
@@ -1164,45 +1129,22 @@ export function MeetingDetailView({
               </>
             )}
           </div>
-          {scriptFooterStatus && (
+          {scriptActionStatus && (
             <p role="status" aria-live="polite" className="text-[13px] text-inkSoft">
-              {scriptFooterStatus}
+              {scriptActionStatus}
             </p>
           )}
-        </footer>
-      )}
-    </div>
-  );
-
-  const outdatedHelpId = `summary-outdated-${id}`;
-  const summaryPanel = (
-    <div className="space-y-6">
-      {currentSummaryOutdated && currentSummary && (
-        <div
-          id={outdatedHelpId}
-          role="status"
-          className="rounded-[12px] border border-warn/40 bg-warnBg px-4 py-3"
-        >
-          <p className="text-[13px] font-semibold text-warn">요약 갱신 필요</p>
-          <p className="mt-1 text-[13px] text-ink">
-            전체 스크립트가 변경되었지만 기존 요약은 유지됨
-          </p>
-          <p className="mt-1 text-[12px] text-inkSoft">
-            회의록 요약을 수정하거나 현재 스크립트로 다시 만들 수 있습니다.
-          </p>
         </div>
       )}
-      <SummaryTab summary={currentSummary} />
-      {editorMode === "summary" && confirmed && (
-        <SummaryEditor
+      {editorMode === "transcript" && confirmed ? (
+        <TranscriptEditor
           id={id}
-          draft={summaryDraft}
+          value={transcriptDraft}
           onChange={(value) => {
-            setSummaryDraft(value);
-            setEditorStatus(null);
-            setSaveOutcome("none");
+            setTranscriptDraft(value);
+            if (saveOutcome === "none") setEditorStatus(null);
           }}
-          onSave={(value) => void saveContent("summary", value)}
+          onSave={(value) => void saveContent("transcript", value)}
           onCancel={requestEditorCancel}
           busy={saveStage !== "idle"}
           saveDisabled={saveOutcome !== "none"}
@@ -1211,9 +1153,17 @@ export function MeetingDetailView({
           supplemental={editorSupplemental}
           focusRequest={focusRequest}
         />
+      ) : (
+        <ScriptTab transcript={currentTranscriptView} segments={segments} />
       )}
+    </div>
+  );
+
+  const outdatedHelpId = `summary-outdated-${id}`;
+  const summaryPanel = (
+    <div className="space-y-6">
       {currentSummary && (
-        <footer className="space-y-3 border-t border-line pt-5">
+        <div className="space-y-3">
           <div role="group" aria-label="회의록 요약 작업" className="flex flex-wrap items-center gap-2">
             <CopyButton
               text={formatSummaryMarkdown(currentSummary, currentParticipants, {
@@ -1235,11 +1185,11 @@ export function MeetingDetailView({
                 <button
                   ref={summaryEditTriggerRef}
                   type="button"
-                  disabled={editControlDisabled}
+                  disabled={editControlDisabled || editorMode === "summary"}
                   onClick={() => requestEditor("summary")}
                   className={ACTION_CONTROL_CLASS}
                 >
-                  회의록 요약 수정
+                  {editorMode === "summary" ? "회의록 요약 수정 중" : "회의록 요약 수정"}
                 </button>
                 <button
                   ref={summaryGenerationTriggerRef}
@@ -1253,21 +1203,72 @@ export function MeetingDetailView({
               </>
             )}
           </div>
-          {summaryFooterStatus && (
+          {summaryActionStatus && (
             <p role="status" aria-live="polite" className="text-[13px] text-inkSoft">
-              {summaryFooterStatus}
+              {summaryActionStatus}
             </p>
           )}
-        </footer>
+        </div>
+      )}
+      {currentSummaryOutdated && currentSummary && (
+        <div
+          id={outdatedHelpId}
+          role="status"
+          className="rounded-[12px] border border-warn/40 bg-warnBg px-4 py-3"
+        >
+          <p className="text-[13px] font-semibold text-warn">요약 갱신 필요</p>
+          <p className="mt-1 text-[13px] text-ink">
+            전체 스크립트가 변경되었지만 기존 요약은 유지됨
+          </p>
+          <p className="mt-1 text-[12px] text-inkSoft">
+            회의록 요약을 수정하거나 현재 스크립트로 다시 만들 수 있습니다.
+          </p>
+        </div>
+      )}
+      {editorMode === "summary" && confirmed ? (
+        <SummaryEditor
+          id={id}
+          value={summaryDraft}
+          expectedRevision={confirmed.revision}
+          onChange={(value) => {
+            setSummaryDraft(value);
+            if (saveOutcome === "none") setEditorStatus(null);
+          }}
+          onSave={(value) => void saveContent("summary", value)}
+          onCancel={requestEditorCancel}
+          busy={saveStage !== "idle"}
+          saveDisabled={saveOutcome !== "none"}
+          cancelDisabled={saveOutcome === "ambiguous"}
+          status={editorStatus}
+          supplemental={editorSupplemental}
+          focusRequest={focusRequest}
+        />
+      ) : (
+        <SummaryTab summary={currentSummary} />
       )}
     </div>
   );
 
+  const editorTabState = (mode: EditorMode): string | null => {
+    if (editorMode !== mode) return null;
+    if (saveStage === "saving") return "저장 중";
+    if (saveStage === "verifying") return "저장 확인 중";
+    if (saveOutcome === "ambiguous") return "저장 확인 필요";
+    return "수정 중";
+  };
+  const scriptTabState = editorTabState("transcript");
+  const summaryTabState = editorTabState("summary");
   const detailTabs: TabItem<"script" | "summary">[] = [
-    { value: "script", label: "전체 스크립트", content: scriptPanel },
+    {
+      value: "script",
+      label: `전체 스크립트${scriptTabState ? ` · ${scriptTabState}` : ""}`,
+      content: scriptPanel,
+    },
     {
       value: "summary",
-      label: currentSummaryOutdated ? "회의록 요약 · 요약 갱신 필요" : "회의록 요약",
+      label: `회의록 요약${summaryTabState ? ` · ${summaryTabState}` : ""}${
+        currentSummaryOutdated ? " · 요약 갱신 필요" : ""
+      }`,
       content: summaryPanel,
     },
   ];
@@ -1437,14 +1438,23 @@ export function MeetingDetailView({
           </p>
         )}
         {discardRequest && (
-          <div className="mb-4 rounded-[12px] border border-warn/40 bg-warnBg p-3">
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-4 rounded-[12px] border border-warn/40 bg-warnBg p-3"
+          >
             <p className="text-[13px] text-ink">저장하지 않은 수정 내용을 버릴까요?</p>
             <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                ref={continueEditingRef}
+                type="button"
+                onClick={continueCurrentEdit}
+                className={ACTION_CONTROL_CLASS}
+              >
+                계속 수정
+              </button>
               <button type="button" onClick={confirmDiscard} className={PRIMARY_CONTROL_CLASS}>
                 수정 내용 버리기
-              </button>
-              <button type="button" onClick={continueCurrentEdit} className={ACTION_CONTROL_CLASS}>
-                계속 수정
               </button>
             </div>
           </div>
@@ -1715,7 +1725,10 @@ function ScriptTab({
           ))}
         </ul>
       ) : (
-        <div className="whitespace-pre-wrap break-words text-[14px] leading-relaxed text-ink">
+        <div
+          data-confirmed-content="transcript"
+          className="whitespace-pre-wrap break-words text-[14px] leading-relaxed text-ink"
+        >
           {transcript.text}
         </div>
       )}
@@ -1725,11 +1738,21 @@ function ScriptTab({
 
 function SummaryTab({ summary }: { summary: Summary | null }) {
   if (!summary) return <p className="text-[14px] text-inkSoft">아직 요약이 없습니다.</p>;
+  if (summary.body !== undefined) {
+    return (
+      <div
+        data-confirmed-content="summary"
+        className="whitespace-pre-wrap break-words text-[14px] leading-relaxed text-ink"
+      >
+        {summary.body}
+      </div>
+    );
+  }
   const actionLines = summary.actionItems.map((item) => (
     `${item.owner} — ${item.task} (기한: ${item.due})`
   ));
   return (
-    <div className="space-y-6">
+    <div data-confirmed-content="summary" className="space-y-6">
       <div>
         <h3 className="text-[14px] font-bold text-ink">요약</h3>
         <p className="mt-2 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-ink">{summary.oneLine}</p>

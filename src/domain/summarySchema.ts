@@ -13,10 +13,12 @@ export const actionItemSchema = z.object({
 
 const editableText = z.string().trim();
 const editableListItem = z.string().trim().min(1);
+const manualBody = z.string().refine((value) => value.trim().length > 0, {
+  message: "summary body must contain non-whitespace text",
+});
 
-// Exact public/manual-edit projection. Internal canonical fields
-// (title/topicSlug/participants) are deliberately absent and unknown fields
-// fail instead of being silently stripped.
+// Legacy structured editor projection retained while the client migrates to a
+// freeform body. Internal canonical fields are deliberately absent.
 export const editableSummarySchema = z.object({
   oneLine: editableText,
   purpose: editableText,
@@ -31,6 +33,7 @@ export const editableSummarySchema = z.object({
 export const summarySchema = z.object({
   title: z.string(),
   topicSlug: z.string(),
+  body: manualBody.optional(),
   oneLine: z.string(),
   purpose: z.string(),
   participants: z.array(z.string()).default([]),
@@ -40,4 +43,24 @@ export const summarySchema = z.object({
   actionItems: z.array(actionItemSchema),
   risks: z.array(z.string()),
   followups: z.array(z.string()),
+}).superRefine((summary, context) => {
+  if (summary.body === undefined) return;
+
+  const populatedFields = [
+    ...(summary.oneLine.length === 0 ? [] : ["oneLine"]),
+    ...(summary.purpose.length === 0 ? [] : ["purpose"]),
+    ...(summary.highlights.length === 0 ? [] : ["highlights"]),
+    ...(summary.discussion.length === 0 ? [] : ["discussion"]),
+    ...(summary.decisions.length === 0 ? [] : ["decisions"]),
+    ...(summary.actionItems.length === 0 ? [] : ["actionItems"]),
+    ...(summary.risks.length === 0 ? [] : ["risks"]),
+    ...(summary.followups.length === 0 ? [] : ["followups"]),
+  ];
+  for (const field of populatedFields) {
+    context.addIssue({
+      code: "custom",
+      path: [field],
+      message: "manual body cannot coexist with structured summary content",
+    });
+  }
 });

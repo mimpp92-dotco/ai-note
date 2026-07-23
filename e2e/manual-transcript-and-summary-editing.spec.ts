@@ -36,9 +36,12 @@ async function expectMinimumTarget(locator: Locator) {
 
 test("manual transcript and summary editing keeps hierarchy, freshness, and navigation loss explicit", {
   annotation: [
+    { type: "requirement", description: "R1" },
+    { type: "requirement", description: "R2" },
+    { type: "requirement", description: "R3" },
+    { type: "requirement", description: "R5" },
+    { type: "requirement", description: "R6" },
     { type: "requirement", description: "R7" },
-    { type: "requirement", description: "R8" },
-    { type: "requirement", description: "R9" },
   ],
 }, async ({ page }, testInfo) => {
   const {
@@ -79,6 +82,16 @@ test("manual transcript and summary editing keeps hierarchy, freshness, and navi
   await expect(scriptActions.getByRole("button", { name: "전체 스크립트 수정" })).toBeVisible();
   await expect(scriptActions.getByRole("button", { name: "원문에서 스크립트 다시 만들기" })).toBeVisible();
   await expect(scriptActions.getByRole("button")).toHaveCount(3);
+  expect(await scriptActions.getByRole("button").allTextContents()).toEqual([
+    "전체 스크립트 복사",
+    "전체 스크립트 수정",
+    "원문에서 스크립트 다시 만들기",
+  ]);
+  expect(await scriptActions.evaluate((actions) => {
+    const panel = actions.closest('[role="tabpanel"]');
+    const readBody = panel?.querySelector("[data-confirmed-content='transcript']");
+    return Boolean(readBody && (actions.compareDocumentPosition(readBody) & Node.DOCUMENT_POSITION_FOLLOWING));
+  })).toBe(true);
   await expectMinimumTarget(scriptActions.getByRole("button"));
   expect(await page.evaluate(() => (
     document.documentElement.scrollWidth <= document.documentElement.clientWidth
@@ -89,11 +102,28 @@ test("manual transcript and summary editing keeps hierarchy, freshness, and navi
     testInfo.project.name === "desktop-1440" ? "desktop-fresh" : `${testInfo.project.name}-actions-overflow`,
   );
 
-  const transcriptDraft = `수동 저장된 ${testInfo.project.name} 스크립트\n둘째 줄도 그대로 보존됩니다.`;
+  const originalTranscript = await page.locator("[data-confirmed-content='transcript']").textContent();
   await scriptActions.getByRole("button", { name: "전체 스크립트 수정" }).click();
   const transcriptEditor = page.getByRole("textbox", { name: "전체 스크립트" });
   await expect(transcriptEditor).toBeFocused();
+  await expect(page.locator("[data-confirmed-content='transcript']")).toHaveCount(0);
+  await transcriptEditor.fill("취소로 버릴 임시 스크립트");
+  await page.getByRole("button", { name: "수정 취소" }).click();
+  const continueEditing = page.getByRole("button", { name: "계속 수정" });
+  await expect(continueEditing).toBeFocused();
+  await expect(transcriptEditor).toHaveValue("취소로 버릴 임시 스크립트");
+  await page.getByRole("button", { name: "수정 내용 버리기" }).click();
+  await expect(transcriptEditor).toHaveCount(0);
+  await expect(page.locator("[data-confirmed-content='transcript']")).toHaveText(originalTranscript ?? "");
+
+  const transcriptDraft = `수동 저장된 ${testInfo.project.name} 스크립트\n둘째 줄도 그대로 보존됩니다.`;
+  await scriptActions.getByRole("button", { name: "전체 스크립트 수정" }).click();
+  await expect(transcriptEditor).toBeFocused();
   await transcriptEditor.fill(transcriptDraft);
+  await expect(page.getByText(/전체 스크립트 복사와 회의록 다운로드는 마지막으로 확인된 저장 내용을 사용합니다/u))
+    .toBeVisible();
+  await scriptActions.getByRole("button", { name: "전체 스크립트 복사" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(originalTranscript);
   await page.getByRole("button", { name: "전체 스크립트 저장" }).click();
   await expect(transcriptEditor).toHaveCount(0);
   await expect(page.getByText(transcriptDraft, { exact: true })).toBeVisible();
@@ -114,18 +144,32 @@ test("manual transcript and summary editing keeps hierarchy, freshness, and navi
   await expect(summaryActions.getByRole("button", { name: "현재 스크립트로 요약 다시 만들기" })).toBeVisible();
   await expect(summaryActions.getByRole("button")).toHaveCount(3);
   await expect(summaryActions.getByRole("link")).toHaveCount(1);
+  expect(await summaryActions.locator("button, a").allTextContents()).toEqual([
+    "요약 복사",
+    "JSON 다운로드",
+    "회의록 요약 수정",
+    "현재 스크립트로 요약 다시 만들기",
+  ]);
   await expectMinimumTarget(summaryActions.getByRole("button"));
   await expectMinimumTarget(summaryActions.getByRole("link"));
 
-  const editedOneLine = `수동 저장된 ${testInfo.project.name} 요약`;
-  const editedHighlight = "한 항목의 첫 줄\n한 항목의 둘째 줄";
   await summaryActions.getByRole("button", { name: "회의록 요약 수정" }).click();
-  await page.getByRole("textbox", { name: "한 줄 요약" }).fill(editedOneLine);
-  await page.getByRole("textbox", { name: "핵심 1" }).fill(editedHighlight);
+  const summaryEditor = page.getByRole("textbox", { name: "회의록 요약 본문" });
+  const projectedBody = await summaryEditor.inputValue();
+  expect(projectedBody).toContain("요약\n");
+  expect(projectedBody.endsWith("\n")).toBe(false);
+  await expect(page.getByRole("textbox")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: /추가|삭제/u })).toHaveCount(0);
+  const editedSummaryBody = projectedBody
+    .replace(/^요약\n/u, "")
+    .replace("합성 회의에서 수동 편집과 안전한 이탈 보호를 검증한다.", `수동 저장된 ${testInfo.project.name} 요약`);
+  await summaryEditor.fill(editedSummaryBody);
+  await expect(page.getByText(/요약 복사, JSON 다운로드와 회의록 다운로드는 마지막으로 확인된 저장 내용을 사용합니다/u))
+    .toBeVisible();
   await page.getByRole("button", { name: "회의록 요약 저장" }).click();
-  await expect(page.getByRole("textbox", { name: "한 줄 요약" })).toHaveCount(0);
-  await expect(page.getByText(editedOneLine, { exact: true })).toBeVisible();
-  await expect(page.getByText(editedHighlight, { exact: true })).toBeVisible();
+  await expect(summaryEditor).toHaveCount(0);
+  await expect(page.locator("[data-confirmed-content='summary']")).toHaveText(editedSummaryBody);
+  await expect(page.locator("[data-confirmed-content='summary']")).not.toContainText(/^요약$/u);
   await expect(page.getByRole("tab", { name: "회의록 요약", exact: true })).toBeVisible();
   await expect(page.getByText("요약 갱신 필요", { exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: "전체 스크립트", exact: true }).click();

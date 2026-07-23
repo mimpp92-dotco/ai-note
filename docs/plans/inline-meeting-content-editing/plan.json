@@ -1,0 +1,447 @@
+{
+  "schemaVersion": 2,
+  "profile": "balanced-autonomous-v1",
+  "slug": "inline-meeting-content-editing",
+  "sourceRequest": "최근 추가한 회의 상세 수동 편집의 사용성을 개선한다. 두 탭의 로컬 작업 버튼을 탭 바로 아래로 옮기고, 전체 스크립트와 회의록 요약을 수정할 때 읽기 본문 자체를 하나의 textarea로 전환한다. 요약 수동 수정은 섹션 제목까지 삭제할 수 있는 자유 plain-text 본문을 canonical summary에 저장하며 화면·내보내기·검색이 같은 내용을 사용한다. 최종 UX 검수에서 변환 형식, 입력 한도, 저장본과 draft 구분, 탭 전환과 오류별 복구 행동도 결정적으로 고정한다.",
+  "publishStrategy": "single-pr",
+  "base": {
+    "ref": "main",
+    "sha": "1a097292f3b2bacc300b169cddef12822c7cba44"
+  },
+  "workspace": {
+    "mode": "task-worktree-v1",
+    "branch": "execute/inline-meeting-content-editing"
+  },
+  "executionPrerequisites": {
+    "noSelfMutationOfRunningProcess": true,
+    "realModelCallsInTests": false,
+    "networkCallsInTests": false
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "전체 스크립트와 회의록 요약의 탭 전용 작업 버튼을 선택된 탭 바로 아래로 이동한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "선택된 tabpanel의 첫 content group은 해당 탭의 로컬 작업이며 경고와 본문보다 앞선다.",
+        "스크립트는 복사, 수정, 원문에서 다시 만들기 순서이고 요약은 복사, JSON 다운로드, 수정, 현재 스크립트로 다시 만들기 순서다.",
+        "상단 회의 작업과 반대 탭 action은 변하지 않고 320px에서도 horizontal overflow 없이 44px target을 유지한다."
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "전체 스크립트 수정은 읽기 본문 아래에 editor를 추가하지 않고 본문 자체를 하나의 textarea로 전환한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "수정 중에는 저장된 ScriptTab 본문과 textarea가 동시에 렌더되지 않는다.",
+        "취소 또는 확인된 discard 뒤에는 confirmed 스크립트 본문이 복원된다.",
+        "LF, non-empty, UTF-8 1 MiB, save probe, conflict와 focus 계약은 유지된다."
+      ]
+    },
+    {
+      "id": "R3",
+      "text": "회의록 요약 수정은 필드·항목별 form 대신 읽기 본문 전체를 하나의 자유 plain-text textarea로 전환한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "oneLine, purpose, 목록, action item별 input과 추가·삭제 control이 사라지고 단일 요약 본문 textarea만 제공된다.",
+        "구조화 요약은 현재 읽기 순서와 같은 heading, bullet, action-item 표기 및 빈 섹션 생략 규칙을 가진 결정적 plain-text body로 편집을 시작한다.",
+        "projection은 요약(oneLine 뒤 highlights), 목적, 논의 내용, 결정 사항, 액션 아이템, 리스크, 후속 확인 순서이며 block 사이 LF 두 개와 trailing LF 없음이 고정된다.",
+        "본문 내 모든 섹션 제목은 일반 텍스트라 삭제 가능하고 저장·취소·재편집에서 본문이 손실되지 않는다.",
+        "회의 표시 제목, topicSlug, participants는 editor에 포함되지 않는다."
+      ]
+    },
+    {
+      "id": "R4",
+      "text": "수동 요약 자유 본문을 canonical summary와 모든 관련 consumer에서 하나의 현재 내용으로 취급한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "legacy structured summary는 migration 없이 읽고 manual summary는 optional body를 사용한다.",
+        "body가 있는 canonical summary는 title, topicSlug, participants 외 structured editable field가 모두 비어 있어야 하며 ambiguous dual truth는 schema에서 거부한다.",
+        "수동 save는 title, topicSlug, participants를 보존하고 structured editable field를 비워 dual truth를 만들지 않는다.",
+        "body는 CRLF만 LF로 정규화하고 whitespace-only를 거부하며 existing 512 KiB route cap 안에서 exact expected revision으로 저장한다.",
+        "summary regeneration은 body 없는 새 structured summary로 교체한다.",
+        "detail, copy, Markdown, JSON, knowledge card, search와 chat evidence는 body를 현재 요약 내용으로 사용한다.",
+        "일반 검색은 body를 회의록 본문으로 찾되 freeform text에서 structured action item을 추론하지 않는다."
+      ]
+    },
+    {
+      "id": "R5",
+      "text": "기존 full-pair 저장, freshness, 충돌 복구, navigation guard와 접근성 계약을 보존한다.",
+      "source": "repository-contract",
+      "acceptance": [
+        "summarizePublisher 외 canonical writer를 추가하지 않고 immutable audio, raw, segments를 수정하지 않는다.",
+        "expected pair revision, operation lease, durable attempt, transcript-first summary-last 발행과 read-only save probe를 유지한다.",
+        "transcript 변경은 summary를 outdated로 보존하고 summary 직접 저장 또는 재생성만 fresh로 만든다.",
+        "dirty, saving, verifying navigation과 editor 간 discard 확인, conflict와 ambiguous draft copy/recovery를 유지한다.",
+        "copy와 download는 열린 draft가 아니라 confirmed 저장 내용을 사용하고 editor가 열렸을 때 그 차이를 action status로 알린다."
+      ]
+    },
+    {
+      "id": "R6",
+      "text": "정본 문서와 isolated synthetic browser 회귀를 새 action 위치와 자유 본문 계약에 맞춘다.",
+      "source": "user-approved",
+      "acceptance": [
+        "README, PRD, ARCHITECTURE, UI_GUIDE, AGENTS, src/CLAUDE와 ADR 목록이 최종 동작을 설명한다.",
+        "신규 ADR 0022가 ADR 0021의 footer와 structured summary editor 결정을 부분 대체한다.",
+        "desktop-1440, mobile-390, mobile-320에서 action 위치, 본문 교체, 제목 삭제, confirmed-copy 안내, discard 안전 초점, cancel 복원, save/freshness와 overflow를 synthetic data로 검증한다.",
+        "browser evidence는 screenshots, assertions, console과 manifest를 남기고 실제 사용자 data와 외부 network를 사용하지 않는다."
+      ]
+    },
+    {
+      "id": "R7",
+      "text": "단일 본문 편집의 입력 한도, 탭 문맥과 저장 오류별 복구 행동을 데이터 손실 없이 명확하게 만든다.",
+      "source": "user-approved",
+      "acceptance": [
+        "summary editor는 whitespace-only와 실제 serialized PATCH body 512 KiB 초과를 network 전에 막고 UTF-8 byte 정보, 구체적 오류와 textarea focus를 제공한다.",
+        "편집 탭을 잠시 벗어나도 owning tab이 idle/error의 수정 중, saving, verifying, ambiguous 상태를 구분해 표시하고 exact draft와 summary outdated token을 유지한다.",
+        "열린 editor의 수정 action은 silent no-op이 아니고 action status는 복사와 다운로드가 마지막 confirmed 저장본을 사용함을 설명한다.",
+        "validation 또는 413, meeting missing/deleted, operation in progress, revision conflict, source/ambiguous state, network 또는 invalid success를 구분해 exact draft와 안전한 copy/reload/retry 행동을 제공한다.",
+        "dirty cancel과 editor 전환 확인은 계속 수정을 먼저 제시하고 그 control로 focus와 announcement를 옮기며 discard 전에는 draft를 바꾸지 않는다."
+      ]
+    }
+  ],
+  "globalConstraints": {
+    "noUnplannedWork": true,
+    "noOpportunisticRefactor": true,
+    "noRealUserData": true
+  },
+  "forbiddenPaths": [
+    "data/**",
+    ".env*",
+    "glossary.json",
+    "whisper/**",
+    "fixtures/**",
+    "package.json",
+    "package-lock.json",
+    "scripts/**",
+    "src/services/**",
+    "src/lib/summarizePublisher.ts",
+    "src/lib/artifactPair.ts",
+    "src/components/Tabs.tsx",
+    "src/components/RecorderSessionProvider.tsx",
+    "docs/plans/manual-transcript-and-summary-editing/**",
+    "docs/decisions/0021-manual-transcript-and-summary-editing.md"
+  ],
+  "browserEvidence": {
+    "mode": "playwright",
+    "preflightCommand": "npm run test:e2e:doctor",
+    "verifyCommand": "npm run test:e2e",
+    "requiredArtifacts": [
+      "screenshots",
+      "assertions",
+      "console"
+    ],
+    "viewports": [
+      "desktop-1440",
+      "mobile-390",
+      "mobile-320"
+    ],
+    "dataPolicy": "synthetic-only"
+  },
+  "phases": [
+    {
+      "id": 1,
+      "name": "freeform-summary-contract",
+      "file": "phase-1-freeform-summary-contract.md",
+      "requirements": [
+        "R3",
+        "R4",
+        "R5",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0013-durable-summarize-pair-publication.md",
+        "docs/decisions/0021-manual-transcript-and-summary-editing.md",
+        "src/domain/summary.ts",
+        "src/domain/summarySchema.ts",
+        "src/lib/artifactPair.ts",
+        "src/lib/manualMeetingContent.ts",
+        "src/lib/summarizePublisher.ts",
+        "src/app/api/meetings/*/content/route.ts",
+        "src/app/api/meetings/*/summary/route.ts",
+        "src/domain/__tests__/summarySchema.test.ts",
+        "src/lib/__tests__/manualMeetingContent.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "allowedPaths": [
+        "src/domain/summary.ts",
+        "src/domain/summarySchema.ts",
+        "src/lib/summaryBody.ts",
+        "src/lib/manualMeetingContent.ts",
+        "src/domain/__tests__/summarySchema.test.ts",
+        "src/lib/__tests__/manualMeetingContent.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "critical",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- src/domain/__tests__/summarySchema.test.ts src/lib/__tests__/manualMeetingContent.test.ts src/app/api/__tests__/routes.integration.test.ts",
+        "additionalCommands": [
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "canonical summary shape와 durable manual-save API가 바뀌므로 legacy read, deterministic projection, dual-truth rejection, exact body write와 full-pair preservation을 실패 테스트로 먼저 고정한다."
+      },
+      "blockIf": [
+        "표시 제목, topicSlug 또는 participants를 summary editor writer로 옮겨야 하면 중단",
+        "manual body와 non-empty structured editable content를 동시에 current truth로 남겨야 하면 중단",
+        "summarizePublisher 밖에서 canonical transcript.md 또는 summary.json을 써야 하면 중단",
+        "raw.md, segments.json 또는 audio artifact를 수정해야 하면 중단",
+        "expected pair revision이나 read-only save probe를 약화해야 하면 중단",
+        "API route cap, provider, prompt 또는 dependency 변경이 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "src/lib/summaryBody.ts"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "freeform-summary-consumers",
+      "file": "phase-2-freeform-summary-consumers.md",
+      "requirements": [
+        "R4",
+        "R5"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0018-meeting-knowledge-index-and-chatbot.md",
+        "docs/decisions/0021-manual-transcript-and-summary-editing.md",
+        "src/domain/summarySchema.ts",
+        "src/domain/knowledge.ts",
+        "src/lib/summaryBody.ts",
+        "src/lib/summaryMarkdown.ts",
+        "src/lib/knowledgeIndex.ts",
+        "src/lib/knowledgeIndexRepository.ts",
+        "src/lib/meetingSearch.ts",
+        "src/lib/chatTools.ts",
+        "src/app/api/meetings/*/export/route.ts",
+        "src/domain/__tests__/knowledge.test.ts",
+        "src/lib/__tests__/summaryMarkdown.test.ts",
+        "src/lib/__tests__/knowledgeIndex.test.ts",
+        "src/lib/__tests__/knowledgeIndexRepository.test.ts",
+        "src/lib/__tests__/meetingSearch.test.ts",
+        "src/lib/__tests__/chatTools.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "allowedPaths": [
+        "src/domain/knowledge.ts",
+        "src/lib/summaryMarkdown.ts",
+        "src/lib/knowledgeIndex.ts",
+        "src/lib/meetingSearch.ts",
+        "src/lib/chatTools.ts",
+        "src/domain/__tests__/knowledge.test.ts",
+        "src/lib/__tests__/summaryMarkdown.test.ts",
+        "src/lib/__tests__/knowledgeIndex.test.ts",
+        "src/lib/__tests__/knowledgeIndexRepository.test.ts",
+        "src/lib/__tests__/meetingSearch.test.ts",
+        "src/lib/__tests__/chatTools.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- src/domain/__tests__/knowledge.test.ts src/lib/__tests__/summaryMarkdown.test.ts src/lib/__tests__/knowledgeIndex.test.ts src/lib/__tests__/knowledgeIndexRepository.test.ts src/lib/__tests__/meetingSearch.test.ts src/lib/__tests__/chatTools.test.ts src/app/api/__tests__/routes.integration.test.ts",
+        "additionalCommands": [
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "자유 본문이 copy, export, 파생 index, 일반 검색과 evidence에서 숨은 structured data 없이 동일하게 소비되는지 consumer별 TDD가 필요하다."
+      },
+      "blockIf": [
+        "기존 body 없는 knowledge-card v1 또는 corpus-map v1을 corrupt로 낮춰야 하면 중단",
+        "manual body에 없는 action item, owner, due 또는 section을 추론해야 하면 중단",
+        "JSON export가 화면과 다른 숨은 structured summary를 current content로 노출해야 하면 중단",
+        "outdated summary를 fresh search 또는 chat evidence로 취급해야 하면 중단",
+        "전체 transcript를 일반 검색에 추가해야 하면 중단",
+        "새 model call, 외부 network 또는 dependency가 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "inline-editors-and-action-bar",
+      "file": "phase-3-inline-editors-and-action-bar.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/UI_GUIDE.md",
+        "src/lib/summaryBody.ts",
+        "src/components/Tabs.tsx",
+        "src/components/CopyButton.tsx",
+        "src/components/MeetingContentEditors.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/RecorderSessionProvider.tsx",
+        "src/components/__tests__/MeetingContentEditors.test.tsx",
+        "src/components/__tests__/views.test.tsx",
+        "e2e/manual-transcript-and-summary-editing.spec.ts"
+      ],
+      "allowedPaths": [
+        "src/components/MeetingContentEditors.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/__tests__/MeetingContentEditors.test.tsx",
+        "src/components/__tests__/views.test.tsx",
+        "e2e/manual-transcript-and-summary-editing.spec.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- src/components/__tests__/MeetingContentEditors.test.tsx src/components/__tests__/views.test.tsx",
+        "additionalCommands": [
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "DOM 순서, mutually exclusive read/edit surface, single summary textarea, confirmed-copy disclosure, byte-cap validation, error recovery, focus와 navigation guard를 RTL 실패 테스트로 먼저 고정한다."
+      },
+      "blockIf": [
+        "Tabs shared primitive 또는 RecorderSessionProvider를 수정해야 하면 중단",
+        "읽기 본문과 editor를 동시에 렌더해야 하면 중단",
+        "summary field별 input, add/delete control 또는 hidden parser를 유지해야 하면 중단",
+        "contenteditable, rich text, Markdown renderer 또는 새 dependency가 필요하면 중단",
+        "dirty cancel과 navigation guard를 제거하거나 saving/verifying discard를 허용해야 하면 중단",
+        "copy 또는 download가 confirmed content 대신 unsaved draft를 사용해야 하면 중단",
+        "열린 draft나 저장 판정 상태를 tab 전환 뒤 표시 없이 숨겨야 하면 중단",
+        "입력 한도 또는 오류 복구를 위해 PATCH blind retry나 draft discard가 필요하면 중단",
+        "실제 사용자 data로 UI fixture를 만들어야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "docs-and-adr",
+      "file": "phase-4-docs-and-adr.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "README.md",
+        "src/CLAUDE.md",
+        "docs/PRD.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/README.md",
+        "docs/decisions/0021-manual-transcript-and-summary-editing.md",
+        "src/domain/summarySchema.ts",
+        "src/lib/summaryBody.ts",
+        "src/components/MeetingDetailView.tsx",
+        "src/lib/knowledgeIndex.ts",
+        "src/lib/meetingSearch.ts"
+      ],
+      "allowedPaths": [
+        "README.md",
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/PRD.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/README.md",
+        "docs/decisions/0022-inline-freeform-meeting-content-editing.md"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "low",
+      "verification": {
+        "testMode": "exempt",
+        "additionalCommands": [
+          "npm run check:links"
+        ],
+        "evidence": [],
+        "reason": "이 phase는 검증된 동작을 정본과 신규 ADR에 반영하는 문서 전용 변경이며 코드 테스트를 소유하지 않는다."
+      },
+      "blockIf": [
+        "코드와 테스트가 확정하지 않은 behavior를 문서화해야 하면 중단",
+        "historical ADR 0021을 재작성하거나 삭제해야 하면 중단",
+        "새 ADR이 pair publisher, title writer 또는 participant writer를 대체해야 하면 중단",
+        "문서 링크를 살리기 위해 제품 경로를 바꿔야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "docs/decisions/0022-inline-freeform-meeting-content-editing.md"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "synthetic-browser-verification",
+      "file": "phase-5-synthetic-browser-verification.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "package.json",
+        "playwright.config.ts",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "docs/decisions/0022-inline-freeform-meeting-content-editing.md",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "scripts/run-e2e.mjs",
+        "scripts/e2e-manual-editing-fixture.mjs",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/support/synthetic-test.ts",
+        "e2e/support/evidence-reporter.ts",
+        "src/lib/summaryBody.ts",
+        "src/components/MeetingContentEditors.tsx",
+        "src/components/MeetingDetailView.tsx"
+      ],
+      "allowedPaths": [],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "verification": {
+        "testMode": "exempt",
+        "additionalCommands": [
+          "npm run test:e2e"
+        ],
+        "evidence": [
+          "browser"
+        ],
+        "reason": "제품 수정 없이 committed synthetic scenario를 pinned Chromium의 세 viewport에서 실행하고 repository-owned evidence contract만 검증한다."
+      },
+      "blockIf": [
+        "npm run test:e2e:doctor가 pinned package와 matching Chromium을 확인하지 못하면 중단",
+        "workspace data, glossary, env secret 또는 Git metadata를 snapshot에 포함해야 하면 중단",
+        "실제 Whisper, LLM, CLI provider 또는 외부 network를 호출해야 하면 중단",
+        "desktop-1440, mobile-390, mobile-320 중 하나라도 실행할 수 없으면 중단",
+        "action bar DOM 순서, read/edit mutual exclusion, body title 삭제, confirmed-copy 안내, discard 안전 초점, cancel 복원, save/freshness 또는 overflow assertion이 실패하면 중단",
+        "console error, page error, external request 또는 required artifact 누락이 있으면 중단",
+        "검증 전후 제품 tree가 달라지면 중단"
+      ],
+      "executionMode": "verify-only",
+      "requiresBrowser": true,
+      "dataPolicy": "synthetic-only"
+    }
+  ],
+  "finalGate": [
+    "npm test",
+    "npm run typecheck",
+    "npm run lint",
+    "npm run check:links",
+    "npm run build"
+  ]
+}

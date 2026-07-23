@@ -15,6 +15,7 @@ import { SettingsForm } from "@/components/SettingsForm";
 import type { LlmHealthState } from "@/components/healthStatus";
 import type { StatusJson } from "@/domain/meeting";
 import type { Summary } from "@/domain/summary";
+import { summaryBodyFromSummary } from "@/lib/summaryBody";
 
 // next/link needs the app-router context at runtime; a plain anchor is enough here.
 vi.mock("next/link", () => ({
@@ -87,23 +88,10 @@ function stableContent(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function editableSummary(summary: Summary = SUMMARY) {
-  return {
-    oneLine: summary.oneLine,
-    purpose: summary.purpose,
-    highlights: [...summary.highlights],
-    discussion: [...summary.discussion],
-    decisions: [...summary.decisions],
-    actionItems: summary.actionItems.map((item) => ({ ...item })),
-    risks: [...summary.risks],
-    followups: [...summary.followups],
-  };
-}
-
 function contentResource(overrides: Record<string, unknown> = {}) {
   return {
     transcript: "본문",
-    summary: editableSummary(),
+    summaryBody: summaryBodyFromSummary(SUMMARY),
     revision: PAIR_REVISION,
     transcriptSource: "generated",
     summarySource: "generated",
@@ -1097,7 +1085,7 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
     viewNavigation.back.mockReset();
   });
 
-  it("global에는 이동·폴더·combined Markdown만, 각 content action은 해당 tab footer에만 둔다", () => {
+  it("global action은 유지하고 active tab의 local action을 warning/read body보다 먼저 둔다", () => {
     render(
       <MeetingDetailView
         id="m1"
@@ -1123,13 +1111,86 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
     expect(within(script).getByRole("button", { name: "전체 스크립트 복사" })).toBeInTheDocument();
     expect(within(script).getByRole("button", { name: "전체 스크립트 수정" })).toBeInTheDocument();
     expect(within(script).getByRole("button", { name: "원문에서 스크립트 다시 만들기" })).toBeInTheDocument();
+    expect(within(script).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "전체 스크립트 복사",
+      "전체 스크립트 수정",
+      "원문에서 스크립트 다시 만들기",
+    ]);
+    expect(script.compareDocumentPosition(screen.getByText("본문")) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "회의록 요약" }));
-    const summary = screen.getByRole("group", { name: "회의록 요약 작업" });
-    expect(within(summary).getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
-    expect(within(summary).getByRole("link", { name: "JSON 다운로드" })).toBeInTheDocument();
-    expect(within(summary).getByRole("button", { name: "회의록 요약 수정" })).toBeInTheDocument();
-    expect(within(summary).getByRole("button", { name: "현재 스크립트로 요약 다시 만들기" })).toBeInTheDocument();
+    const summaryActions = screen.getByRole("group", { name: "회의록 요약 작업" });
+    expect(within(summaryActions).getByRole("button", { name: "요약 복사" })).toBeInTheDocument();
+    expect(within(summaryActions).getByRole("link", { name: "JSON 다운로드" })).toBeInTheDocument();
+    expect(within(summaryActions).getByRole("button", { name: "회의록 요약 수정" })).toBeInTheDocument();
+    expect(within(summaryActions).getByRole("button", { name: "현재 스크립트로 요약 다시 만들기" })).toBeInTheDocument();
+    expect(Array.from(summaryActions.querySelectorAll("button, a"))
+      .map((control) => control.textContent)).toEqual([
+      "요약 복사",
+      "JSON 다운로드",
+      "회의록 요약 수정",
+      "현재 스크립트로 요약 다시 만들기",
+    ]);
+    expect(summaryActions.compareDocumentPosition(screen.getByText("한 줄 요약입니다."))
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("read body를 textarea로 교체하고 confirmed action scope와 owning tab state를 유지한다", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 수정" }));
+    const editor = screen.getByRole("textbox", { name: "전체 스크립트" });
+    expect(document.querySelector("[data-confirmed-content='transcript']")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("textbox", { name: "전체 스크립트" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "전체 스크립트 수정 중" })).toBeDisabled();
+    expect(screen.getByText(/전체 스크립트 복사와 회의록 다운로드는 마지막으로 확인된 저장 내용을 사용합니다/))
+      .toBeInTheDocument();
+    fireEvent.change(editor, { target: { value: "저장하지 않은 초안" } });
+    fireEvent.click(screen.getByRole("button", { name: "전체 스크립트 복사" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("본문"));
+
+    fireEvent.click(screen.getByRole("tab", { name: "회의록 요약" }));
+    expect(screen.getByRole("tab", { name: "전체 스크립트 · 수정 중" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "전체 스크립트 · 수정 중" }));
+    expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveValue("저장하지 않은 초안");
+  });
+
+  it("summary editor는 deterministic projection 하나만 렌더하고 read summary와 mutually exclusive하다", () => {
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+        initialTab="summary"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "회의록 요약 수정" }));
+    const textarea = screen.getByRole("textbox", { name: "회의록 요약 본문" });
+    expect(textarea).toHaveValue(summaryBodyFromSummary(SUMMARY));
+    expect(screen.getAllByRole("textbox", { name: "회의록 요약 본문" })).toHaveLength(1);
+    expect(screen.queryByRole("textbox", { name: /한 줄 요약|목적|핵심|담당자|할 일|기한/ }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText("한 줄 요약입니다.")).not.toBeInTheDocument();
+    expect((textarea as HTMLTextAreaElement).value).not.toContain(SUMMARY.title);
+    expect((textarea as HTMLTextAreaElement).value).not.toContain(SUMMARY.topicSlug);
   });
 
   it("dirty editor에서 다른 탭 editor를 열면 현재 탭에 discard 확인을 보이고 계속 수정 focus를 복구한다", () => {
@@ -1158,8 +1219,12 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
     expect(screen.getByText("저장하지 않은 수정 내용을 버릴까요?")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "수정 내용이 저장되지 않았습니다" }))
       .not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "계속 수정" }));
-    expect(screen.getByRole("tab", { name: "전체 스크립트" })).toHaveAttribute("aria-selected", "true");
+    const continueEditing = screen.getByRole("button", { name: "계속 수정" });
+    const discard = screen.getByRole("button", { name: "수정 내용 버리기" });
+    expect(continueEditing).toHaveFocus();
+    expect(continueEditing.compareDocumentPosition(discard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(continueEditing);
+    expect(screen.getByRole("tab", { name: /전체 스크립트/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveValue("저장하지 않은 스크립트");
     expect(screen.getByRole("textbox", { name: "전체 스크립트" })).toHaveFocus();
 
@@ -1167,7 +1232,7 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
     fireEvent.click(screen.getByRole("button", { name: "회의록 요약 수정" }));
     fireEvent.click(screen.getByRole("button", { name: "수정 내용 버리기" }));
     expect(screen.queryByRole("textbox", { name: "전체 스크립트" })).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "한 줄 요약" })).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "회의록 요약 본문" })).toHaveFocus();
   });
 
   it("registers a dirty detail editor guard, preserves the draft on cancel, and unregisters on unmount", async () => {
@@ -1253,7 +1318,7 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
       if (String(input) === "/api/meetings/m1/content") {
         return new Response(JSON.stringify({
           transcript: "본문",
-          summary: editableSummary(),
+          summaryBody: summaryBodyFromSummary(SUMMARY),
           revision: PAIR_REVISION,
           transcriptSource: "generated",
           summarySource: "generated",
@@ -1303,7 +1368,7 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
       if (String(input) === "/api/meetings/m1/content") {
         return new Response(JSON.stringify(contentResource({
           transcript: "확인된 새 본문",
-          summary: editableSummary(thirdSummary),
+          summaryBody: summaryBodyFromSummary(thirdSummary),
           revision: thirdRevision,
           transcriptSource: "manual",
           summarySource: "manual",
@@ -1420,7 +1485,7 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
       if (url === "/api/meetings/m1/transcript") {
         return new Response(JSON.stringify({
           transcript: "수정한\n본문",
-          summary: editableSummary(),
+          summaryBody: summaryBodyFromSummary(SUMMARY),
           revision: nextRevision,
           transcriptSource: "manual",
           summarySource: "generated",
@@ -1466,21 +1531,12 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
     await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("수정한\n본문"));
   });
 
-  it("summary PATCH는 모든 editable field와 multiline item만 보내고 view·copy freshness를 즉시 갱신한다", async () => {
+  it("summary section heading을 삭제한 자유 본문을 exact PATCH하고 view·copy freshness를 즉시 갱신한다", async () => {
     const nextRevision = {
       transcriptSha256: PAIR_REVISION.transcriptSha256,
       summarySha256: "d".repeat(64),
     };
-    const nextSummary = {
-      oneLine: "새 한 줄 요약",
-      purpose: "새 목적",
-      highlights: ["여러 줄 핵심\n둘째 줄", "추가 핵심"],
-      discussion: ["새 논의"],
-      decisions: ["새 결정"],
-      actionItems: [{ owner: "지훈", task: "검토", due: "2026-07-22" }],
-      risks: ["새 리스크"],
-      followups: ["새 후속"],
-    };
+    const nextBody = "제목을 삭제한 자유 본문  \n\n- 여러 줄 핵심\n둘째 줄";
     const writeText = vi.fn().mockResolvedValue(undefined);
     stubClipboard(writeText);
     let summaryRequest: RequestInit | undefined;
@@ -1489,7 +1545,7 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
         summaryRequest = init;
         return new Response(JSON.stringify({
           transcript: "본문",
-          summary: nextSummary,
+          summaryBody: nextBody,
           revision: nextRevision,
           transcriptSource: "generated",
           summarySource: "manual",
@@ -1515,55 +1571,110 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
     );
 
     fireEvent.click(screen.getByRole("button", { name: "회의록 요약 수정" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "한 줄 요약" }), {
-      target: { value: nextSummary.oneLine },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "목적" }), {
-      target: { value: nextSummary.purpose },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "핵심 1" }), {
-      target: { value: nextSummary.highlights[0] },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "핵심 추가" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "핵심 2" }), {
-      target: { value: nextSummary.highlights[1] },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "논의 내용 1" }), {
-      target: { value: nextSummary.discussion[0] },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "결정 사항 1" }), {
-      target: { value: nextSummary.decisions[0] },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "액션 아이템 1 담당자" }), {
-      target: { value: nextSummary.actionItems[0].owner },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "액션 아이템 1 할 일" }), {
-      target: { value: nextSummary.actionItems[0].task },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "액션 아이템 1 기한" }), {
-      target: { value: nextSummary.actionItems[0].due },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "리스크 1" }), {
-      target: { value: nextSummary.risks[0] },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "후속 확인 1" }), {
-      target: { value: nextSummary.followups[0] },
+    fireEvent.change(screen.getByRole("textbox", { name: "회의록 요약 본문" }), {
+      target: { value: nextBody },
     });
     fireEvent.click(screen.getByRole("button", { name: "회의록 요약 저장" }));
 
-    await waitFor(() => expect(screen.getByText("새 한 줄 요약")).toBeInTheDocument());
+    await waitFor(() => expect(
+      document.querySelector("[data-confirmed-content='summary']")?.textContent,
+    ).toBe(nextBody));
     const body = JSON.parse(String(summaryRequest?.body));
-    expect(body).toEqual({ expectedRevision: PAIR_REVISION, summary: nextSummary });
-    expect(body.summary).not.toHaveProperty("title");
-    expect(body.summary).not.toHaveProperty("topicSlug");
-    expect(body.summary).not.toHaveProperty("participants");
+    expect(body).toEqual({ expectedRevision: PAIR_REVISION, body: nextBody });
     expect(screen.getByRole("tab", { name: "회의록 요약" })).toBeInTheDocument();
     expect(screen.queryByText("요약 갱신 필요")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "요약 복사" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
-    expect(writeText.mock.calls.at(-1)?.[0]).toContain("새 한 줄 요약");
-    expect(writeText.mock.calls.at(-1)?.[0]).toContain("여러 줄 핵심\n둘째 줄");
+    expect(writeText.mock.calls.at(-1)?.[0]).toContain(nextBody);
+    expect(writeText.mock.calls.at(-1)?.[0]).not.toContain("## 핵심");
+  });
+
+  it.each([
+    {
+      label: "413",
+      status: 413,
+      code: "invalid_request",
+      details: undefined,
+      message: /512 KiB 한도를 넘었습니다/,
+      locked: false,
+    },
+    {
+      label: "meeting missing",
+      status: 404,
+      code: "meeting_not_found",
+      details: undefined,
+      message: /회의가 없거나 삭제되어 더 이상 저장할 수 없습니다/,
+      locked: true,
+    },
+    {
+      label: "operation in progress",
+      status: 409,
+      code: "content_operation_in_progress",
+      details: { operation: "manual_edit" },
+      message: /내용 저장 중에는 저장할 수 없습니다/,
+      locked: false,
+    },
+    {
+      label: "source ambiguous",
+      status: 409,
+      code: "content_source_conflict",
+      details: undefined,
+      message: /저장 가능한 content pair를 확인할 수 없습니다/,
+      locked: true,
+    },
+  ])("$label refusal은 exact summary draft와 구분된 recovery를 유지한다", async ({
+    status: responseStatus,
+    code,
+    details,
+    message,
+    locked,
+  }) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/meetings/m1/summary") {
+        return new Response(JSON.stringify({
+          error: {
+            code,
+            ...(details ? { details } : {}),
+          },
+        }), {
+          status: responseStatus,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({ status: "summarized" })}
+        transcript={{ text: "본문", corrected: true }}
+        segments={[]}
+        summary={SUMMARY}
+        hasAudio={false}
+        content={stableContent()}
+        initialTab="summary"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "회의록 요약 수정" }));
+    const textarea = screen.getByRole("textbox", { name: "회의록 요약 본문" });
+    fireEvent.change(textarea, { target: { value: "보존할 exact summary draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "회의록 요약 저장" }));
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(textarea).toHaveValue("보존할 exact summary draft");
+    expect(textarea).toHaveFocus();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/meetings/m1/summary"))
+      .toHaveLength(1);
+    const save = screen.getByRole("button", { name: "회의록 요약 저장" });
+    if (locked) {
+      expect(save).toBeDisabled();
+      expect(screen.getByRole("button", { name: "내 입력 복사" })).toBeInTheDocument();
+    } else {
+      expect(save).toBeEnabled();
+    }
   });
 
   it("network 오류는 확정 실패나 PATCH 재전송 대신 한 번 GET probe해 intended save를 확정한다", async () => {
@@ -1579,7 +1690,7 @@ describe("MeetingDetailView — content action hierarchy and manual editing", ()
       if (url === "/api/meetings/m1/content") {
         return new Response(JSON.stringify({
           transcript: "probe로 확인한 본문",
-          summary: editableSummary(),
+          summaryBody: summaryBodyFromSummary(SUMMARY),
           revision: nextRevision,
           transcriptSource: "manual",
           summarySource: "generated",
