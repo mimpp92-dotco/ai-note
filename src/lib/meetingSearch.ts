@@ -36,6 +36,7 @@ export const SEARCH_FIELD_WEIGHTS = {
   title: 120,
   topic: 100,
   oneLine: 90,
+  body: 85,
   highlights: 80,
   decisions: 75,
   actionItems: 70,
@@ -58,6 +59,7 @@ const SEARCH_FIELD_LABELS: Record<SearchField, string> = {
   title: "제목",
   topic: "주제",
   oneLine: "한 줄 요약",
+  body: "회의록 본문",
   highlights: "핵심 내용",
   decisions: "결정",
   actionItems: "할 일",
@@ -357,6 +359,7 @@ function searchableFields(
     ...metadata,
     field("topic", [semanticCard.content.purpose]),
     field("oneLine", [semanticCard.content.oneLine]),
+    field("body", semanticCard.content.body === undefined ? [] : [semanticCard.content.body]),
     field("highlights", semanticCard.content.highlights),
     field("decisions", semanticCard.content.decisions),
     field("actionItems", semanticCard.actionItems.map((item) => (

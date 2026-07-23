@@ -189,6 +189,7 @@ describe("deterministic meeting search", () => {
       title: 120,
       topic: 100,
       oneLine: 90,
+      body: 85,
       highlights: 80,
       decisions: 75,
       actionItems: 70,
@@ -235,6 +236,55 @@ describe("deterministic meeting search", () => {
     }));
     expect(tieResult.results.map((item) => item.meetingId))
       .toEqual(["tie-new", "tie-a", "tie-b"]);
+  });
+
+  it("searches a manual body as 회의록 본문 without inferring action-item filters", async () => {
+    const body = "직접 만든 제목\n\n- 오로라 배포 담당: 민수\n\n마지막 문단";
+    const manual = card("manual", {
+      content: {
+        oneLine: "",
+        purpose: "",
+        highlights: [],
+        discussion: [],
+        decisions: [],
+        risks: [],
+        followups: [],
+        body,
+      },
+      actionItems: [],
+      mentionedPeople: [],
+    });
+    const corpusProjection = {
+      meetingId: "manual",
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      mentionedPeople: [],
+      body,
+    };
+    const sources = () => makeSources({
+      corpusRead: {
+        mode: "ready",
+        corpusMap: { schemaVersion: 1, cards: [corpusProjection] },
+      },
+      cards: { manual: { mode: "ready", card: manual } },
+      snapshots: [snapshot([live("manual")])],
+    });
+
+    const result = await searchMeetings({ query: "오로라 배포" }, sources());
+    expect(result.results[0].matches).toContainEqual({
+      field: "body",
+      label: "회의록 본문",
+      excerpt: expect.stringContaining("오로라 배포"),
+    });
+    await expect(searchMeetings({
+      query: "오로라",
+      filters: { hasActionItem: true },
+    }, sources())).resolves.toMatchObject({ results: [] });
+    await expect(searchMeetings({
+      query: "오로라",
+      filters: { hasActionItem: false },
+    }, sources())).resolves.toMatchObject({ results: [{ meetingId: "manual" }] });
   });
 
   it("returns at most three weighted plain-text reasons with 180-character excerpts", async () => {

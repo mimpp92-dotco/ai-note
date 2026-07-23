@@ -30,6 +30,7 @@ export interface BuildKnowledgeCardInput {
 const CORPUS_LIMITS = {
   oneLineCharacters: 500,
   purposeCharacters: 1_000,
+  bodyCharacters: 4_000,
   highlightCount: 8,
   highlightCharacters: 500,
   mentionedPeopleCount: 32,
@@ -88,6 +89,7 @@ export function buildKnowledgeCard(input: BuildKnowledgeCardInput): KnowledgeCar
       decisions: copyStrings(summary.decisions),
       risks: copyStrings(summary.risks),
       followups: copyStrings(summary.followups),
+      ...(summary.body !== undefined ? { body: summary.body } : {}),
     },
     actionItems,
     reviewParticipants: copyStrings(input.status.review.participants),
@@ -120,6 +122,9 @@ export function buildCorpusMap(cards: readonly KnowledgeCard[]): CorpusMap {
         mentionedPeople: card.mentionedPeople
           .slice(0, CORPUS_LIMITS.mentionedPeopleCount)
           .map((value) => truncateCharacters(value, CORPUS_LIMITS.mentionedPersonCharacters)),
+        ...(card.content.body !== undefined
+          ? { body: truncateCharacters(card.content.body, CORPUS_LIMITS.bodyCharacters) }
+          : {}),
       };
     });
   return corpusMapSchema.parse({ schemaVersion: 1, cards: projections });
@@ -159,6 +164,7 @@ export function projectKnowledgeCardWithLiveMetadata<Location>(
       decisions: copyStrings(card.content.decisions),
       risks: copyStrings(card.content.risks),
       followups: copyStrings(card.content.followups),
+      ...(card.content.body !== undefined ? { body: card.content.body } : {}),
     },
     actionItems: card.actionItems.map((item) => ({ ...item })),
     mentionedPeople: copyStrings(card.mentionedPeople),

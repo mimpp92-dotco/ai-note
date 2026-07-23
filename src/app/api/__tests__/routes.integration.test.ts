@@ -452,6 +452,54 @@ describe("title edit / delete / export overlay", () => {
     expect(md).not.toContain("현재 스크립트 변경 후 회의록 요약이 갱신되지 않음");
   });
 
+  it("exports a manual body as current Markdown and raw canonical JSON", async () => {
+    const id = "m-export-manual-body";
+    const body = "사용자가 만든 제목\n\n- 자유 bullet\n\n결정 사항도 일반 텍스트";
+    await seedSummarized(id);
+    await titlePOST(titleReq(id, { title: "현재 표시 제목" }), ctx(id));
+    await reviewPOST(appRequest(`/api/meetings/${id}/review`, {
+      method: "POST",
+      body: JSON.stringify({ participants: ["현재 참석자"] }),
+    }), ctx(id));
+    const current = await (await contentGET(
+      appRequest(`/api/meetings/${id}/content`),
+      ctx(id),
+    )).json();
+    const saved = await summaryPATCH(appRequest(`/api/meetings/${id}/summary`, {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: current.revision, body }),
+    }), ctx(id));
+    expect(saved.status).toBe(200);
+
+    const md = await (await exportGET(
+      appRequest(`/api/meetings/${id}/export?fmt=md`),
+      ctx(id),
+    )).text();
+    expect(md).toContain(`# 현재 표시 제목\n\n**참석자:** 현재 참석자\n\n${body}`);
+    expect(md).not.toContain("## 핵심");
+    expect(md).not.toContain("## 결정사항");
+
+    const exported = await (await exportGET(
+      appRequest(`/api/meetings/${id}/export?fmt=json`),
+      ctx(id),
+    )).json();
+    expect(exported).toMatchObject({
+      title: "데일리 스크럼 2026-07-05",
+      topicSlug: "daily-scrum-dealer-inventory",
+      participants: [],
+      body,
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      discussion: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      followups: [],
+    });
+    expect(exported).not.toHaveProperty("summaryOutdated");
+  });
+
   it("exports the current transcript with a stale-summary warning while keeping JSON schema unchanged", async () => {
     const id = "m-export-stale";
     await seedSummarized(id);
