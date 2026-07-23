@@ -2,22 +2,14 @@ import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  MAX_SUMMARY_PATCH_BYTES,
   SummaryEditor,
   TranscriptEditor,
-  createSummaryEditorDraft,
-  summaryDraftToEditable,
 } from "@/components/MeetingContentEditors";
-import type { EditableSummary } from "@/domain/summary";
 
-const EDITABLE_SUMMARY: EditableSummary = {
-  oneLine: "한 줄 요약",
-  purpose: "회의 목적",
-  highlights: ["첫 줄\n둘째 줄"],
-  discussion: ["논의 내용"],
-  decisions: ["결정 사항"],
-  actionItems: [{ owner: "딜런", task: "초안 작성", due: "2026-07-20" }],
-  risks: ["일정 위험"],
-  followups: ["후속 회의"],
+const REVISION = {
+  transcriptSha256: "a".repeat(64),
+  summarySha256: "b".repeat(64),
 };
 
 describe("TranscriptEditor", () => {
@@ -102,11 +94,12 @@ describe("TranscriptEditor", () => {
 });
 
 describe("SummaryEditor", () => {
-  it("내부 title/topicSlug/participants 없이 모든 사용자 편집 필드를 표시한다", () => {
+  it("visible label과 UTF-8 byte 정보가 있는 단일 자유 본문 textarea만 표시한다", () => {
     render(
       <SummaryEditor
         id="m1"
-        draft={createSummaryEditorDraft(EDITABLE_SUMMARY)}
+        value={"요약\n첫 줄\n- 둘째 줄"}
+        expectedRevision={REVISION}
         onChange={vi.fn()}
         onSave={vi.fn()}
         onCancel={vi.fn()}
@@ -114,88 +107,46 @@ describe("SummaryEditor", () => {
       />,
     );
 
-    expect(screen.getByRole("textbox", { name: "한 줄 요약" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "목적" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "핵심 1" })).toHaveValue("첫 줄\n둘째 줄");
-    expect(screen.getByRole("textbox", { name: "논의 내용 1" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "결정 사항 1" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "액션 아이템 1 담당자" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "액션 아이템 1 할 일" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "액션 아이템 1 기한" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "리스크 1" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "후속 확인 1" })).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /제목|topicSlug|참석자/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "한 줄 요약" })).toHaveAttribute(
+    const textarea = screen.getByRole("textbox", { name: "회의록 요약 본문" });
+    expect(textarea).toHaveValue("요약\n첫 줄\n- 둘째 줄");
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /추가|삭제/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/한 줄 요약|액션 아이템 담당자|topicSlug|참석자/)).not.toBeInTheDocument();
+    expect(textarea).toHaveAttribute(
       "aria-describedby",
       expect.stringContaining("summary-editor-m1-status"),
     );
-    expect(screen.getByRole("textbox", { name: "핵심 1" })).toHaveAttribute(
-      "aria-describedby",
-      expect.stringContaining("summary-editor-m1-status"),
-    );
-    expect(screen.getByRole("textbox", { name: "액션 아이템 1 담당자" })).toHaveAttribute(
-      "aria-describedby",
-      expect.stringContaining("summary-editor-m1-status"),
-    );
+    expect(screen.getByText(/UTF-8.*bytes.*요청/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "회의록 요약 저장" })).toHaveClass("min-h-11");
+    expect(screen.getByRole("button", { name: "수정 취소" })).toHaveClass("min-h-11");
   });
 
-  it("문자열 목록을 item별 textarea로 추가·삭제해 내부 개행과 배열 순서를 보존한다", () => {
-    const initial = createSummaryEditorDraft(EDITABLE_SUMMARY);
-    let draft = initial;
-    const change = vi.fn((next: typeof initial) => {
-      draft = next;
-    });
-    const { rerender } = render(
-      <SummaryEditor
-        id="m1"
-        draft={draft}
-        onChange={change}
-        onSave={vi.fn()}
-        onCancel={vi.fn()}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "핵심 추가" }));
-    rerender(
-      <SummaryEditor
-        id="m1"
-        draft={draft}
-        onChange={change}
-        onSave={vi.fn()}
-        onCancel={vi.fn()}
-      />,
-    );
-    fireEvent.change(screen.getByRole("textbox", { name: "핵심 2" }), {
-      target: { value: "새 항목 첫 줄\n새 항목 둘째 줄" },
-    });
-    rerender(
-      <SummaryEditor
-        id="m1"
-        draft={draft}
-        onChange={change}
-        onSave={vi.fn()}
-        onCancel={vi.fn()}
-      />,
-    );
-
-    expect(summaryDraftToEditable(draft).highlights).toEqual([
-      "첫 줄\n둘째 줄",
-      "새 항목 첫 줄\n새 항목 둘째 줄",
-    ]);
-    expect(screen.getByRole("button", { name: "핵심 1 삭제" })).toHaveClass("min-h-11");
-  });
-
-  it("빈 목록 항목과 불완전한 action row는 저장하지 않고 첫 invalid field에 focus한다", () => {
-    const invalid = createSummaryEditorDraft({
-      ...EDITABLE_SUMMARY,
-      highlights: [""],
-      actionItems: [{ owner: "", task: "", due: "" }],
-    });
+  it("CRLF만 LF로 정규화하고 heading 삭제·공백·내부 개행을 trim 없이 저장한다", () => {
     const save = vi.fn();
     render(
       <SummaryEditor
         id="m1"
-        draft={invalid}
+        value={"삭제한 제목 뒤 공백  \r\n\r\n- 자유 본문\r단독 CR"}
+        expectedRevision={REVISION}
+        onChange={vi.fn()}
+        onSave={save}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "회의록 요약 저장" }));
+    expect(save).toHaveBeenCalledWith(
+      "삭제한 제목 뒤 공백  \n\n- 자유 본문\r단독 CR",
+    );
+  });
+
+  it("whitespace-only와 실제 serialized PATCH 512 KiB 초과를 draft/focus 보존 상태로 거부한다", () => {
+    const save = vi.fn();
+    const { rerender } = render(
+      <SummaryEditor
+        id="m1"
+        value={" \r\n\t"}
+        expectedRevision={REVISION}
         onChange={vi.fn()}
         onSave={save}
         onCancel={vi.fn()}
@@ -204,8 +155,29 @@ describe("SummaryEditor", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "회의록 요약 저장" }));
     expect(save).not.toHaveBeenCalled();
-    expect(screen.getByRole("textbox", { name: "핵심 1" })).toHaveFocus();
-    expect(screen.getByText("빈 목록 항목을 삭제하거나 내용을 입력하세요.")).toBeInTheDocument();
-    expect(screen.getByText("담당자, 할 일, 기한을 모두 입력하세요.")).toBeInTheDocument();
+    expect(screen.getByText("회의록 요약 본문은 비워 둘 수 없습니다.")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "회의록 요약 본문" })).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "회의록 요약 본문" })).toHaveValue(" \n\t");
+
+    const oversized = "가".repeat(174_750);
+    expect(new TextEncoder().encode(JSON.stringify({
+      expectedRevision: REVISION,
+      body: oversized,
+    })).byteLength).toBeGreaterThan(MAX_SUMMARY_PATCH_BYTES);
+    rerender(
+      <SummaryEditor
+        id="m1"
+        value={oversized}
+        expectedRevision={REVISION}
+        onChange={vi.fn()}
+        onSave={save}
+        onCancel={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "회의록 요약 저장" }));
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.getByText(/저장 요청은 UTF-8 기준 512 KiB 이하여야 합니다/)).toBeInTheDocument();
+    expect(screen.getByText(/요청.*524,288 bytes/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "회의록 요약 본문" })).toHaveFocus();
   });
 });
