@@ -129,8 +129,7 @@
     "requiredArtifacts": [
       "screenshots",
       "assertions",
-      "console",
-      "manifest"
+      "console"
     ],
     "viewports": [
       "desktop-1440",
