@@ -11,6 +11,7 @@ import type { ContentRevision } from "@/domain/meeting";
 import { resetArtifactLeaseStateForTests } from "@/lib/artifactLease";
 import { createNodeFileOps, type FileOps } from "@/lib/durableFileOps";
 import {
+  manualSummaryRequestSchema,
   readManualMeetingContent,
   saveManualSummary,
   saveManualTranscript,
@@ -41,6 +42,15 @@ const SUMMARY_VALUE = {
   followups: ["기존 후속"],
 };
 const SUMMARY = `${JSON.stringify(SUMMARY_VALUE, null, 2)}\n`;
+const SUMMARY_BODY = [
+  "요약\n기존 한 줄\n- 기존 핵심",
+  "목적\n기존 목적",
+  "논의 내용\n- 기존 논의",
+  "결정 사항\n- 기존 결정",
+  "액션 아이템\n- 기존 — 작업 (기한: 미정)",
+  "리스크\n- 기존 위험",
+  "후속 확인\n- 기존 후속",
+].join("\n\n");
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
 let originalCwd: string;
@@ -127,11 +137,7 @@ describe("manual meeting content service", () => {
       ok: true,
       content: {
         transcript: TRANSCRIPT,
-        summary: {
-          oneLine: "기존 한 줄",
-          purpose: "기존 목적",
-          highlights: ["기존 핵심"],
-        },
+        summaryBody: SUMMARY_BODY,
         revision: expectedRevision,
         transcriptSource: "generated",
         summarySource: "generated",
@@ -143,6 +149,31 @@ describe("manual meeting content service", () => {
     expect(serialized).not.toContain("internal-topic");
     expect(serialized).not.toContain("authoritative-model-field");
     expect(serialized).not.toContain(workDir);
+  });
+
+  it("accepts only an exact expectedRevision plus freeform body request", () => {
+    expect(manualSummaryRequestSchema.parse({
+      expectedRevision,
+      body: "자유 본문",
+    })).toEqual({
+      expectedRevision,
+      body: "자유 본문",
+    });
+
+    for (const extra of [
+      { summary: { oneLine: "legacy form" } },
+      { oneLine: "structured field" },
+      { title: "internal title" },
+      { topicSlug: "internal-topic" },
+      { participants: ["internal"] },
+      { hidden: true },
+    ]) {
+      expect(() => manualSummaryRequestSchema.parse({
+        expectedRevision,
+        body: "자유 본문",
+        ...extra,
+      })).toThrow();
+    }
   });
 
   it("publishes a manual transcript without changing immutable or summary bytes", async () => {
@@ -183,32 +214,25 @@ describe("manual meeting content service", () => {
     expect((await readStatus(id))?.contentRevision?.summary).toEqual(revision().summary);
   });
 
-  it("replaces only editable summary fields, preserves internal fields, and refreshes index once", async () => {
+  it("publishes one normalized body, clears structured truth, preserves identity, and refreshes index once", async () => {
     const id = "manual-summary";
     await seed(id, revision("manual", "generated"));
     const refresh = vi.fn().mockRejectedValue(new Error("index unavailable"));
     setManualMeetingContentKnowledgeIndexRepositoryForTests({ refreshAfterSummary: refresh });
+    const body = "  사용자 제목\r\n\r\n- 첫 줄\r둘째 줄  ";
+    const normalizedBody = "  사용자 제목\n\n- 첫 줄\r둘째 줄  ";
 
     const result = await saveManualSummary({
       id,
       expectedRevision,
-      summary: {
-        oneLine: " 새 한 줄 ",
-        purpose: " 새 목적 ",
-        highlights: [" 첫 줄\n둘째 줄 "],
-        discussion: [" 새 논의 "],
-        decisions: [" 새 결정 "],
-        actionItems: [{ owner: "담당자", task: "새 작업", due: "내일" }],
-        risks: [" 새 위험 "],
-        followups: [" 새 후속 "],
-      },
+      body,
     }, { now: () => "2026-07-10T00:07:00.000Z" });
 
     expect(result).toMatchObject({
       ok: true,
       content: {
         transcript: TRANSCRIPT,
-        summary: { oneLine: "새 한 줄", highlights: ["첫 줄\n둘째 줄"] },
+        summaryBody: normalizedBody,
         transcriptSource: "manual",
         summarySource: "manual",
         summaryOutdated: false,
@@ -219,9 +243,19 @@ describe("manual meeting content service", () => {
       title: SUMMARY_VALUE.title,
       topicSlug: SUMMARY_VALUE.topicSlug,
       participants: SUMMARY_VALUE.participants,
-      oneLine: "새 한 줄",
+      body: normalizedBody,
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      discussion: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      followups: [],
     });
     expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(TRANSCRIPT);
+    expect(await readFile(meetingPaths(id).raw, "utf8")).toBe(RAW);
+    expect(await readFile(meetingPaths(id).segments, "utf8")).toBe(SEGMENTS);
     expect((await readStatus(id))?.contentRevision).toMatchObject({
       transcript: revision("manual").transcript,
       summary: {
@@ -230,6 +264,25 @@ describe("manual meeting content service", () => {
       },
     });
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a whitespace-only summary body before durable acceptance", async () => {
+    const id = "manual-summary-empty";
+    await seed(id, revision());
+    const beforeStatus = await readFile(meetingPaths(id).status, "utf8");
+
+    await expect(saveManualSummary({
+      id,
+      expectedRevision,
+      body: " \r\n\t",
+    })).resolves.toMatchObject({
+      ok: false,
+      reason: "invalid_summary",
+      field: "body",
+    });
+
+    expect(await readFile(meetingPaths(id).status, "utf8")).toBe(beforeStatus);
+    expect(await readFile(meetingPaths(id).summary, "utf8")).toBe(SUMMARY);
   });
 
   it("fails stale expected revisions and provenance conflicts before writes or indexing", async () => {

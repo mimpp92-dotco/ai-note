@@ -6,11 +6,8 @@ import type {
   ContentRevision,
   SummarizeAttempt,
 } from "@/domain/meeting";
-import type { EditableSummary, Summary } from "@/domain/summary";
-import {
-  editableSummarySchema,
-  summarySchema,
-} from "@/domain/summarySchema";
+import type { Summary } from "@/domain/summary";
+import { summarySchema } from "@/domain/summarySchema";
 import {
   readArtifactPair,
   type ArtifactPairReadResult,
@@ -26,6 +23,10 @@ import {
 } from "@/lib/meetingLifecycle";
 import { dataRoot } from "@/lib/paths";
 import { readStatus, updateStatus } from "@/lib/status";
+import {
+  normalizeManualSummaryBody,
+  summaryBodyFromSummary,
+} from "@/lib/summaryBody";
 import {
   publishManualMeetingContentAttempt,
   reconcileSummarizeAttempt,
@@ -48,12 +49,12 @@ export const manualTranscriptRequestSchema = z.object({
 
 export const manualSummaryRequestSchema = z.object({
   expectedRevision: artifactPairRevisionSchema,
-  summary: editableSummarySchema,
+  body: z.string(),
 }).strict();
 
 export interface ManualMeetingContentResource {
   transcript: string;
-  summary: EditableSummary;
+  summaryBody: string;
   revision: ArtifactPairRevision;
   transcriptSource: ContentRevision["transcript"]["source"];
   summarySource: ContentRevision["summary"]["source"];
@@ -77,7 +78,7 @@ export type ManualMeetingContentReadResult =
   | {
       ok: false;
       reason: ManualMeetingContentFailureReason;
-      field?: "transcript" | "summary";
+      field?: "transcript" | "body";
       operation?: string;
     };
 
@@ -98,7 +99,7 @@ export interface SaveManualTranscriptInput {
 export interface SaveManualSummaryInput {
   id: string;
   expectedRevision: ArtifactPairRevision;
-  summary: EditableSummary;
+  body: string;
 }
 
 type ManualKnowledgeRepository = Pick<KnowledgeIndexRepository, "refreshAfterSummary">;
@@ -125,19 +126,6 @@ function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function editableSummary(summary: Summary): EditableSummary {
-  return {
-    oneLine: summary.oneLine,
-    purpose: summary.purpose,
-    highlights: [...summary.highlights],
-    discussion: [...summary.discussion],
-    decisions: [...summary.decisions],
-    actionItems: summary.actionItems.map((item) => ({ ...item })),
-    risks: [...summary.risks],
-    followups: [...summary.followups],
-  };
-}
-
 function parseCanonicalSummary(text: string): Summary | null {
   try {
     return summarySchema.parse(JSON.parse(text) as unknown);
@@ -162,7 +150,7 @@ function resourceFromPair(pair: ArtifactPairReadResult): ManualMeetingContentRes
   if (!parsedSummary) return null;
   return {
     transcript: pair.transcript,
-    summary: editableSummary(parsedSummary),
+    summaryBody: summaryBodyFromSummary(parsedSummary),
     revision: pair.revision,
     transcriptSource: pair.contentRevision.transcript.source,
     summarySource: pair.contentRevision.summary.source,
@@ -272,7 +260,7 @@ function contentMatchesIntended(
 async function publishManualEdit(
   id: string,
   expectedRevision: ArtifactPairRevision,
-  field: "transcript" | "summary",
+  field: "transcript" | "body",
   prepare: (pair: ArtifactPairReadResult, now: string) => PreparedManualEdit | null,
   options: ManualMeetingContentOptions,
 ): Promise<ManualMeetingContentSaveResult> {
@@ -345,7 +333,7 @@ async function publishManualEdit(
       }, options.publisherOptions);
       const content = await stableContentAfterPublish(id);
       if (!content) return { ok: false, reason: "state_ambiguous" };
-      if (field === "summary") await refreshFreshSummary(id, lease);
+      if (field === "body") await refreshFreshSummary(id, lease);
       return {
         ok: true,
         content,
@@ -360,7 +348,7 @@ async function publishManualEdit(
         if (reconciled.state === "completed") {
           const content = await stableContentAfterPublish(id);
           if (!content) return { ok: false, reason: "state_ambiguous" };
-          if (field === "summary") await refreshFreshSummary(id, lease);
+          if (field === "body") await refreshFreshSummary(id, lease);
           return { ok: true, content, durability: "pending" };
         }
         if (reconciled.state === "interrupted") {
@@ -372,7 +360,7 @@ async function publishManualEdit(
         if (reconciled.state === "none") {
           const content = await stableContentAfterPublish(id);
           if (content && contentMatchesIntended(content, prepared.intendedContentRevision)) {
-            if (field === "summary") await refreshFreshSummary(id, lease);
+            if (field === "body") await refreshFreshSummary(id, lease);
             return { ok: true, content, durability: "pending" };
           }
           if (content && sameRevision(content.revision, expectedRevision)) {
@@ -430,23 +418,34 @@ export function saveManualSummary(
   input: SaveManualSummaryInput,
   options: ManualMeetingContentOptions = {},
 ): Promise<ManualMeetingContentSaveResult> {
-  const parsedEditable = editableSummarySchema.safeParse(input.summary);
-  if (!parsedEditable.success) {
+  const normalized = normalizeManualSummaryBody(input.body);
+  if (normalized === null) {
     return Promise.resolve({
       ok: false,
       reason: "invalid_summary",
-      field: "summary",
+      field: "body",
     });
   }
   return publishManualEdit(
     input.id,
     input.expectedRevision,
-    "summary",
+    "body",
     (pair, now) => {
       if (!pair.transcript || !pair.summary || !pair.contentRevision || !pair.revision) return null;
       const canonical = parseCanonicalSummary(pair.summary);
       if (!canonical) return null;
-      const next = summarySchema.safeParse({ ...canonical, ...parsedEditable.data });
+      const next = summarySchema.safeParse({
+        ...canonical,
+        body: normalized,
+        oneLine: "",
+        purpose: "",
+        highlights: [],
+        discussion: [],
+        decisions: [],
+        actionItems: [],
+        risks: [],
+        followups: [],
+      });
       if (!next.success) return null;
       const serialized = `${JSON.stringify(next.data, null, 2)}\n`;
       return {

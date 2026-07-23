@@ -633,6 +633,20 @@ describe("manual re-summarize (force)", () => {
       appRequest(`/api/meetings/${id}/content`),
       ctx(id),
     )).json();
+    const manualSave = await summaryPATCH(appRequest(`/api/meetings/${id}/summary`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expectedRevision: current.revision,
+        body: "재생성 전에 저장한 수동 본문",
+      }),
+    }), ctx(id));
+    expect(manualSave.status).toBe(200);
+    const manual = await manualSave.json();
+    expect(JSON.parse(readFileSync(meetingPaths(id).summary, "utf8"))).toMatchObject({
+      body: "재생성 전에 저장한 수동 본문",
+      oneLine: "",
+      highlights: [],
+    });
     const run = vi.spyOn(FakeAdapter.prototype, "run");
     try {
       // plain POST on an already-summarized meeting is refused
@@ -648,7 +662,7 @@ describe("manual re-summarize (force)", () => {
       // background via the offline FakeAdapter.
       const forced = await summarizePOST(summarizeReq(id, {
         resummarize: true,
-        expectedRevision: current.revision,
+        expectedRevision: manual.revision,
       }), ctx(id));
       expect(forced.status).toBe(202);
       await settleSummarize(id);
@@ -659,6 +673,7 @@ describe("manual re-summarize (force)", () => {
       const regenerated = JSON.parse(readFileSync(meetingPaths(id).summary, "utf-8"));
       expect(regenerated.title).toBe("FAKE 회의 요약");
       expect(regenerated.title).not.toBe("데일리 스크럼 2026-07-05");
+      expect(regenerated).not.toHaveProperty("body");
       const after = JSON.parse(readFileSync(meetingPaths(id).status, "utf-8"));
       expect(after.status).toBe("summarized");
       expect(after.error).toBeNull();
@@ -810,16 +825,8 @@ describe("manual re-summarize (force)", () => {
 });
 
 describe("manual transcript and summary content routes", () => {
-  const editableSummary = {
-    oneLine: "수정한 한 줄",
-    purpose: "수정한 목적",
-    highlights: ["첫 줄\n둘째 줄"],
-    discussion: ["논의"],
-    decisions: ["결정"],
-    actionItems: [{ owner: "담당자", task: "할 일", due: "미정" }],
-    risks: ["위험"],
-    followups: ["후속"],
-  };
+  const summaryBody = "수정한 제목\r\n\r\n- 첫 줄\r둘째 줄  ";
+  const normalizedSummaryBody = "수정한 제목\n\n- 첫 줄\r둘째 줄  ";
 
   it("GET probes a stable safe resource and PATCH saves each field with expected pair revision", async () => {
     const id = "m-manual-content";
@@ -830,6 +837,7 @@ describe("manual transcript and summary content routes", () => {
     const first = await initial.json();
     expect(first).toMatchObject({
       transcript: "교정된 전사\n",
+      summaryBody: expect.stringContaining("요약\n"),
       revision: {
         transcriptSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         summarySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -839,6 +847,7 @@ describe("manual transcript and summary content routes", () => {
       summaryOutdated: false,
       pairState: "stable",
     });
+    expect(first).not.toHaveProperty("summary");
     expect(JSON.stringify(first)).not.toMatch(/topicSlug|participants|title|\/data\/meetings|attemptId/u);
 
     const transcript = await transcriptPATCH(appRequest(`/api/meetings/${id}/transcript`, {
@@ -868,13 +877,24 @@ describe("manual transcript and summary content routes", () => {
 
     const summary = await summaryPATCH(appRequest(`/api/meetings/${id}/summary`, {
       method: "PATCH",
-      body: JSON.stringify({ expectedRevision: changed.revision, summary: editableSummary }),
+      body: JSON.stringify({ expectedRevision: changed.revision, body: summaryBody }),
     }), ctx(id));
     expect(summary.status).toBe(200);
     await expect(summary.json()).resolves.toMatchObject({
-      summary: { oneLine: "수정한 한 줄", highlights: ["첫 줄\n둘째 줄"] },
+      summaryBody: normalizedSummaryBody,
       summarySource: "manual",
       summaryOutdated: false,
+    });
+    expect(JSON.parse(readFileSync(meetingPaths(id).summary, "utf8"))).toMatchObject({
+      body: normalizedSummaryBody,
+      oneLine: "",
+      purpose: "",
+      highlights: [],
+      discussion: [],
+      decisions: [],
+      actionItems: [],
+      risks: [],
+      followups: [],
     });
   });
 
@@ -896,9 +916,38 @@ describe("manual transcript and summary content routes", () => {
     const wrongType = await summaryPATCH(appRequest(`/api/meetings/${id}/summary`, {
       method: "PATCH",
       headers: { "content-type": "text/plain" },
-      body: JSON.stringify({ expectedRevision: current.revision, summary: editableSummary }),
+      body: JSON.stringify({ expectedRevision: current.revision, body: "본문" }),
     }), ctx(id));
     expect(wrongType.status).toBe(415);
+
+    for (const invalid of [
+      { expectedRevision: current.revision, summary: { oneLine: "legacy form" } },
+      { expectedRevision: current.revision, body: "본문", oneLine: "structured field" },
+      { expectedRevision: current.revision, body: "본문", title: "internal title" },
+      { expectedRevision: current.revision, body: "본문", participants: ["internal"] },
+    ]) {
+      const response = await summaryPATCH(appRequest(`/api/meetings/${id}/summary`, {
+        method: "PATCH",
+        body: JSON.stringify(invalid),
+      }), ctx(id));
+      expect(response.status).toBe(400);
+    }
+
+    const whitespace = await summaryPATCH(appRequest(`/api/meetings/${id}/summary`, {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: current.revision, body: " \r\n\t" }),
+    }), ctx(id));
+    expect(whitespace.status).toBe(400);
+    await expect(whitespace.json()).resolves.toMatchObject({
+      error: { code: "invalid_request", details: { field: "body" } },
+    });
+
+    const summaryTooLarge = await summaryPATCH(appRequest(`/api/meetings/${id}/summary`, {
+      method: "PATCH",
+      headers: { "content-length": String(512 * 1024 + 1) },
+      body: "{}",
+    }), ctx(id));
+    expect(summaryTooLarge.status).toBe(413);
 
     const declaredTooLarge = await transcriptPATCH(appRequest(`/api/meetings/${id}/transcript`, {
       method: "PATCH",
