@@ -11,6 +11,7 @@
 - R3의 single-body 편집 입력을 server가 손실 없이 받을 계약을 만든다.
 - R4의 legacy compatibility, optional body, exact manual-save shape와 regeneration 경계를 만든다.
 - R5의 durable pair publication, expected revision, freshness와 probe 불변식을 유지한다.
+- R7의 deterministic projection, ambiguous dual-truth rejection과 오류 판정에 필요한 exact resource를 만든다.
 
 ## 허용 범위
 
@@ -20,14 +21,19 @@
 
 - immutable artifact나 pair publisher를 수정하지 않는다.
 - title/topicSlug/participants writer를 summary body editor로 옮기지 않는다.
-- manual body와 구조화 editable field를 동시에 현재 내용으로 유지하지 않는다.
+- manual body와 non-empty 구조화 editable field를 동시에 현재 내용으로 허용하지 않는다.
 - API cap, provider, prompt, dependency를 바꾸지 않는다.
 - 범위가 부족하면 다른 파일을 임의로 열지 않고 중단한다.
 
 ## 작업
 
-1. `summary.json`의 기존 required structured shape를 계속 수용하면서 optional plain-text `body`를 허용한다.
-2. pure helper가 structured summary를 현재 detail 읽기 순서의 결정적 plain text로 만든다. 표시 제목·topicSlug·participants는 projection에 넣지 않는다. Existing `body`가 있으면 변환하지 않고 그대로 반환한다.
+1. `summary.json`의 기존 required structured shape를 계속 수용하면서 optional plain-text `body`를 허용한다. `body`가 있으면 whitespace-only를 거부하고 oneLine/purpose와 모든 structured list/action item이 비어 있어야 하며, title/topicSlug/participants는 그대로 허용한다.
+2. Pure helper가 structured summary를 현재 detail 읽기 순서의 결정적 plain text로 만든다. Existing `body`가 있으면 변환하지 않고 그대로 반환한다. Structured projection은 아래 형식을 정본으로 한다.
+   - 첫 block은 `요약`; 다음 줄에 non-empty oneLine을 두고 highlights는 같은 block의 `- {item}` bullet로 이어서 별도 `핵심` heading을 만들지 않는다.
+   - 이후 non-empty block은 `목적`, `논의 내용`, `결정 사항`, `액션 아이템`, `리스크`, `후속 확인` 순서다.
+   - 일반 list는 `- {item}`, action item은 `- {owner} — {task} (기한: {due})`다. Item 내부 개행은 바꾸지 않는다.
+   - Block 사이는 정확히 `\n\n`, line 사이는 `\n`이고 끝에 synthetic newline을 붙이지 않는다.
+   - 표시 제목·topicSlug·participants는 projection에 넣지 않는다.
 3. manual body는 CRLF만 LF로 바꾸고 whitespace-only를 거부한다. 공백, 섹션 제목, bullet 문자와 내부 개행은 trim하거나 parse하지 않는다.
 4. summary PATCH는 strict expected revision과 자유 body만 받는다. Unknown structured form field와 internal field는 거부한다.
 5. 저장 시 canonical title/topicSlug/participants를 보존하고 `body`를 기록하며 oneLine/purpose를 빈 문자열, 모든 list/action item을 빈 배열로 만들어 dual truth를 없앤다.
@@ -38,8 +44,8 @@
 ## 테스트 (먼저 작성)
 
 - Existing happy/fallback fixture와 body 없는 legacy summary가 그대로 parse되는 RED를 만든다.
-- Optional body가 exact newline/heading text를 보존하고 unknown invalid shape는 거부하는 RED를 만든다.
-- Structured summary의 deterministic body 순서와 existing body passthrough를 pure helper test로 고정한다.
+- Optional body가 exact newline/heading text를 보존하고 whitespace-only 또는 body+non-empty structured field의 ambiguous shape를 거부하는 RED를 만든다.
+- Structured summary의 exact heading/bullet/action 표기, 빈 section 생략, block separator, no trailing LF와 existing body passthrough를 pure helper test로 고정한다.
 - GET content가 initial structured projection을 `summaryBody`로 반환하고 internal field를 숨기는 RED를 만든다.
 - PATCH가 exact `{expectedRevision,body}`만 수락하고 CRLF를 LF로 저장하며 whitespace-only/unknown field를 거부하는 RED를 만든다.
 - Canonical 저장 결과가 title/topicSlug/participants를 보존하고 structured editable field를 비우며 body만 current content로 갖는지 확인한다.

@@ -26,14 +26,15 @@
 
 - `회의록 요약 수정`을 누르면 현재 요약 읽기 본문 전체가 하나의 textarea로 전환된다.
 - 기존 oneLine·purpose·목록·action item별 input과 추가·삭제 control은 제거한다.
-- 구조화 요약의 최초 editor 값은 현재 읽기 순서와 같은 결정적 plain-text projection이다.
+- 구조화 요약의 최초 editor 값은 현재 읽기 순서와 같은 결정적 plain-text projection이다. `요약` block 안에 oneLine과 highlight bullet을 두고, 그 뒤 `목적` → `논의 내용` → `결정 사항` → `액션 아이템` → `리스크` → `후속 확인` 순서로 non-empty block만 붙인다.
+- 일반 목록은 `- {item}`, action item은 `- {owner} — {task} (기한: {due})`, block 사이는 LF 두 개, 끝에는 synthetic LF를 붙이지 않는다. Item 내부 개행과 문자는 그대로 둔다.
 - `요약`, `목적`, `논의 내용`, `결정 사항`, `액션 아이템`, `리스크`, `후속 확인` 같은 본문 내 섹션 제목은 일반 텍스트라 사용자가 일부 또는 전부 삭제할 수 있다.
 - 회의 표시 제목, `topicSlug`, 참석자는 이 editor에 포함하지 않고 기존 전용 writer를 유지한다.
 
 ### R4 — 자유 본문 저장과 소비자 일관성
 
 - 기존 구조화 `summary.json`은 migration 없이 계속 읽는다.
-- 수동 자유 본문 저장은 canonical summary에 optional `body`를 기록하고, `title`·`topicSlug`·`participants`를 보존하며 구조화 editable field는 비워 두어 두 정본이 공존하지 않게 한다.
+- 수동 자유 본문 저장은 canonical summary에 optional `body`를 기록하고, `title`·`topicSlug`·`participants`를 보존하며 구조화 editable field는 비워 두어 두 정본이 공존하지 않게 한다. `body`와 non-empty structured editable field가 함께 있는 ambiguous canonical shape는 거부한다.
 - `body`는 CRLF만 LF로 정규화하고 whitespace-only 저장은 거부한다. API의 기존 512 KiB raw-body cap은 유지한다.
 - content probe/success resource는 internal title·topicSlug·participants 없이 현재 `summaryBody`를 반환하고, PATCH는 exact expected pair revision과 자유 본문만 받는다.
 - summary 수동 저장은 current transcript 기준 fresh manual revision이며 기존 full-pair publisher와 knowledge refresh를 그대로 사용한다.
@@ -47,13 +48,21 @@
 - expected full-pair revision, operation lease, transcript-first/summary-last publication, network/invalid-2xx 뒤 read-only probe를 유지한다.
 - transcript 변경 뒤 outdated summary 보존, summary 수동 저장·재생성 뒤 fresh 전환을 유지한다.
 - dirty/saving/verifying navigation guard, editor 간 discard 확인, save conflict/ambiguous copy·recovery, generation dialog와 mutual exclusion을 유지한다.
-- copy/download는 editor draft가 아니라 현재 confirmed 저장 내용을 사용한다.
+- copy/download는 editor draft가 아니라 현재 confirmed 저장 내용을 사용하고, editor가 열려 있으면 그 차이를 action 바로 아래에 명시한다.
 
 ### R6 — 문서와 결정적 browser 회귀
 
 - 제품·아키텍처·UI·에이전트 문서를 action bar 위치, 본문 교체형 editor, optional body와 검색 의미에 맞춘다.
 - 새 ADR 0022가 ADR 0021의 tab footer와 구조화 summary form 결정을 부분 대체한다.
-- 실제 사용자 data·외부 network·Whisper·LLM 없이 desktop 1440, mobile 390, mobile 320에서 action 위치, 본문 교체, 자유 제목 삭제, cancel 복원, save/freshness와 overflow를 검증한다.
+- 실제 사용자 data·외부 network·Whisper·LLM 없이 desktop 1440, mobile 390, mobile 320에서 action 위치, 본문 교체, 자유 제목 삭제, confirmed-copy 안내, discard 안전 초점, cancel 복원, save/freshness와 overflow를 검증한다.
+
+### R7 — 입력 한도·탭 문맥·오류 복구
+
+- Summary textarea는 whitespace-only 입력과 실제 serialized PATCH body가 기존 512 KiB cap을 넘는 입력을 network 전에 막고, UTF-8 byte 정보·구체적 오류·textarea focus를 제공한다.
+- 편집 중 다른 탭을 잠시 봐도 draft는 사라지지 않고 editor를 소유한 tab label이 idle/error=`수정 중`, saving=`저장 중`, verifying=`저장 확인 중`, ambiguous=`저장 확인 필요`를 알린다. Summary의 `요약 갱신 필요` token은 이 상태 뒤에도 유지한다.
+- 열린 editor의 같은 `수정` action은 silent no-op이 되지 않는다. Action status는 복사와 JSON/Markdown 다운로드가 화면의 draft가 아니라 마지막 confirmed 저장본을 사용한다고 설명한다.
+- Validation/413, meeting missing 또는 삭제, 다른 content operation, revision conflict, source conflict/ambiguous, network/invalid success를 구분한다. 모든 경우 exact draft를 보존하고 확정된 상태에 맞는 copy·reload·retry만 제공하며 PATCH를 blind retry하지 않는다.
+- Dirty cancel과 다른 editor 전환의 inline confirmation은 `계속 수정`을 먼저 두고 그 control로 focus와 announcement를 옮긴다. Explicit discard 전에는 draft·caret source를 바꾸지 않는다.
 
 ## 비목표
 
@@ -79,11 +88,11 @@
 
 | Phase | 이름 | 핵심 결과 | 검증 |
 |---|---|---|---|
-| 1 | freeform-summary-contract | optional body, deterministic projection, exact body PATCH/probe, structured-field clearing | schema·manual content·API TDD |
+| 1 | freeform-summary-contract | optional body, exact projection, dual-truth rejection, exact body PATCH/probe, structured-field clearing | schema·manual content·API TDD |
 | 2 | freeform-summary-consumers | copy/Markdown/JSON, knowledge card, 일반 검색, chat evidence의 body 일관성 | consumer·index·search TDD |
-| 3 | inline-editors-and-action-bar | tablist 직후 action bar, transcript/summary 본문 교체형 single textarea, 기존 guard/focus 보존 | RTL TDD + typecheck |
-| 4 | docs-and-adr | README·정본·UI·agent 문서와 ADR 0022 | link check |
-| 5 | synthetic-browser-verification | 3 viewport의 위치·전환·저장·취소·overflow 결정적 증거 | repository Playwright |
+| 3 | inline-editors-and-action-bar | tablist 직후 action bar, 본문 교체형 single textarea, 입력 한도·오류·탭/confirmed 상태 UX | RTL TDD + typecheck |
+| 4 | docs-and-adr | README·정본·UI·agent 문서와 ADR 0022, 오류 복구 matrix | link check |
+| 5 | synthetic-browser-verification | 3 viewport의 위치·전환·저장·취소·confirmed 안내·overflow 결정적 증거 | repository Playwright |
 
 ## 실행 방법
 
@@ -113,6 +122,7 @@
 - 사용자가 삭제할 수 있다고 한 “타이틀”은 회의 표시 제목이 아니라 요약 본문 안의 섹션 제목이다.
 - 자유 본문은 HTML이나 Markdown AST가 아닌 plain text다. 줄바꿈과 사용자가 입력한 문자는 CRLF→LF 외에는 그대로 보존한다.
 - whitespace-only 요약은 저장하지 않는다.
+- 512 KiB는 새 body 전용 상한을 추측해 추가하는 것이 아니라 기존 summary route의 serialized JSON request cap을 그대로 적용한다.
 - dirty `수정 취소`, 다른 editor 열기, route 이탈에는 기존 discard 확인을 유지한다.
 - JSON 다운로드는 canonical optional `body`와 비워진 structured editable field를 그대로 포함한다.
 - 수동 자유 본문 저장 뒤 `할 일 있음` filter를 위해 내용을 추측하지 않는다. 구조화 filter가 필요하면 현재 스크립트로 요약을 다시 만든다.

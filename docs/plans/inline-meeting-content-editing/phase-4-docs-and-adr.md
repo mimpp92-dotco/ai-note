@@ -12,6 +12,7 @@ README, AGENTS, src 지침, PRD, ARCHITECTURE, UI_GUIDE, ADR 목록과 ADR 0021�
 - R4의 optional body, structured clearing, regeneration, export/index/search 의미를 문서화한다.
 - R5의 pair writer, freshness, probe, navigation guard와 title/participants ownership을 유지한다.
 - R6의 신규 ADR과 browser 검증 기준을 준비한다.
+- R7의 입력 한도, confirmed/draft 안내, tab 문맥과 오류별 안전한 recovery matrix를 문서화한다.
 
 ## 허용 범위
 
@@ -27,15 +28,16 @@ README, AGENTS, src 지침, PRD, ARCHITECTURE, UI_GUIDE, ADR 목록과 ADR 0021�
 ## 작업
 
 1. README와 PRD의 per-field summary editor 설명을 single freeform body로 교체한다.
-2. AGENTS와 src/CLAUDE에 optional body, structured clearing, action bar 위치, body-mode consumer/search 의미와 금지사항을 짧은 실행 지침으로 반영한다.
-3. ARCHITECTURE의 summary schema, manual API/resource, publisher payload, knowledge-card/corpus/search, Markdown/JSON consumer 계약을 실제 field와 normalization에 맞춘다.
-4. UI_GUIDE의 footer 용어를 tab-local action bar로 바꾸고 tablist → action → warning → body 순서, mutually exclusive editor, single textarea, cancel/focus/320px 기준을 기록한다.
+2. AGENTS와 src/CLAUDE에 optional body, dual-truth rejection, action bar 위치, body-mode consumer/search 의미와 금지사항을 짧은 실행 지침으로 반영한다.
+3. ARCHITECTURE의 exact structured-to-body projection, summary schema invariant, manual API/resource, 512 KiB serialized request cap, publisher payload, knowledge-card/corpus/search, Markdown/JSON consumer와 typed failure 계약을 실제 field와 normalization에 맞춘다.
+4. UI_GUIDE의 footer 용어를 tab-local action bar로 바꾸고 tablist → action → warning → body 순서, mutually exclusive editor, confirmed-copy 안내, 수정 중 tab label, single textarea validation, error/recovery, discard 안전 초점과 320px 기준을 기록한다.
 5. ADR 0022는 다음을 명시한다.
    - generated structured summary와 manual freeform body의 두 mode
    - body mode에서 structured editable field를 비워 dual truth를 막는 결정
    - title/topicSlug/participants ownership 보존
    - body를 copy/export/index/search evidence에 사용하는 결정
    - action item parsing을 하지 않는 tradeoff와 regeneration recovery
+   - confirmed 저장본과 draft의 action 의미, body request cap과 typed recovery matrix
    - ADR 0021 중 footer/structured form 부분만 대체하고 durable pair/freshness/probe/guard는 유지
 6. ADR 목록에 0022와 부분 대체 관계를 추가한다.
 7. Browser 기준은 repository-owned Playwright, 세 viewport, synthetic-only이며 실제 결과를 미리 성공으로 쓰지 않는다.

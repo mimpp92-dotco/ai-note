@@ -12,6 +12,7 @@ Synthetic browser 경계와 ADR 0020/0022, pinned Playwright 설정·doctor·tem
 - R2·R3의 transcript/summary read-to-editor replacement, freeform heading deletion과 cancel restore를 확인한다.
 - R5의 save/freshness/focus/navigation guard 회귀를 확인한다.
 - R6의 synthetic-only screenshots/assertions/console manifest를 생성한다.
+- R7의 confirmed-copy 안내, 수정 중 tab 문맥과 discard 안전 초점을 확인한다.
 
 ## 허용 범위
 
@@ -35,15 +36,17 @@ Synthetic browser 경계와 ADR 0020/0022, pinned Playwright 설정·doctor·tem
    - 44px target과 flex wrap이 유지되고 horizontal scroll이 없다.
    - transcript edit는 read body를 제거하고 single textarea를 보인다.
    - summary edit는 field별 form 없이 single body textarea를 보인다.
+   - editor가 열린 action status는 copy/download가 마지막 confirmed 저장본을 사용한다고 알리고 수정 trigger/tab label은 열린 draft 상태를 표시한다.
    - section heading을 삭제한 body가 exact save되고 fresh summary view/copy에 반영된다.
-   - dirty cancel의 continue는 draft/focus를 보존하고 confirmed discard는 원래 body를 복원한다.
+   - dirty cancel confirmation은 `계속 수정`에 안전한 initial focus를 두고 draft/focus를 보존하며 confirmed discard만 원래 body를 복원한다.
+   - tab을 잠시 전환했다 돌아와도 exact draft와 수정 중 표시가 남는다.
    - stale warning, regeneration dialog, detail/sidebar/browser-back guard가 유지된다.
 4. Automatic fixture/reporter가 required viewport screenshot, assertion pass, console/page error와 external request 0, synthetic provenance를 manifest에 기록한다.
-5. Runner가 artifact hash·byte size·viewport·requirement coverage와 Git scope 불변을 검증한다.
+5. Runner가 artifact hash·byte size·viewport, current R1/R2/R3/R5/R6/R7 annotation coverage와 Git scope 불변을 검증한다.
 
 ## 테스트 (먼저 작성)
 
-이 phase는 구현이나 test authoring을 하지 않는다. Phase 3에서 먼저 작성·커밋한 Playwright assertion을 그대로 실행한다. Assertion, console, network, artifact 또는 provenance 하나라도 실패하면 evidence를 보존하고 중단한다.
+이 phase는 구현이나 test authoring을 하지 않는다. Phase 3에서 먼저 작성·커밋한 Playwright assertion을 그대로 실행한다. DOM/action 상태, confirmed-copy 안내, tab draft 문맥, discard focus, assertion, console, network, artifact 또는 provenance 하나라도 실패하면 evidence를 보존하고 중단한다.
 
 ## 문서 최신화
 
