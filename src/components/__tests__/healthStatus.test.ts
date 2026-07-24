@@ -39,6 +39,17 @@ describe("healthStatus", () => {
       label: "Codex CLI · 감지됨",
       title: expect.stringContaining("첫 요약"),
     });
+    expect(formatLlmStatus({
+      configured: true,
+      provider: "ollama",
+      model: "missing",
+      ok: false,
+      detail: "Ollama를 실행한 뒤 다시 검사하세요.",
+    })).toMatchObject({
+      label: "Ollama missing · 실패",
+      title: "Ollama를 실행한 뒤 다시 검사하세요.",
+      tone: "error",
+    });
     expect(formatLlmStatus({ configured: false })).toMatchObject({
       label: "요약 모델 미설정",
       tone: "warn",

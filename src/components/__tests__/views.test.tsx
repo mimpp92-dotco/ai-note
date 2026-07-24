@@ -5,7 +5,10 @@ import { EmptyState } from "@/components/EmptyState";
 import { CopyButton } from "@/components/CopyButton";
 import { GlossaryClient } from "@/components/GlossaryClient";
 import { splitBacklog } from "@/components/HomeClient";
-import { MeetingDetailView } from "@/components/MeetingDetailView";
+import {
+  MeetingDetailView,
+  resolveInitialMeetingTab,
+} from "@/components/MeetingDetailView";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
 import { Recorder } from "@/components/Recorder";
@@ -263,9 +266,12 @@ describe("Recorder — responsive layout", () => {
     const heading = screen.getByRole("heading", { name: "회의 녹음" });
     expect(heading.parentElement?.parentElement).toHaveClass("flex-col");
     expect(heading.parentElement?.parentElement).toHaveClass("sm:flex-row");
-    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("w-full");
-    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("sm:w-auto");
-    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toHaveClass("min-h-11");
+    const start = screen.getByRole("button", { name: "회의 녹음 시작" });
+    expect(start).toHaveClass("w-full");
+    expect(start).toHaveClass("sm:w-auto");
+    expect(start).toHaveClass("min-h-11");
+    expect(screen.getByText(/선택한 Whisper 모델을 처음 사용하면 먼저 내려받아/)).toBeInTheDocument();
+    expect(screen.getByText(/다운로드가 끝나기 전에는 진행률을 표시하지 않습니다/)).toBeInTheDocument();
   });
 });
 
@@ -755,6 +761,14 @@ describe("MeetingDetailView — 전체 스크립트 탭", () => {
 });
 
 describe("MeetingDetailView — 회의록 요약 탭", () => {
+  it("명시 query가 우선하고 query가 없으면 usable summary 유무로 초기 탭을 정한다", () => {
+    expect(resolveInitialMeetingTab("script", SUMMARY)).toBe("script");
+    expect(resolveInitialMeetingTab("summary", null)).toBe("summary");
+    expect(resolveInitialMeetingTab(null, SUMMARY)).toBe("summary");
+    expect(resolveInitialMeetingTab(null, null)).toBe("script");
+    expect(resolveInitialMeetingTab("unknown", SUMMARY)).toBe("summary");
+  });
+
   it("renders the summary sections", () => {
     render(
       <MeetingDetailView
@@ -819,6 +833,145 @@ describe("MeetingDetailView — 요약 상태 카드", () => {
     );
     expect(screen.getByText(/모델 응답 오류/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "재시도" })).toBeInTheDocument();
+  });
+
+  it("전사 실패를 안전하게 유지하고 기존 endpoint로 재시도한 뒤 상태를 새로 확인한다", async () => {
+    viewNavigation.refresh.mockReset();
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/transcribe") {
+        return new Response(JSON.stringify({
+          id: "m1",
+          status: "transcribing",
+          durability: "durable",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({
+          status: "transcribing",
+          error: { message: "/tmp/private/provider output", action: "retry_transcription" },
+        })}
+        transcript={{ text: "", corrected: false }}
+        segments={[]}
+        summary={null}
+        hasAudio={false}
+      />,
+    );
+
+    expect(screen.getByText("전사 실패")).toBeInTheDocument();
+    expect(screen.queryByText(/\/tmp|provider output/u)).not.toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "전사 다시 시도" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("button", { name: "전사 요청 중…" })).toBeDisabled();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/transcribe", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "m1" }),
+    }));
+    await waitFor(() => expect(viewNavigation.refresh).toHaveBeenCalled());
+    expect(screen.getByRole("status", { name: "전사 다시 시도 상태" }))
+      .toHaveTextContent("전사 요청을 접수했습니다. 최신 상태를 확인합니다.");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("전사 retry network 실패는 기존 artifact와 retry control을 유지한다", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/transcribe") throw new Error("/tmp/private");
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({
+          status: "recorded",
+          error: { message: "private provider output", action: "retry_transcription" },
+        })}
+        transcript={{ text: "기존에 확인 가능한 내용", corrected: false }}
+        segments={[]}
+        summary={null}
+        hasAudio={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전사 다시 시도" }));
+    expect(await screen.findByRole("status", { name: "전사 다시 시도 상태" })).toHaveTextContent(
+      "전사 요청을 보내지 못했습니다. 녹음 원본과 현재 내용은 유지됐습니다. 잠시 후 다시 시도하세요.",
+    );
+    expect(screen.getByText("기존에 확인 가능한 내용")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "전사 다시 시도" })).toBeEnabled();
+    expect(screen.queryByText(/private provider|\/tmp/u)).not.toBeInTheDocument();
+  });
+
+  it("이미 진행 중인 race도 refresh하고 전사 poll은 한 번에 하나만 두며 상태 변경에서 정리한다", async () => {
+    vi.useFakeTimers();
+    viewNavigation.refresh.mockReset();
+    let finishPoll: ((response: Response) => void) | null = null;
+    let pollCalls = 0;
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "/api/transcribe") {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: { code: "meeting_conflict", message: "private race detail" },
+        }), { status: 409 }));
+      }
+      if (url === "/api/meetings/m1") {
+        pollCalls += 1;
+        return new Promise<Response>((resolve) => {
+          finishPoll = resolve;
+        });
+      }
+      return Promise.resolve(healthResponse(input));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const props = {
+      id: "m1",
+      transcript: { text: "", corrected: false },
+      segments: [] as never[],
+      summary: null,
+      hasAudio: false,
+    };
+    const view = render(
+      <MeetingDetailView
+        {...props}
+        status={makeStatus({
+          status: "transcribing",
+          error: { message: "safe persisted failure", action: "retry_transcription" },
+        })}
+      />,
+    );
+
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "전사 다시 시도" }));
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      expect(viewNavigation.refresh).toHaveBeenCalled();
+      expect(screen.getByRole("status", { name: "전사 다시 시도 상태" }))
+        .toHaveTextContent("최신 상태를 확인합니다.");
+
+      await act(async () => vi.advanceTimersByTimeAsync(9_000));
+      expect(pollCalls).toBe(1);
+
+      await act(async () => {
+        finishPoll?.(new Response(JSON.stringify({ status: "transcribing", error: null }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }));
+      });
+      view.rerender(
+        <MeetingDetailView
+          {...props}
+          status={makeStatus({ status: "transcribed", error: null })}
+        />,
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(6_000));
+      expect(pollCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders the export toolbar once summarized", () => {
@@ -1970,18 +2123,23 @@ describe("SettingsForm — persisted draft/load/test state", () => {
     getMode?: "ok" | "non_ok" | "throw" | "invalid";
     saveMode?: "ok" | "non_ok" | "throw";
     healthMode?: "ok" | "non_ok" | "throw" | "invalid";
+    modelsMode?: "ok" | "non_ok" | "throw" | "invalid";
     saved?: SettingsBody;
     health?: LlmHealthState;
+    models?: string[];
   } = {}) {
     const {
       initial = { provider: null },
       getMode = "ok",
       saveMode = "ok",
       healthMode = "ok",
+      modelsMode = "ok",
       saved,
       health = { configured: false },
+      models = [],
     } = options;
     const posted: unknown[] = [];
+    const modelRequests: unknown[] = [];
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/settings/llm/health") {
@@ -1989,6 +2147,13 @@ describe("SettingsForm — persisted draft/load/test state", () => {
         if (healthMode === "non_ok") return { ok: false, status: 503, json: async () => ({}) };
         if (healthMode === "invalid") return { ok: true, status: 200, json: async () => ({ configured: true }) };
         return { ok: true, status: 200, json: async () => health };
+      }
+      if (url === "/api/settings/llm/models") {
+        modelRequests.push(JSON.parse(String(init?.body)));
+        if (modelsMode === "throw") throw new Error("network");
+        if (modelsMode === "non_ok") return { ok: false, status: 503, json: async () => ({}) };
+        if (modelsMode === "invalid") return { ok: true, status: 200, json: async () => ({ models: [42] }) };
+        return { ok: true, status: 200, json: async () => ({ models }) };
       }
       if (init?.method === "POST") {
         const body = JSON.parse(String(init.body));
@@ -2009,7 +2174,7 @@ describe("SettingsForm — persisted draft/load/test state", () => {
       return { ok: true, status: 200, json: async () => initial };
     });
     vi.stubGlobal("fetch", fetchMock);
-    return { fetchMock, posted };
+    return { fetchMock, posted, modelRequests };
   }
 
   it.each(["throw", "non_ok", "invalid"] as const)(
@@ -2040,6 +2205,122 @@ describe("SettingsForm — persisted draft/load/test state", () => {
     expect(screen.getByText(/먼저 설정을 저장한 뒤 연결을 테스트하세요/)).toBeInTheDocument();
   });
 
+  it("offers only provider-valid native options and omits the CLI default model on save", async () => {
+    const { posted, fetchMock } = stubSettings({
+      saved: { provider: "claude-cli" },
+      health: {
+        configured: true,
+        provider: "claude-cli",
+        ok: true,
+        detail: "Claude CLI가 설치되어 있습니다",
+      },
+    });
+    render(<SettingsForm />);
+    await screen.findByText("저장된 요약 모델 설정이 없습니다.");
+
+    const claudeModels = screen.getByRole("combobox", { name: "모델" });
+    expect(within(claudeModels).getByRole("option", { name: "CLI 기본값 (권장)" })).toBeInTheDocument();
+    expect(within(claudeModels).getByRole("option", { name: "Sonnet" })).toHaveValue("sonnet");
+    expect(within(claudeModels).getByRole("option", { name: "Opus" })).toHaveValue("opus");
+    expect(within(claudeModels).getByRole("option", { name: "Haiku" })).toHaveValue("haiku");
+    expect(within(claudeModels).getByRole("option", { name: "직접 입력" })).toHaveValue("__custom__");
+
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(posted).toEqual([{ provider: "claude-cli" }]));
+    expect(await screen.findByText(/Claude CLI · 감지됨/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "첫 회의 녹음" })).toHaveAttribute("href", "/#recorder");
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/settings/llm/health")).toBe(true);
+
+    fireEvent.click(screen.getByLabelText(/Codex CLI/));
+    const codexModels = screen.getByRole("combobox", { name: "모델" });
+    expect(within(codexModels).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "CLI 기본값 (권장)",
+      "직접 입력",
+    ]);
+    expect(within(codexModels).queryByText(/gpt-|codex-/i)).not.toBeInTheDocument();
+  });
+
+  it("preserves unknown saved models exactly in direct-input mode", async () => {
+    stubSettings({ initial: { provider: "claude-cli", model: "  private-model:v7  " } });
+    render(<SettingsForm />);
+
+    expect(await screen.findByRole("combobox", { name: "모델" })).toHaveValue("__custom__");
+    expect(screen.getByRole("textbox", { name: "직접 입력 모델" })).toHaveValue("private-model:v7");
+    expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
+  });
+
+  it("keeps provider-specific unsaved drafts isolated and saves only the current provider", async () => {
+    const { posted } = stubSettings();
+    render(<SettingsForm />);
+    await screen.findByText("저장된 요약 모델 설정이 없습니다.");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "모델" }), {
+      target: { value: "__custom__" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "직접 입력 모델" }), {
+      target: { value: " claude-private " },
+    });
+
+    fireEvent.click(screen.getByLabelText(/Codex CLI/));
+    fireEvent.change(screen.getByRole("combobox", { name: "모델" }), {
+      target: { value: "__custom__" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "직접 입력 모델" }), {
+      target: { value: " codex-private " },
+    });
+
+    fireEvent.click(screen.getByLabelText(/Claude CLI/));
+    expect(screen.getByRole("textbox", { name: "직접 입력 모델" })).toHaveValue(" claude-private ");
+    fireEvent.click(screen.getByLabelText(/Codex CLI/));
+    expect(screen.getByRole("textbox", { name: "직접 입력 모델" })).toHaveValue(" codex-private ");
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    await waitFor(() => expect(posted).toEqual([{ provider: "codex-cli", model: "codex-private" }]));
+    expect(JSON.stringify(posted[0])).not.toContain("claude-private");
+    expect(JSON.stringify(posted[0])).not.toContain("baseUrl");
+  });
+
+  it("loads installed Ollama models, refreshes them, and preserves direct input on discovery failure", async () => {
+    const { modelRequests } = stubSettings({
+      models: ["llama3.2:latest", "qwen2.5:7b"],
+    });
+    render(<SettingsForm />);
+    await screen.findByText("저장된 요약 모델 설정이 없습니다.");
+    fireEvent.click(screen.getByLabelText(/Ollama/));
+
+    const selector = await screen.findByRole("combobox", { name: "모델" });
+    await waitFor(() => expect(within(selector).getByRole("option", { name: "llama3.2:latest" }))
+      .toBeInTheDocument());
+    fireEvent.change(selector, { target: { value: "qwen2.5:7b" } });
+    expect(screen.queryByRole("textbox", { name: "직접 입력 모델" })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: /Base URL/ }), {
+      target: { value: "http://localhost:11434" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "설치된 모델 새로고침" }));
+    await waitFor(() => expect(modelRequests.at(-1)).toEqual({ baseUrl: "http://localhost:11434" }));
+    expect(screen.getByRole("button", { name: "설치된 모델 새로고침" })).toHaveClass("min-h-11");
+  });
+
+  it.each(["non_ok", "throw", "invalid"] as const)(
+    "Ollama discovery %s 실패는 직접 입력 draft와 base URL을 보존한다",
+    async (modelsMode) => {
+      stubSettings({ modelsMode });
+      render(<SettingsForm />);
+      await screen.findByText("저장된 요약 모델 설정이 없습니다.");
+      fireEvent.click(screen.getByLabelText(/Ollama/));
+      const custom = screen.getByRole("textbox", { name: "직접 입력 모델" });
+      fireEvent.change(custom, { target: { value: "keep-me:latest" } });
+      const baseUrl = screen.getByRole("textbox", { name: /Base URL/ });
+      fireEvent.change(baseUrl, { target: { value: "http://localhost:11434" } });
+      fireEvent.click(screen.getByRole("button", { name: "설치된 모델 새로고침" }));
+
+      expect(await screen.findByText(/설치된 모델을 불러오지 못했어요/)).toBeInTheDocument();
+      expect(custom).toHaveValue("keep-me:latest");
+      expect(baseUrl).toHaveValue("http://localhost:11434");
+    },
+  );
+
   it("GET 실패 뒤 다시 시도 성공은 서버 snapshot으로 editor를 복구한다", async () => {
     let getCalls = 0;
     vi.stubGlobal("fetch", vi.fn(async () => {
@@ -2049,7 +2330,8 @@ describe("SettingsForm — persisted draft/load/test state", () => {
     }));
     render(<SettingsForm />);
     fireEvent.click(await screen.findByRole("button", { name: "다시 시도" }));
-    expect(await screen.findByRole("textbox", { name: /모델/ })).toHaveValue("gpt-5");
+    expect(await screen.findByRole("combobox", { name: "모델" })).toHaveValue("__custom__");
+    expect(screen.getByRole("textbox", { name: "직접 입력 모델" })).toHaveValue("gpt-5");
     expect(screen.getByLabelText(/Codex CLI/)).toBeChecked();
     expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "연결 테스트" })).toBeEnabled();
@@ -2058,7 +2340,7 @@ describe("SettingsForm — persisted draft/load/test state", () => {
   it("saved snapshot과 같은 draft는 저장이 잠기고 변경하면 저장만 활성화된다", async () => {
     stubSettings({ initial: { provider: "claude-cli", model: "sonnet" } });
     render(<SettingsForm />);
-    const model = await screen.findByRole("textbox", { name: /모델/ });
+    const model = await screen.findByRole("combobox", { name: "모델" });
     expect(model).toHaveValue("sonnet");
     expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "연결 테스트" })).toBeEnabled();
@@ -2076,7 +2358,9 @@ describe("SettingsForm — persisted draft/load/test state", () => {
     render(<SettingsForm />);
     await screen.findByText("저장된 요약 모델 설정이 없습니다.");
     fireEvent.click(screen.getByLabelText(/Ollama/));
-    fireEvent.change(screen.getByRole("textbox", { name: /모델/ }), { target: { value: " llama3.1 " } });
+    fireEvent.change(screen.getByRole("textbox", { name: "직접 입력 모델" }), {
+      target: { value: " llama3.1 " },
+    });
     fireEvent.change(screen.getByRole("textbox", { name: /Base URL/ }), {
       target: { value: " http://127.0.0.1:11434 " },
     });
@@ -2088,7 +2372,7 @@ describe("SettingsForm — persisted draft/load/test state", () => {
       model: "llama3.1",
       baseUrl: "http://127.0.0.1:11434",
     });
-    expect(screen.getByRole("textbox", { name: /모델/ })).toHaveValue("llama3.1");
+    expect(screen.getByRole("textbox", { name: "직접 입력 모델" })).toHaveValue("llama3.1");
     expect(screen.getByRole("button", { name: "저장" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "연결 테스트" })).toBeEnabled();
   });
@@ -2108,7 +2392,7 @@ describe("SettingsForm — persisted draft/load/test state", () => {
       };
     }));
     render(<SettingsForm />);
-    const model = await screen.findByRole("textbox", { name: /모델/ });
+    const model = await screen.findByRole("combobox", { name: "모델" });
     fireEvent.change(model, { target: { value: "opus" } });
     fireEvent.click(screen.getByRole("button", { name: "저장" }));
 
@@ -2127,7 +2411,9 @@ describe("SettingsForm — persisted draft/load/test state", () => {
   it.each(["non_ok", "throw"] as const)("save %s 실패는 draft와 dirty를 보존한다", async (saveMode) => {
     stubSettings({ initial: { provider: "claude-cli", model: "sonnet" }, saveMode });
     render(<SettingsForm />);
-    const model = await screen.findByRole("textbox", { name: /모델/ });
+    const selector = await screen.findByRole("combobox", { name: "모델" });
+    fireEvent.change(selector, { target: { value: "__custom__" } });
+    const model = screen.getByRole("textbox", { name: "직접 입력 모델" });
     fireEvent.change(model, { target: { value: "draft-model" } });
     fireEvent.click(screen.getByRole("button", { name: "저장" }));
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/저장하지 못했어요/));
@@ -2141,7 +2427,7 @@ describe("SettingsForm — persisted draft/load/test state", () => {
     render(<SettingsForm />);
     await screen.findByText("저장된 요약 모델 설정이 없습니다.");
     fireEvent.click(screen.getByLabelText(/Ollama/));
-    const model = screen.getByRole("textbox", { name: /모델/ });
+    const model = screen.getByRole("textbox", { name: "직접 입력 모델" });
     expect(screen.getByText("모델명이 필요합니다.")).toBeInTheDocument();
     expect(screen.queryByText("Ollama 모델명을 입력하세요.")).not.toBeInTheDocument();
     expect(model).not.toHaveAttribute("aria-invalid", "true");
@@ -2153,7 +2439,7 @@ describe("SettingsForm — persisted draft/load/test state", () => {
 
     fireEvent.click(screen.getByLabelText(/Claude CLI/));
     expect(screen.queryByText("Ollama 모델명을 입력하세요.")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: /모델/ })).not.toHaveAttribute("aria-invalid", "true");
+    expect(screen.queryByRole("textbox", { name: "직접 입력 모델" })).not.toBeInTheDocument();
   });
 
   it("connection test는 persisted provider/model snapshot을 표시하고 baseUrl은 노출하지 않는다", async () => {

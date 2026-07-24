@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { GET as glossaryGET, POST as glossaryPOST } from "@/app/api/glossary/route";
 import { GET as audioGET } from "@/app/api/meetings/[id]/audio/route";
@@ -20,6 +20,7 @@ import { PATCH as transcriptPATCH } from "@/app/api/meetings/[id]/transcript/rou
 import { POST as transcriptRegeneratePOST } from "@/app/api/meetings/[id]/transcript/regenerate/route";
 import { GET as listMeetings } from "@/app/api/meetings/route";
 import { GET as llmHealthGET } from "@/app/api/settings/llm/health/route";
+import { POST as llmModelsPOST } from "@/app/api/settings/llm/models/route";
 import { POST as llmSettingsPOST } from "@/app/api/settings/llm/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
 import { POST as globalSummarizePOST } from "@/app/api/summarize/route";
@@ -145,6 +146,14 @@ async function expectAudioLeaseReleased(id: string) {
   }
 }
 
+function modelsRequest(body: unknown, headers: Record<string, string> = {}) {
+  return appRequest("/api/settings/llm/models", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
 describe("app-api routes", () => {
   it("GET /api/whisper/health proxies the local service (connected)", async () => {
     const res = await whisperHealth(appRequest("/api/whisper/health"));
@@ -192,7 +201,136 @@ describe("app-api routes", () => {
       configured: true,
       provider: "ollama",
       ok: false,
-      detail: "Ollama model not set",
+      detail: "Ollama 모델을 선택해 저장하세요.",
+    });
+  });
+
+  describe("POST /api/settings/llm/models", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    });
+
+    it("rejects ingress before reading the body or starting local network work", async () => {
+      let bodyObserved = false;
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const unsafe = new Request("http://evil.test/api/settings/llm/models", {
+        method: "POST",
+        headers: {
+          host: "evil.test",
+          origin: "http://evil.test",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+      const guarded = new Proxy(unsafe, {
+        get(target, property) {
+          if (property === "body") {
+            bodyObserved = true;
+            throw new Error("body must not be read");
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+
+      const response = await llmModelsPOST(guarded);
+      expect(response.status).toBe(403);
+      expect(bodyObserved).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it("accepts only strict bounded JSON and explicit-port loopback endpoints", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      expect((await llmModelsPOST(modelsRequest(
+        { baseUrl: "http://localhost:11434", extra: true },
+      ))).status).toBe(400);
+      expect((await llmModelsPOST(modelsRequest({}, {
+        "content-length": "1000000",
+      }))).status).toBe(413);
+
+      for (const baseUrl of [
+        "http://evil.test:11434",
+        "http://localhost",
+        "https://localhost:11434",
+        "http://localhost:11434/api",
+        "http://user@localhost:11434",
+      ]) {
+        expect((await llmModelsPOST(modelsRequest({ baseUrl }))).status).toBe(400);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it("returns bounded valid names with stable exact de-duplication and no raw tags fields", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+        models: [
+          { name: "llama3.2:latest", size: 123, digest: "do-not-leak" },
+          { name: "qwen2.5:7b" },
+          { name: "llama3.2:latest" },
+          { name: "" },
+          { name: " leading-space" },
+          { name: "x".repeat(300) },
+          { nope: "ignored" },
+        ],
+        secret: "/tmp/private-model-cache",
+      }), {
+        headers: { "content-type": "application/json" },
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const response = await llmModelsPOST(modelsRequest({ baseUrl: "http://localhost:11434/" }));
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        models: ["llama3.2:latest", "qwen2.5:7b"],
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:11434/api/tags",
+        expect.objectContaining({
+          cache: "no-store",
+          redirect: "error",
+          signal: expect.any(AbortSignal),
+        }),
+      );
+      vi.unstubAllGlobals();
+    });
+
+    it.each([
+      ["redirect", new Response("private redirect", { status: 302, headers: { location: "http://evil.test/" } })],
+      ["malformed tags", new Response(JSON.stringify({ models: "private malformed payload" }))],
+      ["oversized tags", new Response("private oversized payload", {
+        headers: { "content-length": "1000000" },
+      })],
+    ])("sanitizes %s failures", async (_label, upstream) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(upstream));
+      const response = await llmModelsPOST(modelsRequest({}));
+      expect(response.status).toBe(503);
+      const text = await response.text();
+      expect(text).toContain("local_service_unavailable");
+      expect(text).not.toMatch(/private|evil\\.test|malformed|oversized/);
+      vi.unstubAllGlobals();
+    });
+
+    it("uses a short timeout and returns a static public error", async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("fetch", vi.fn((_input: string, init?: RequestInit) => (
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new Error("private timeout /tmp/provider"));
+          });
+        })
+      )));
+      const pending = llmModelsPOST(modelsRequest({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(await response.text()).not.toMatch(/private|\/tmp|provider/);
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
     });
   });
 

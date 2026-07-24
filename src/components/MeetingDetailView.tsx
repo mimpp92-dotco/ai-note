@@ -87,6 +87,8 @@ export interface MeetingDetailData {
 
 const TRANSCRIPT_GENERATION_TIMEOUT_MS = 1_800_000 + 30_000;
 const SUMMARY_GENERATION_TIMEOUT_MS = 2 * 1_800_000 + 30_000;
+const TRANSCRIPTION_POLL_INTERVAL_MS = 3_000;
+const TRANSCRIPTION_POLL_TIMEOUT_MS = 30 * 60_000;
 
 const ACTION_CONTROL_CLASS =
   "inline-flex min-h-11 shrink-0 items-center justify-center rounded-md border border-line bg-panel px-3 py-2 text-[13px] font-medium text-accent transition-colors hover:bg-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-50";
@@ -275,6 +277,14 @@ function allowContentEditorNavigation(current: string, destination: string): boo
   }
 }
 
+export function resolveInitialMeetingTab(
+  contentTab: string | null,
+  summary: Summary | null,
+): "script" | "summary" {
+  if (contentTab === "script" || contentTab === "summary") return contentTab;
+  return summary ? "summary" : "script";
+}
+
 export function MeetingDetailView({
   id,
   status,
@@ -329,6 +339,9 @@ export function MeetingDetailView({
   } | null>(null);
   const [generationStatus, setGenerationStatus] = useState<EditorStatus | null>(null);
   const [initialRetrying, setInitialRetrying] = useState(false);
+  const [transcriptionRetrying, setTranscriptionRetrying] = useState(false);
+  const [transcriptionRetryStatus, setTranscriptionRetryStatus] = useState<string | null>(null);
+  const [transcriptionPollDeadline, setTranscriptionPollDeadline] = useState<number | null>(null);
 
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveTrigger, setMoveTrigger] = useState<HTMLElement | null>(null);
@@ -351,6 +364,7 @@ export function MeetingDetailView({
   const summaryGenerationTriggerRef = useRef<HTMLButtonElement>(null);
   const generationCancelRef = useRef<HTMLButtonElement>(null);
   const generationReturnFocusRef = useRef<HTMLElement | null>(null);
+  const transcriptionRetryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const continueEditingRef = useRef<HTMLButtonElement>(null);
 
   confirmedRef.current = confirmed;
@@ -543,6 +557,70 @@ export function MeetingDetailView({
     const timer = window.setInterval(() => router.refresh(), 3000);
     return () => window.clearInterval(timer);
   }, [effectiveOperation, router]);
+
+  useEffect(() => {
+    if (transcriptionPollDeadline === null) return;
+    if (status.status !== "recorded" && status.status !== "transcribing") {
+      setTranscriptionPollDeadline(null);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      if (cancelled) return;
+      if (Date.now() >= transcriptionPollDeadline) {
+        setTranscriptionPollDeadline(null);
+        setTranscriptionRetryStatus(
+          "전사가 계속 진행 중입니다. 나중에 새로고침해 상태를 확인하세요.",
+        );
+        return;
+      }
+      controller = new AbortController();
+      try {
+        const response = await fetch(`/api/meetings/${id}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!cancelled && response.ok) {
+          const latest = await responseBody(response);
+          const latestErrorAction = isRecord(latest)
+            && isRecord(latest.error)
+            && typeof latest.error.action === "string"
+            ? latest.error.action
+            : null;
+          if (
+            isRecord(latest)
+            && (
+              latest.status !== status.status
+              || latestErrorAction !== (status.error?.action ?? null)
+            )
+          ) {
+            router.refresh();
+          }
+        }
+      } catch {
+        // A later single-inflight poll can recover a transient local request failure.
+      }
+      if (!cancelled) timer = setTimeout(() => void poll(), TRANSCRIPTION_POLL_INTERVAL_MS);
+    };
+    timer = setTimeout(() => void poll(), 0);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      controller?.abort();
+    };
+  }, [id, router, status.error?.action, status.status, transcriptionPollDeadline]);
+
+  useEffect(() => {
+    if (transcriptionRetrying || !transcriptionRetryTriggerRef.current) return;
+    const trigger = transcriptionRetryTriggerRef.current;
+    transcriptionRetryTriggerRef.current = null;
+    const frame = window.requestAnimationFrame(() => {
+      if (trigger.isConnected) trigger.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [transcriptionRetrying]);
 
   useEffect(() => {
     if (!localGeneration) return;
@@ -1001,6 +1079,39 @@ export function MeetingDetailView({
     }
   };
 
+  const beginTranscriptionRetry = async (trigger: HTMLButtonElement) => {
+    if (transcriptionRetrying) return;
+    transcriptionRetryTriggerRef.current = trigger;
+    setTranscriptionRetrying(true);
+    setTranscriptionRetryStatus("전사 요청을 보내는 중…");
+    try {
+      const response = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!response.ok && response.status !== 409) {
+        setTranscriptionRetryStatus(
+          "전사 요청을 보내지 못했습니다. 녹음 원본과 현재 내용은 유지됐습니다. 잠시 후 다시 시도하세요.",
+        );
+        return;
+      }
+      setTranscriptionRetryStatus(
+        response.ok
+          ? "전사 요청을 접수했습니다. 최신 상태를 확인합니다."
+          : "전사가 이미 진행 중일 수 있어 최신 상태를 확인합니다.",
+      );
+      router.refresh();
+      setTranscriptionPollDeadline(Date.now() + TRANSCRIPTION_POLL_TIMEOUT_MS);
+    } catch {
+      setTranscriptionRetryStatus(
+        "전사 요청을 보내지 못했습니다. 녹음 원본과 현재 내용은 유지됐습니다. 잠시 후 다시 시도하세요.",
+      );
+    } finally {
+      setTranscriptionRetrying(false);
+    }
+  };
+
   const draftCopyText = editorMode === "transcript"
     ? transcriptDraft
     : summaryDraft;
@@ -1334,6 +1445,9 @@ export function MeetingDetailView({
           hasStableSummary={confirmed !== null}
           onInitialRetry={() => void beginInitialSummarize()}
           retrying={initialRetrying}
+          onTranscriptionRetry={(trigger) => void beginTranscriptionRetry(trigger)}
+          transcriptionRetrying={transcriptionRetrying}
+          transcriptionRetryStatus={transcriptionRetryStatus}
         />
       </div>
 
@@ -1549,6 +1663,9 @@ function StatusCard({
   hasStableSummary,
   onInitialRetry,
   retrying,
+  onTranscriptionRetry,
+  transcriptionRetrying,
+  transcriptionRetryStatus,
 }: {
   status: MeetingDetailStatus;
   readiness: LlmReadiness;
@@ -1556,7 +1673,43 @@ function StatusCard({
   hasStableSummary: boolean;
   onInitialRetry(): void;
   retrying: boolean;
+  onTranscriptionRetry(trigger: HTMLButtonElement): void;
+  transcriptionRetrying: boolean;
+  transcriptionRetryStatus: string | null;
 }) {
+  if (status.error?.action === "retry_transcription") {
+    return (
+      <div className="flex min-w-0 flex-col items-start gap-3 rounded-[12px] border border-error/40 bg-error/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div className="min-w-0">
+          <p className="break-words text-[14px] text-ink">
+            <span className="font-semibold text-error">전사 실패</span>
+            {" — "}로컬 전사를 완료하지 못했습니다. 녹음 원본은 보존되어 있습니다.
+          </p>
+          <p
+            role="status"
+            aria-label="전사 다시 시도 상태"
+            aria-live="polite"
+            className={`mt-1 min-h-5 break-words text-[13px] ${
+              transcriptionRetryStatus?.startsWith("전사 요청을 보내지 못했습니다")
+                ? "text-error"
+                : "text-inkSoft"
+            }`}
+          >
+            {transcriptionRetryStatus ?? ""}
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={transcriptionRetrying}
+          onClick={(event) => onTranscriptionRetry(event.currentTarget)}
+          className={`${PRIMARY_CONTROL_CLASS} w-full shrink-0 sm:w-auto`}
+        >
+          {transcriptionRetrying ? "전사 요청 중…" : "전사 다시 시도"}
+        </button>
+      </div>
+    );
+  }
+
   if (operation === "initial" || (status.status === "summarizing" && !hasStableSummary)) {
     return (
       <div className="flex flex-wrap items-center gap-3 rounded-[12px] border border-line bg-panel px-4 py-4 sm:px-5">

@@ -1,0 +1,647 @@
+{
+  "schemaVersion": 2,
+  "profile": "balanced-autonomous-v1",
+  "slug": "installation-and-first-run-ux",
+  "sourceRequest": "공개 저장소 URL만 AI 에이전트에게 전달해도 기존 사용자 폴더와 설정을 건드리지 않고 별도 위치에 설치한 뒤, 사용 중인 포트를 피해서 로컬 서버를 백그라운드로 실행하고 실제 URL을 브라우저에 여는 흐름을 만든다. 첫 화면은 요약 모델 설정을 놓치지 않게 안내하되 녹음은 막지 않고, 설정의 모델 텍스트 입력을 provider별 선택과 직접 입력으로 개선한다. 저장 직후 상태를 정직하게 확인하고, 현재 새로고침만 하는 전사 재시도 버튼을 실제 재요청으로 고친다. 제품 소개·문구·기본 탭과 synthetic Playwright 회귀까지 현재 동작과 일치시킨다.",
+  "publishStrategy": "single-pr",
+  "base": {
+    "ref": "main",
+    "sha": "e24ad30dc8e07c21a13b43062c68a4445d984ebc"
+  },
+  "workspace": {
+    "mode": "task-worktree-v1",
+    "branch": "execute/installation-and-first-run-ux"
+  },
+  "executionPrerequisites": {
+    "noSelfMutationOfRunningProcess": true,
+    "realModelCallsInTests": false,
+    "networkCallsInTests": false
+  },
+  "executionState": {
+    "summaryLedger": "local",
+    "journal": "git-dir",
+    "statusCommits": "none"
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "저장소 URL만 받은 에이전트가 기존 작업 폴더·상위 저장소·사용자 전역 설정과 충돌하지 않는 설치 위치를 결정하고 그 경계를 사용자에게 명확히 보고한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "사용자가 target을 지정하지 않으면 현재 디렉터리 자체에 덮어 설치하지 않는다. 다른 Git 저장소 안이면 그 저장소 root의 sibling을, 그 밖이면 현재 디렉터리 아래 새 ai-note 디렉터리를 사용한다.",
+        "기본 target 이름이 이미 존재하면 그 내용을 재사용·덮어쓰기·pull하지 않고 비어 있는 deterministic suffix 디렉터리를 선택한다. 명시 target이 non-empty 또는 다른 origin이면 중단하고 exact path를 보고한다.",
+        "clone과 설치는 target 내부만 수정하며 상위 .git, .claude, .harness, 사용자 git config, 다른 package.json 또는 실행 중인 프로젝트를 변경하지 않는다.",
+        "에이전트는 최종 absolute install path, branch 또는 revision, 실제 앱 URL을 보고한다. 저장소가 제어할 수 없는 pre-clone host 정책은 보장한다고 표현하지 않고 README와 AGENTS의 공개 계약을 읽은 뒤부터 적용한다고 설명한다.",
+        "OS package 설치의 sudo 또는 provider 로그인처럼 새 권한이 필요한 경우에만 사용자 승인을 요청하고, 단순 경로 충돌은 안전한 새 target 선택으로 해결한다."
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "무의존 bootstrap과 repository-owned runtime lifecycle로 설치·빌드·동적 포트 선택·백그라운드 기동·health 확인·브라우저 열기를 한 흐름으로 완료한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "clone 직후 Node만으로 실행 가능한 canonical command는 node scripts/bootstrap.mjs --launch이며 doctor를 먼저 실행하고 HUSKY=0 npm ci, npm run build, app/Whisper 기동을 순서대로 수행한다.",
+        "필수 Node, uv 또는 ffmpeg가 없으면 안전한 OS별 조치와 재실행 command를 반환한다. bootstrap 자체는 sudo, package manager, provider 로그인, Ollama pull 또는 Whisper model download를 몰래 실행하지 않는다.",
+        "앱은 127.0.0.1:3000부터, Whisper는 127.0.0.1:8123부터 bounded candidate를 선택하고 bind race도 다음 후보로 재시도한다. 3000 또는 8123의 기존 프로세스에 연결하거나 종료하지 않는다.",
+        "선택한 두 포트는 child 환경에만 주입하고 .env.local을 만들거나 덮어쓰지 않는다. 앱 URL은 http://localhost:<actual-port> 하나를 정본으로 출력하고 app과 /api/whisper/health가 준비된 뒤에만 성공한다.",
+        "지원되는 desktop에서는 OS 기본 브라우저를 실제 URL로 열고, headless 또는 opener 실패에서는 서버 성공을 유지하면서 exact URL과 에이전트 browser surface로 열 조치를 출력한다. URL은 shell interpolation 없이 argv로 전달하고 Playwright, Chrome extension 또는 MCP를 제품 실행 의존성으로 사용하지 않는다.",
+        "runtime metadata, heartbeat와 log는 gitignored repository-local 디렉터리에만 두고 mode를 제한하며 inherited environment나 credential을 기록하지 않는다. npm run app:status와 npm run app:stop은 live ownership token이 확인된 supervisor만 조회·종료하며 stale 또는 검증 불가 PID에는 signal을 보내지 않는다.",
+        "npm run dev는 contributor용 foreground command로 유지한다. bootstrap unit test는 npm ci, build, 실제 long-lived server, browser opener, 외부 network 또는 model download를 실행하지 않고 주입된 fake와 임시 디렉터리만 사용한다."
+      ]
+    },
+    {
+      "id": "R3",
+      "text": "첫 실행에서 요약 모델 준비를 놓치지 않게 안내하되 녹음·로컬 전사를 막지 않는 짧은 readiness 흐름과 정직한 상태 문구를 제공한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "요약 모델이 미설정이거나 사용할 수 없을 때 홈의 recorder 앞에 비차단 카드가 나타나며 primary AI 요약 설정과 secondary 요약 없이 회의 녹음 action을 제공한다.",
+        "secondary action은 같은 화면의 recorder로 이동하고 시작 control에 focus를 넘긴다. 별도 onboarding route, modal tour, 단계 저장, 계정 생성 또는 녹음 차단은 추가하지 않는다.",
+        "설정 화면은 요약 모델을 먼저, 선택적인 내 정보를 다음에 보여 주며 내 정보 미설정이 녹음·전사·일반 검색을 막지 않는다고 설명한다.",
+        "저장 성공 직후 persisted 설정의 health를 자동 검사한다. Claude/Codex ok는 CLI 감지됨으로만, Ollama ok는 연결됨으로 표시하고 CLI 인증·선택 모델의 실제 생성 성공을 보장하지 않는다.",
+        "검사가 성공하면 첫 회의 녹음으로 action을 제공하고, 실패하면 draft와 saved snapshot을 잃지 않은 채 provider별 조치를 보여 준다.",
+        "첫 전사는 선택한 Whisper model의 최초 download 때문에 오래 걸릴 수 있고 model을 내려받기 전에는 가짜 진행률을 제공하지 않는다고 첫 사용 문구에 알린다.",
+        "녹음 시작 control은 실시간 기록 시작 대신 회의 녹음 시작으로 표기하고, best-effort 같은 내부·영문 운영 용어를 사용자 안내에서 제거한다."
+      ]
+    },
+    {
+      "id": "R4",
+      "text": "provider별로 유효한 범위를 반영한 native model selector와 직접 입력 escape hatch를 제공하면서 기존 model 문자열과 저장 계약을 보존한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "Claude CLI는 CLI 기본값(권장), Sonnet=sonnet, Opus=opus, Haiku=haiku, 직접 입력을 제공한다. CLI 기본값은 model field를 저장하지 않는다.",
+        "Codex CLI는 CLI 기본값(권장)과 직접 입력만 제공하며 versioned model catalog를 hard-code하거나 codex debug models 같은 experimental command에 의존하지 않는다.",
+        "Ollama는 configured draft loopback base URL의 /api/tags에서 현재 설치된 model을 불러와 native select, 새로고침, 직접 입력을 제공한다. 자동 pull/download 또는 remote catalog 호출은 하지 않는다.",
+        "저장되어 있던 unknown model은 직접 입력 상태로 exact 문자열을 보존한다. 직접 입력은 trim 뒤 backend에 exact 전달하며 selector가 임의 alias 교정이나 fuzzy matching을 약속하지 않는다.",
+        "provider 전환은 다른 provider의 model을 조용히 재사용하지 않고 session 동안 provider별 draft를 보존한다. save payload에는 현재 provider의 normalized model과 Ollama일 때만 baseUrl이 포함된다.",
+        "Ollama discovery route는 local request guard를 body parse, settings/fs/network보다 먼저 통과하고 exact JSON cap, explicit-port loopback normalization, redirect error, 짧은 timeout, bounded response/model count/name, sanitized public error를 적용한다.",
+        "모델 목록을 위해 새 API key, Claude/Codex remote API, 새 dependency 또는 data/settings.json 직접 writer를 추가하지 않는다."
+      ]
+    },
+    {
+      "id": "R5",
+      "text": "전사 실패가 목록·상세·저장 결과에서 지속적으로 보이고 전사 다시 시도가 기존 durable transcribe API를 실제 호출하도록 고친다.",
+      "source": "observed-bug",
+      "acceptance": [
+        "retry_transcription error가 있는 회의 목록 row는 일반 전사 중 label 대신 전사 실패 badge를 보여 주며 상세로 이동한 뒤에도 같은 실패와 복구 action을 확인할 수 있다.",
+        "finalize 결과의 전사 다시 시도는 recorder session의 exact meetingId로 POST /api/transcribe를 호출하고 단순 finalize probe만 수행하지 않는다.",
+        "회의 상세의 전사 실패 card도 같은 endpoint를 호출하며 요청 중 disabled label, safe error, aria-live announcement와 완료 후 focus를 제공한다.",
+        "접수 성공 또는 이미 진행 중 race는 server state를 새로 확인한다. transcribing polling은 한 번에 한 요청만 두고 navigation, unmount 또는 상태 변경에서 정리하며 client timeout을 전사 실패로 오인하지 않는다.",
+        "새 transcribe endpoint나 dispatch ID를 만들지 않고 기존 guard, tombstone fence, operation lease, durable dispatch 재사용과 raw-last completion 계약을 보존한다.",
+        "audio.webm, raw.md, segments.json, transcript.md, summary.json을 UI에서 직접 수정하지 않고 public error에 path, dispatch ID, provider output을 노출하지 않는다."
+      ]
+    },
+    {
+      "id": "R6",
+      "text": "첫 회의부터 완료 회의 열람까지 핵심 문구와 기본 정보 위계를 현재 제품 목적에 맞게 최소 범위에서 정리한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "명시적 contentTab query가 없고 usable summary가 있는 완료 회의는 회의록 요약 tab을 기본으로 열며, summary가 없거나 script query가 명시되면 전체 스크립트를 연다.",
+        "홈의 한 줄 설명과 recorder copy는 녹음, 로컬 전사, 선택한 CLI/Ollama 요약의 실제 순서를 설명하고 설정이 없어도 녹음·전사는 가능하다고 일관되게 말한다.",
+        "README의 핵심 pipeline은 dormant 질문 기능을 활성 기능처럼 소개하지 않고 view, search, export와 현재 로컬 저장·provider 경계를 정확히 구분한다.",
+        "320px에서도 readiness card, model selector, retry action과 recorder control이 horizontal overflow 없이 wrap되고 독립 control은 최소 44px target과 visible focus를 유지한다.",
+        "워크스페이스·폴더 구조, 검색, 회의 편집, 요약 publisher, navigation guard 또는 전체 visual redesign은 변경하지 않는다."
+      ]
+    },
+    {
+      "id": "R7",
+      "text": "설치·첫 실행·모델 선택·전사 복구 계약을 정본 문서와 isolated synthetic Playwright 회귀로 검증하고 공개 안내를 실제 command와 일치시킨다.",
+      "source": "repository-contract",
+      "acceptance": [
+        "README, CONTRIBUTING, AGENTS, Claude setup command, scripts/src module instructions, PRD, ARCHITECTURE, UI_GUIDE, CHANGELOG와 ADR index가 최종 command, 동적 URL, browser 경계, model selector와 retry 동작을 같은 의미로 설명한다.",
+        "신규 ADR 0023은 안전한 install target, owned background runtime, dynamic loopback ports, OS 또는 agent browser open, provider-aware selector, first-use nonblocking 안내와 기존 ADR 0012/0014/0016/0020 경계를 기록한다.",
+        "기존 local-dev-and-synthetic-qa 초안이 다른 worktree에 남아 있더라도 이 plan을 정본으로 사용하며 fixed-port/no-fallback 또는 Chrome MCP 필수 계약을 실행하지 않는다.",
+        "repository-owned Playwright scenario는 desktop-1440, mobile-390, mobile-320에서 first-use card, recorder focus, model 선택과 custom 보존, auto health 문구, settings order, default summary, persistent transcription failure와 actual retry request를 synthetic data로 검증한다.",
+        "browser test는 runner-owned snapshot과 명백한 synthetic fixture만 사용하고 실제 data, glossary, .env, Whisper, Ollama, Claude/Codex CLI 또는 외부 network를 사용하지 않는다.",
+        "성공 evidence는 screenshots, assertions, console과 manifest를 test-results 또는 execute local journal에만 남긴다. README의 변경된 home/settings 이미지만 검증된 synthetic state로 갱신하며 evidence manifest를 docs/media에 복사하지 않는다.",
+        "전체 npm test, typecheck, lint, link check, secret 없는 build와 final synthetic browser gate가 모두 통과한다."
+      ]
+    }
+  ],
+  "globalConstraints": {
+    "noUnplannedWork": true,
+    "noOpportunisticRefactor": true,
+    "noRealUserData": true
+  },
+  "forbiddenPaths": [
+    "data/**",
+    ".env*",
+    "glossary.json",
+    "package-lock.json",
+    "whisper/**",
+    "fixtures/**",
+    ".github/**",
+    ".husky/**",
+    "docs/plans/**",
+    "src/lib/summarizePublisher.ts",
+    "src/lib/artifactPair.ts",
+    "src/domain/summary.ts",
+    "src/domain/summarySchema.ts"
+  ],
+  "browserEvidence": {
+    "mode": "playwright",
+    "preflightCommand": "npm run test:e2e:doctor",
+    "verifyCommand": "npm run test:e2e",
+    "requiredArtifacts": [
+      "screenshots",
+      "assertions",
+      "console"
+    ],
+    "viewports": [
+      "desktop-1440",
+      "mobile-390",
+      "mobile-320"
+    ],
+    "dataPolicy": "synthetic-only"
+  },
+  "phases": [
+    {
+      "id": 1,
+      "name": "safe-bootstrap-and-owned-runtime",
+      "file": "phase-1-safe-bootstrap-and-owned-runtime.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "README.md",
+        ".claude/commands/setup.md",
+        ".gitignore",
+        "package.json",
+        "package-lock.json",
+        "scripts/CLAUDE.md",
+        "scripts/setup.mjs",
+        "scripts/__tests__/setup.test.mjs",
+        "src/lib/config.ts",
+        "whisper/server.py"
+      ],
+      "allowedPaths": [
+        ".gitignore",
+        "package.json",
+        "scripts/setup.mjs",
+        "scripts/bootstrap.mjs",
+        "scripts/__tests__/setup.test.mjs",
+        "scripts/__tests__/bootstrap.test.mjs"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "critical",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- scripts/__tests__/setup.test.mjs scripts/__tests__/bootstrap.test.mjs",
+        "additionalCommands": [
+          "npm run lint -- scripts/setup.mjs scripts/bootstrap.mjs scripts/__tests__/setup.test.mjs scripts/__tests__/bootstrap.test.mjs"
+        ],
+        "evidence": [],
+        "reason": "설치와 background process lifecycle은 다른 프로젝트 종료, stale PID signal, port 오접속 위험이 있으므로 경로·명령·포트·ownership·browser fallback을 주입식 실패 테스트로 먼저 고정한다."
+      },
+      "blockIf": [
+        "기존 target, 상위 repository, 사용자 home 또는 global git/config를 수정해야 하면 중단",
+        "동적 포트 지원을 위해 127.0.0.1 외 bind나 .env.local rewrite가 필요하면 중단",
+        "stale 또는 ownership을 확인할 수 없는 PID를 종료해야 하면 중단",
+        "browser open을 위해 Playwright, Chrome extension, MCP 또는 새 npm dependency가 필요하면 중단",
+        "bootstrap test에서 npm ci, build, long-lived child, OS browser, 실제 port/network 또는 model download를 실행해야 하면 중단",
+        "package-lock.json 또는 whisper implementation을 수정해야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "scripts/bootstrap.mjs",
+        "scripts/__tests__/bootstrap.test.mjs"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "first-use-readiness-and-model-selector",
+      "file": "phase-2-first-use-readiness-and-model-selector.md",
+      "requirements": [
+        "R3",
+        "R4",
+        "R6",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0002-claude-command-no-app-llm.md",
+        "docs/decisions/0010-isolated-claude-summarize-invocation.md",
+        "docs/decisions/0012-local-ingress-and-fixed-id-service-boundary.md",
+        "src/app/settings/page.tsx",
+        "src/app/api/settings/llm/route.ts",
+        "src/app/api/settings/llm/health/route.ts",
+        "src/components/SettingsForm.tsx",
+        "src/components/UserProfileForm.tsx",
+        "src/components/HomeClient.tsx",
+        "src/components/Recorder.tsx",
+        "src/components/healthStatus.ts",
+        "src/components/useHealth.ts",
+        "src/lib/localEndpoint.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/lib/publicApi.ts",
+        "src/lib/settings.ts",
+        "src/services/llm/types.ts",
+        "src/services/llm/claudeCli.ts",
+        "src/services/llm/codexCli.ts",
+        "src/services/llm/ollama.ts",
+        "src/components/__tests__/views.test.tsx",
+        "src/components/__tests__/UserProfileForm.test.tsx",
+        "src/components/__tests__/LibraryNavigation.test.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx",
+        "src/components/__tests__/healthStatus.test.ts",
+        "src/services/llm/__tests__/claudeCli.test.ts",
+        "src/services/llm/__tests__/codexCli.test.ts",
+        "src/services/llm/__tests__/ollama.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "allowedPaths": [
+        "src/app/settings/page.tsx",
+        "src/app/api/settings/llm/health/route.ts",
+        "src/app/api/settings/llm/models/route.ts",
+        "src/components/SettingsForm.tsx",
+        "src/components/HomeClient.tsx",
+        "src/components/Recorder.tsx",
+        "src/components/healthStatus.ts",
+        "src/lib/localRequestGuard.ts",
+        "src/services/llm/claudeCli.ts",
+        "src/services/llm/codexCli.ts",
+        "src/services/llm/ollama.ts",
+        "src/components/__tests__/views.test.tsx",
+        "src/components/__tests__/UserProfileForm.test.tsx",
+        "src/components/__tests__/LibraryNavigation.test.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx",
+        "src/components/__tests__/healthStatus.test.ts",
+        "src/services/llm/__tests__/claudeCli.test.ts",
+        "src/services/llm/__tests__/codexCli.test.ts",
+        "src/services/llm/__tests__/ollama.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "critical",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- src/components/__tests__/views.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx src/components/__tests__/RecorderSessionProvider.test.tsx src/components/__tests__/healthStatus.test.ts src/services/llm/__tests__/claudeCli.test.ts src/services/llm/__tests__/codexCli.test.ts src/services/llm/__tests__/ollama.test.ts src/lib/__tests__/localRequestGuard.test.ts src/app/api/__tests__/routes.integration.test.ts",
+        "additionalCommands": [
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "설정 snapshot/draft와 local egress 경계를 유지하면서 provider별 selector, discovery cap, auto health와 첫 화면 focus를 함께 바꾸므로 API·adapter·RTL 실패 테스트를 먼저 고정한다."
+      },
+      "blockIf": [
+        "Claude/Codex remote model API, experimental model-list command 또는 versioned Codex catalog가 필요하면 중단",
+        "Ollama discovery가 explicit-port loopback 밖으로 나가거나 redirect, unbounded body/list/name을 허용해야 하면 중단",
+        "API key 저장, 유료 API 호출, Ollama model pull 또는 Whisper model download가 필요하면 중단",
+        "data/settings.json을 app settings API 밖에서 쓰거나 unsaved draft health를 persisted health처럼 표시해야 하면 중단",
+        "CLI binary detection을 인증 또는 선택 모델 생성 성공으로 표현해야 하면 중단",
+        "provider 전환에서 unknown saved model 또는 unsaved provider별 draft를 조용히 버려야 하면 중단",
+        "새 UI/runtime dependency, 별도 onboarding route 또는 blocking modal이 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "src/app/api/settings/llm/models/route.ts"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "transcription-recovery-and-focused-polish",
+      "file": "phase-3-transcription-recovery-and-focused-polish.md",
+      "requirements": [
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0012-local-ingress-and-fixed-id-service-boundary.md",
+        "docs/decisions/0014-durable-transcription-dispatch.md",
+        "docs/decisions/0016-atomic-finalize-directory-publication.md",
+        "src/app/api/transcribe/route.ts",
+        "src/app/meetings/*/page.tsx",
+        "src/components/Recorder.tsx",
+        "src/components/RecorderFinalizeResultView.tsx",
+        "src/components/MeetingList.tsx",
+        "src/components/MeetingRow.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/RecorderSessionProvider.tsx",
+        "src/domain/meeting.ts",
+        "src/lib/meetingLabels.ts",
+        "src/lib/recorderFinalizeResult.ts",
+        "src/lib/transcribe.ts",
+        "src/components/__tests__/RecorderFinalizeResultView.test.tsx",
+        "src/components/__tests__/MeetingRow.test.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx",
+        "src/components/__tests__/views.test.tsx",
+        "src/lib/__tests__/transcribe.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "allowedPaths": [
+        "src/app/meetings/*/page.tsx",
+        "src/components/Recorder.tsx",
+        "src/components/RecorderFinalizeResultView.tsx",
+        "src/components/MeetingRow.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/__tests__/RecorderFinalizeResultView.test.tsx",
+        "src/components/__tests__/MeetingRow.test.tsx",
+        "src/components/__tests__/RecorderSessionProvider.test.tsx",
+        "src/components/__tests__/views.test.tsx"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- src/components/__tests__/RecorderFinalizeResultView.test.tsx src/components/__tests__/MeetingRow.test.tsx src/components/__tests__/RecorderSessionProvider.test.tsx src/components/__tests__/views.test.tsx",
+        "additionalCommands": [
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "현재 finalize retry가 refresh만 호출하는 회귀를 실제 POST assertion으로 재현하고 목록·상세 지속 상태, loading/error/focus와 완료 회의 기본 tab을 component 경계에서 고정한다."
+      },
+      "blockIf": [
+        "새 transcribe endpoint, dispatch ID 또는 alternate writer가 필요하면 중단",
+        "기존 local request guard, tombstone fence, operation lease 또는 durable dispatch 재사용을 약화해야 하면 중단",
+        "audio, raw, segments, transcript 또는 summary artifact를 UI에서 직접 수정해야 하면 중단",
+        "public error에 path, dispatch ID, provider 또는 raw filesystem output을 노출해야 하면 중단",
+        "전사 retry를 위해 workspace/library 구조, summarize publisher 또는 navigation guard를 변경해야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "synthetic-first-run-browser-scenarios",
+      "file": "phase-4-synthetic-first-run-browser-scenarios.md",
+      "requirements": [
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "package.json",
+        "playwright.config.ts",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "scripts/run-e2e.mjs",
+        "scripts/e2e-manual-editing-fixture.mjs",
+        "scripts/__tests__/e2e-harness.test.mjs",
+        "scripts/__tests__/e2e-evidence-contract.test.ts",
+        "scripts/__tests__/e2e-manual-editing-fixture.test.mjs",
+        "e2e/global-setup.mjs",
+        "e2e/smoke.spec.ts",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/support/synthetic-test.ts",
+        "e2e/support/evidence-reporter.ts",
+        "src/app/api/settings/llm/models/route.ts",
+        "src/app/meetings/*/page.tsx",
+        "src/components/HomeClient.tsx",
+        "src/components/SettingsForm.tsx",
+        "src/components/Recorder.tsx",
+        "src/components/MeetingRow.tsx",
+        "src/components/MeetingDetailView.tsx"
+      ],
+      "allowedPaths": [
+        "e2e/global-setup.mjs",
+        "e2e/smoke.spec.ts",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/installation-and-first-run.spec.ts",
+        "scripts/e2e-first-run-fixture.mjs",
+        "scripts/__tests__/e2e-first-run-fixture.test.mjs",
+        "src/app/meetings/*/page.tsx",
+        "src/components/Recorder.tsx",
+        "src/components/MeetingDetailView.tsx",
+        "docs/media/home.png",
+        "docs/media/settings.png"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "requiresBrowser": true,
+      "dataPolicy": "synthetic-only",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- scripts/__tests__/e2e-first-run-fixture.test.mjs scripts/__tests__/e2e-harness.test.mjs scripts/__tests__/e2e-evidence-contract.test.ts",
+        "additionalCommands": [
+          "npm run test:e2e"
+        ],
+        "evidence": [
+          "browser"
+        ],
+        "reason": "새 first-use와 retry state는 실제 browser navigation, focus, responsive layout과 request를 검증해야 하며 fixture 자체는 runner-owned root와 sentinel을 unit test로 먼저 잠근다."
+      },
+      "blockIf": [
+        "npm run test:e2e:doctor가 pinned package와 matching Chromium을 확인하지 못하면 중단",
+        "workspace data, glossary, .env, credential, 사용자 home 또는 Git metadata를 snapshot에 포함해야 하면 중단",
+        "실제 Whisper, Ollama, Claude/Codex CLI, OS browser opener 또는 외부 network를 호출해야 하면 중단",
+        "synthetic fixture가 runner-owned sentinel과 project별 distinct failure meeting을 증명하지 못하면 중단",
+        "desktop-1440, mobile-390, mobile-320 중 하나라도 first-use, selector, default tab, retry request, focus, 44px target 또는 overflow assertion을 통과하지 못하면 중단",
+        "console error, page error, external request 또는 required evidence artifact가 하나라도 있으면 중단",
+        "docs/media에 실제 사용자 data, test manifest, console log 또는 assertion report를 복사해야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "e2e/installation-and-first-run.spec.ts",
+        "scripts/e2e-first-run-fixture.mjs",
+        "scripts/__tests__/e2e-first-run-fixture.test.mjs"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "product-docs-and-installation-adr",
+      "file": "phase-5-product-docs-and-installation-adr.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "README.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        ".claude/commands/setup.md",
+        "scripts/CLAUDE.md",
+        "src/CLAUDE.md",
+        "docs/PRD.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/README.md",
+        "docs/decisions/0012-local-ingress-and-fixed-id-service-boundary.md",
+        "docs/decisions/0014-durable-transcription-dispatch.md",
+        "docs/decisions/0016-atomic-finalize-directory-publication.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "scripts/bootstrap.mjs",
+        "src/app/api/settings/llm/models/route.ts",
+        "src/components/SettingsForm.tsx",
+        "src/components/HomeClient.tsx",
+        "src/components/RecorderFinalizeResultView.tsx",
+        "e2e/installation-and-first-run.spec.ts"
+      ],
+      "allowedPaths": [
+        "AGENTS.md",
+        "README.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        ".claude/commands/setup.md",
+        "scripts/CLAUDE.md",
+        "src/CLAUDE.md",
+        "docs/PRD.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/README.md",
+        "docs/decisions/0023-installation-and-first-run-ux.md"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "low",
+      "verification": {
+        "testMode": "exempt",
+        "additionalCommands": [
+          "npm run check:links"
+        ],
+        "evidence": [],
+        "reason": "이 phase는 검증된 command와 UI 동작을 공개 정본, module instructions, changelog와 신규 ADR에 반영하는 문서 전용 변경이다."
+      },
+      "blockIf": [
+        "코드와 테스트가 확정하지 않은 install command, port, browser, selector 또는 retry behavior를 문서화해야 하면 중단",
+        "pre-clone agent host behavior까지 repository가 강제한다고 주장해야 하면 중단",
+        "기존 ADR 0012, 0014, 0016 또는 0020을 재작성·삭제해야 하면 중단",
+        "README quick start에서 고정 localhost:3000 또는 foreground npm run dev를 end-user 정본으로 유지해야 하면 중단",
+        "질문/회의 도우미 dormant 기능을 현재 활성 pipeline으로 소개해야 하면 중단",
+        "문서 링크를 살리기 위해 제품 code 또는 package dependency를 바꿔야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "docs/decisions/0023-installation-and-first-run-ux.md"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "final-synthetic-browser-verification",
+      "file": "phase-6-final-synthetic-browser-verification.md",
+      "requirements": [
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "package.json",
+        "playwright.config.ts",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "docs/decisions/0023-installation-and-first-run-ux.md",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "scripts/run-e2e.mjs",
+        "scripts/e2e-first-run-fixture.mjs",
+        "e2e/global-setup.mjs",
+        "e2e/smoke.spec.ts",
+        "e2e/manual-transcript-and-summary-editing.spec.ts",
+        "e2e/installation-and-first-run.spec.ts",
+        "e2e/support/synthetic-test.ts",
+        "e2e/support/evidence-reporter.ts",
+        "src/components/HomeClient.tsx",
+        "src/components/SettingsForm.tsx",
+        "src/components/MeetingRow.tsx",
+        "src/components/MeetingDetailView.tsx"
+      ],
+      "allowedPaths": [],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "executionMode": "verify-only",
+      "requiresBrowser": true,
+      "dataPolicy": "synthetic-only",
+      "verification": {
+        "testMode": "exempt",
+        "additionalCommands": [
+          "npm run test:e2e"
+        ],
+        "evidence": [
+          "browser"
+        ],
+        "reason": "제품 수정 없이 최종 committed source를 pinned Chromium의 세 viewport와 repository-owned evidence contract로 다시 검증하는 verify-only phase다."
+      },
+      "blockIf": [
+        "npm run test:e2e:doctor가 dependency와 Chromium revision 정합을 확인하지 못하면 중단",
+        "실제 data, glossary, .env, credentials, Whisper, Ollama, CLI provider 또는 외부 network가 필요하면 중단",
+        "desktop-1440, mobile-390, mobile-320 중 하나라도 required scenario를 실행할 수 없으면 중단",
+        "first-use, model selector, settings health, default summary, transcription retry, focus, 44px target 또는 overflow assertion이 실패하면 중단",
+        "console error, page error, external request, screenshot, assertion, console evidence 또는 manifest가 누락되면 중단",
+        "검증 전후 product tree가 달라지면 중단"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "final-gate-transcription-race-repair",
+      "file": "phase-7-final-gate-transcription-race-repair.md",
+      "requirements": [
+        "R5",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0014-durable-transcription-dispatch.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "package.json",
+        "playwright.config.ts",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "scripts/run-e2e.mjs",
+        "e2e/installation-and-first-run.spec.ts",
+        "e2e/support/synthetic-test.ts",
+        "e2e/support/evidence-reporter.ts",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/__tests__/views.test.tsx"
+      ],
+      "allowedPaths": [
+        "e2e/installation-and-first-run.spec.ts",
+        "src/components/MeetingDetailView.tsx"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "requiresBrowser": true,
+      "dataPolicy": "synthetic-only",
+      "verification": {
+        "testMode": "existing-tests",
+        "testCommand": "npm test -- src/components/__tests__/views.test.tsx -t \"이미 진행 중인 race도 refresh하고 전사 poll은 한 번에 하나만 두며 상태 변경에서 정리한다\"",
+        "additionalCommands": [
+          "npm run typecheck",
+          "npm run test:e2e"
+        ],
+        "evidence": [
+          "browser"
+        ],
+        "reason": "전체 final gate가 재현한 409 transcription race의 기존 RED 테스트를 제품 코드 한 파일에서 수리하고, 최종 synthetic browser evidence를 변경 후 다시 확인한다."
+      },
+      "blockIf": [
+        "409 meeting_conflict를 성공으로 숨기거나 기존 전사 retry/poll 테스트를 약화해야 하면 중단",
+        "새 endpoint, dispatch ID, status schema 또는 artifact writer가 필요하면 중단",
+        "실제 data, Whisper, provider, credential 또는 외부 network가 필요하면 중단",
+        "MeetingDetailView.tsx와 installation-and-first-run.spec.ts 밖 제품 또는 테스트 파일 수정이 필요하면 중단"
+      ]
+    }
+  ],
+  "finalGate": [
+    "npm test",
+    "npm run typecheck",
+    "npm run lint",
+    "npm run check:links",
+    "npm run build"
+  ]
+}

@@ -61,6 +61,16 @@ describe("MeetingRow — 상태 뱃지", () => {
     expect(screen.getByRole("link")).toHaveAttribute("href", "/meetings/m1?contentTab=summary");
   });
 
+  it("전사 재시도 오류는 일반 lifecycle 대신 전사 실패 badge로 지속 표시한다", () => {
+    renderRow({
+      status: "transcribing",
+      error: { message: "내부 경로를 포함할 수 있는 오류", action: "retry_transcription" },
+    });
+    expect(screen.getByText("전사 실패")).toBeInTheDocument();
+    expect(screen.queryByText("전사 중")).not.toBeInTheDocument();
+    expect(screen.queryByText(/내부 경로/)).not.toBeInTheDocument();
+  });
+
   it("재요약 inflight면 파생 status가 summarized여도 '요약 중'을 보인다", () => {
     // The re-summarize publisher overwrites summary.json last, so deriveStatus keeps the
     // row at `summarized` throughout the run. The durable inflight flag overlays 요약 중.

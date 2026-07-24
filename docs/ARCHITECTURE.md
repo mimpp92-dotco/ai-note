@@ -11,7 +11,7 @@ src/
 ├── lib/               # atomic-write, id 검증, 파일 IO 유틸
 └── services/          # whisper 클라이언트(프록시) 등 외부 래퍼
 whisper/               # 로컬 Python whisper 서비스(uv 3.11/3.12 핀 venv)
-scripts/               # check-links.mjs (링크 무결성 체커)
+scripts/               # bootstrap/setup + check-links + isolated E2E harness
 e2e/                   # synthetic Playwright scenario + evidence reporter
 playwright.config.ts   # Chromium 3-viewport, isolated webServer 계약
 .claude/commands/      # meeting-summarize.md
@@ -29,6 +29,14 @@ fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fall
 반복 가능한 시각/상호작용 gate의 정본은 `npm run test:e2e`다. `run-e2e.mjs`가 매 실행마다 loopback port와 OS temp snapshot을 소유하고, snapshot에는 allowlist된 `src/`(비활성 worker entrypoint 제외)·`public/`·build metadata와 새 empty `data/`만 복사한다. `node_modules`는 dependency root로만 연결하며 `data/`, `glossary.json`, `.env*`, Git metadata와 runtime 산출물은 복사하지 않는다. App child는 synthetic `HOME`, scrubbed env, `AI_NOTE_DISABLE_WORKER=1`로 실행되고 Whisper target은 같은 임시 Next server의 존재하지 않는 `/health`로 고정돼 실제 로컬 Whisper/LLM/CLI에 닿지 않는다. 서버 bind는 `127.0.0.1`; Next 15 Route Handler authority와 local Host guard를 일치시키기 위해 browser URL만 동등한 loopback 이름 `localhost`를 쓴다.
 
 `e2e/support/synthetic-test.ts`가 각 scenario의 성공 screenshot, console error, 외부 browser request를 자동 수집한다. Reporter는 desktop-1440/mobile-390/mobile-320 coverage, assertion pass, console error 0, external network 0, SHA-256/byte size를 가진 `manifest.json`을 생성한다. 평상시 산출물은 gitignored `test-results/`, `/execute`에서는 runner-owned Git local journal만 사용한다. Chrome DevTools MCP는 existing Chrome session이 필요한 정성 탐색에만 선택적으로 사용하며 이 gate나 evidence를 대체하지 않는다. 상세 결정은 ADR [0020](decisions/0020-deterministic-synthetic-browser-verification.md)을 따른다.
+
+## End-user bootstrap·owned runtime
+
+- Clone 뒤 canonical command는 Node stdlib만 필요한 `node scripts/bootstrap.mjs --launch`다. `scripts/setup.mjs` doctor를 먼저 실행하고 성공한 경우에만 `HUSKY=0 npm ci` → `npm run build` → background supervisor를 순서대로 수행한다. Doctor의 Node/`uv`/`ffmpeg` failure는 안전한 OS별 조치와 같은 command 재실행을 안내한다. Bootstrap이 `sudo`, package manager, provider login, Ollama pull 또는 Whisper model download를 몰래 실행하지 않는다.
+- Supervisor는 Whisper `127.0.0.1:8123..8142`, app `127.0.0.1:3000..3019` 후보를 순회한다. Availability probe 뒤 bind race가 확인되면 다음 후보로 이동하며 기존 listener에 연결하거나 signal하지 않는다. 선택한 app/Whisper port는 child env `PORT`/`LOCAL_STT_PORT`에만 주입하고 `.env.local`을 쓰지 않는다.
+- App root와 same-origin `/api/whisper/health`가 모두 ready일 때만 `AI_NOTE_URL=http://localhost:<actual-app-port>`를 출력한다. Supported desktop opener는 URL을 shell interpolation 없는 argv로 전달한다. Headless/unsupported/opener failure는 server 성공을 유지하고 exact URL과 agent browser surface fallback을 출력한다. Playwright, Chrome extension, MCP는 runtime dependency가 아니다.
+- `.ai-note-runtime/`은 gitignored repository-local owner namespace다. Directory mode `0700`, state/heartbeat/log mode `0600`을 유지하고 state에는 root/token/PID/port/time만 기록하며 inherited env/credential을 직렬화하지 않는다. `app:status`/`app:stop`은 canonical root, matching 256-bit token, fresh heartbeat, live supervisor가 모두 확인된 경우에만 조회/signal한다. Missing/stale/invalid/unverifiable state는 fail-closed다.
+- Bootstrap module import는 side-effect free이며 process/network/port/browser/time/fs boundary를 주입할 수 있다. Unit test는 fake와 temp directory만 사용해 `npm ci`, build, long-lived server, browser opener, external network, model download를 실행하지 않는다. Foreground `npm run dev`는 contributor lifecycle로 분리한다. 설치 target/agent handoff 결정은 ADR [0023](decisions/0023-installation-and-first-run-ux.md)을 따른다.
 
 ## 프로세스 & 데이터 흐름
 ```
@@ -422,9 +430,12 @@ Manual freeform mode에서 `body`는 하나의 current editable truth다. Body�
 - `GET /api/settings/llm` → 저장된 `{ provider, model?, baseUrl? }` 또는 `{ provider:null }`. app-api가 `data/settings.json`의 단일 writer이며 API 키를 저장하지 않는다.
 - `POST /api/settings/llm` → `{ provider:"claude-cli"|"codex-cli"|"ollama", model?, baseUrl? }`. 저장 전 `model/baseUrl`은 trim한다. `provider:"ollama"`는 `model` 필수이며 비어 있으면 400. `baseUrl`은 Ollama 설정에만 저장한다.
 - Settings client는 GET non-2xx/network/invalid public shape를 `load_error`로 fail-closed하고 editor/replace-save를 잠근다. 성공한 public body만 server-confirmed snapshot과 editable draft를 함께 초기화하며, normalized dirty draft만 POST할 수 있다. Save 실패는 draft를 보존하고 성공 body를 다시 검증해 snapshot/draft를 맞춘다.
+- Model selector는 provider별 draft를 session 동안 분리한다. Claude CLI는 empty model=CLI default(권장), `sonnet|opus|haiku`, custom을 제공하고 Codex CLI는 empty default/custom만 제공해 versioned catalog나 experimental command에 의존하지 않는다. Unknown stored model은 custom state에서 exact string을 보존하며 현재 provider save 직전에 trim한다. Provider 전환은 다른 provider model을 재사용하지 않고 save payload는 current provider의 non-empty model, Ollama일 때만 baseUrl을 포함한다.
+- `POST /api/settings/llm/models`는 local guard를 body/settings/fs/network보다 먼저 통과하고 strict JSON 4 KiB, optional baseUrl 512자를 받는다. Draft 또는 default `http://127.0.0.1:11434`는 explicit-port loopback HTTP로 정규화되고 `/api/tags`는 redirect 금지·3초 timeout·256 KiB response cap을 적용한다. 최대 100개, 이름 256자, trim된 control-character 없는 unique model만 반환하며 failure는 sanitized `invalid_request|local_service_unavailable`로 낮춘다. Remote catalog/auto pull/API key/new dependency는 없다.
 - Ollama `baseUrl`은 저장 시와 사용 직전에 explicit-port `http://127.0.0.1|localhost`만 허용한다(credentials/path/query/hash/redirect 금지). Unsafe legacy value는 transcript를 읽거나 network를 호출하기 전에 unavailable이다.
 - `GET /api/settings/llm/health` → `{ configured:false }` 또는 `{ configured:true, provider, model?, ok, detail }`. `model`은 settings의 모델명만 노출하고 `baseUrl`은 반환하지 않는다. legacy Ollama 설정에 `model`이 없으면 daemon 상태와 무관하게 `{ ok:false, detail:"Ollama model not set" }`.
 - Settings의 connection test는 이 GET으로 persisted configuration만 검사한다. Saved snapshot이 없거나 draft가 dirty이거나 load/save/test 중이면 호출하지 않으며, 결과의 safe context label도 snapshot의 provider/model만 사용하고 `baseUrl`은 노출하지 않는다. Unsaved draft를 검사하는 별도 POST endpoint는 없다.
+- Save success body를 persisted snapshot/draft에 반영한 직후 같은 snapshot health를 자동 검사한다. Success면 `첫 회의 녹음` action을 제공한다. Failure도 saved snapshot과 provider별 draft를 보존하고 provider별 safe 조치를 제공한다.
 - health는 UI와 설정 화면의 readiness/test-connection 용도다. **CLI provider(claude/codex)의 `ok`는 바이너리 감지이지 인증 보장이 아니다(낙관적)** — 실제 인증·요약 가능 여부는 첫 요약에서 확인된다. 홈 배너와 상세 상태 카드는 `configured && ok`일 때만 “요약 자동 처리 중”으로 안내한다. 감지형 health는 로그인 깨짐을 요약 전에 못 잡으므로, 홈 배너는 전사됐지만 요약 안 된 회의를 **“처리 중 N”(에러 없음)과 “확인 필요 M”(`retry_summary` 에러)로 분리**해 거짓초록을 막는다. 배경 워커 후보 선정은 기존처럼 settings 존재 기반이며, 실제 실행 실패는 `runSummarize()`의 retryable error로 기록한다(claude는 미로그인 시 이유를 stdout으로 출력하므로 `exec.ts`가 stderr가 비면 stdout 꼬리를 에러에 싣는다).
 - Claude·Codex CLI health는 `claude --version`/`codex --version` 수준의 binary 감지다(인증 불요·즉시 반환이라 콜드 스타트 타임아웃 오탐이 없다). UI 문구는 둘 다 “감지됨”으로 표시하고 인증/실제 요약 가능 여부는 첫 요약 실행에서 확인한다.
 - **claude 요약 호출 격리(ADR 0010):** claude 생성 호출(`run()`)은 invocation별 `mkdtemp` 격리 cwd에서 인라인 MCP-off(`--strict-mcp-config --mcp-config '{"mcpServers":{}}'`)·slash-off(`--disable-slash-commands`)로 실행하고, 종료 뒤 temp를 best-effort cleanup한다. 자식 env에서 유료 청구 env(자격증명 `ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY` + 백엔드 리다이렉트 `ANTHROPIC_BASE_URL`·`CLAUDE_CODE_USE_BEDROCK`/`VERTEX`)를 스크럽한다(구독 OAuth와 `HOME`/`PATH`는 유지 → $0 유지). 프로젝트 디렉토리 밖에서 돌기 때문에 워크스페이스 `CLAUDE.md`/MCP 컨텍스트가 교정 출력에 새지 않는다(과거 오염 버그 제거). 전사(PII)는 stdin으로만 전달하며, 프롬프트·`summary.json` 스키마·`summarizeCore` 계약은 불변. 생성 타임아웃은 600초(위 참조).
@@ -485,3 +496,10 @@ JSON 스키마: {SUMMARY_SCHEMA_HINT}
 ## 상태 관리
 - 서버 상태(회의 목록/상태): app-api가 `data/meetings/*/status.json`을 읽어 파생. 클라이언트는 폴링(`force-dynamic`+`no-store`).
 - 클라이언트 상태: layout-scoped React provider(녹음 session/navigation guard) + route-local `useState/useReducer`(탭/폼). 외부 전역 상태 라이브러리 불필요.
+
+## First-use·전사 실패 client recovery
+
+- Home은 LLM health가 unconfigured/unavailable일 때 recorder 앞에 비차단 readiness card를 둔다. Primary는 Settings, secondary는 같은 page의 `meeting-recorder-start`로 scroll+focus한다. 설정 page는 요약 모델을 optional profile보다 먼저 두며 profile 미설정이 녹음·전사·일반 검색을 막지 않는다. 첫 전사는 selected Whisper model download 때문에 오래 걸릴 수 있다고 알리되 download 전 progress를 만들지 않는다.
+- `retry_transcription` meeting row는 `전사 실패`로 표시하고 detail link에서도 failure/action을 유지한다. Detail과 finalize result의 `전사 다시 시도`는 exact meeting ID로 기존 `POST /api/transcribe {id}`를 호출한다. Success 또는 already-running 409 뒤 authoritative server state를 다시 읽으며 disabled `전사 요청 중…`, safe error, polite announcement, trigger focus return을 제공한다.
+- Detail transcribing poll은 한 번에 fetch 하나만 두고 navigation/unmount/status transition에서 timer와 request를 정리한다. Client timeout은 persisted `retry_transcription` failure를 만들지 않는다. Retry는 기존 operation lease, tombstone fence, durable dispatch reuse와 raw-last completion을 우회하지 않으며 UI가 artifact를 직접 쓰지 않는다.
+- Meeting detail initial tab은 explicit `contentTab=script|summary`를 우선한다. Query가 없고 parsed usable summary가 있으면 summary, 아니면 script를 사용한다.

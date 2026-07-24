@@ -26,6 +26,7 @@ export function Recorder({
     error,
     serverStatus,
     finalizeResult,
+    meetingId,
     hasRetainedBlob,
     retryDisposition,
     start,
@@ -47,15 +48,19 @@ export function Recorder({
     : null;
 
   return (
-    <section className="w-full min-w-0 rounded-[16px] border border-line bg-panel p-4 shadow-[0_1px_2px_rgba(42,36,32,.04),0_8px_28px_-12px_rgba(42,36,32,.18)] sm:p-6">
+    <section
+      id="recorder"
+      className="w-full min-w-0 rounded-[16px] border border-line bg-panel p-4 shadow-[0_1px_2px_rgba(42,36,32,.04),0_8px_28px_-12px_rgba(42,36,32,.18)] sm:p-6"
+    >
       <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
         <div className="min-w-0">
           <h2 className="text-[18px] font-bold text-ink">회의 녹음</h2>
           <p className="mt-1 text-[14px] leading-relaxed text-inkSoft">
-            마이크로 회의를 녹음합니다. 종료하면 자동으로 전사가 시작됩니다.
+            마이크로 회의를 녹음하면 종료 후 로컬 전사가 시작됩니다. 선택한 Whisper 모델을 처음 사용하면 먼저 내려받아 시간이 더 걸릴 수 있습니다. 다운로드가 끝나기 전에는 진행률을 표시하지 않습니다.
           </p>
         </div>
         <button
+          id="meeting-recorder-start"
           type="button"
           onClick={recording
             ? stop
@@ -79,7 +84,7 @@ export function Recorder({
                     ? phase === "finalize_ambiguous" ? "저장 상태 확인" : "저장 다시 시도"
                     : blocked
                       ? "저장 상태 충돌"
-                      : "실시간 기록 시작"}
+                      : "회의 녹음 시작"}
         </button>
       </div>
 
@@ -158,8 +163,12 @@ export function Recorder({
             </button>
           </div>
         )}
-        {phase === "saved" && finalizeResult && (
-          <RecorderFinalizeResultView result={finalizeResult} onRefresh={() => void probe()} />
+        {phase === "saved" && finalizeResult && meetingId && (
+          <RecorderFinalizeResultView
+            meetingId={meetingId}
+            result={finalizeResult}
+            onRefresh={() => probe()}
+          />
         )}
       </div>
     </section>

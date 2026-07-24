@@ -10,27 +10,32 @@ By participating, you agree to abide by our
 
 ## Development setup
 
-Follow the **Requirements** and **Quick start** in the [README](README.md). In
-short, you'll need:
+The README quick start is the end-user owned-background path. Contributors use
+the foreground development path below. You'll need:
 
 - **Node.js ≥ 20**
 - **Python 3.11 or 3.12** via [`uv`](https://docs.astral.sh/uv/) (for the local
   Whisper service)
 - **ffmpeg** on your `PATH` (or set `FFMPEG_PATH`)
-- **one summarizer**: the Claude CLI, the Codex CLI, or a local
-  [Ollama](https://ollama.com)
+- **one summarizer for summary work**: the Claude CLI, the Codex CLI, or a local
+  [Ollama](https://ollama.com). Recording/transcription development does not
+  require one.
 
 Then:
 
 ```bash
-npm install        # deps (+ husky hooks)
-npm run setup      # check prerequisites (Node/uv/ffmpeg/summarizer)
-npm run dev        # Next.js + local Whisper service
+node scripts/setup.mjs  # read-only prerequisite doctor
+npm ci                 # exact dependencies (+ contributor hooks)
+npm run dev            # foreground Next.js + local Whisper service
 ```
 
 The first `npm run dev` downloads a Whisper model; set `LOCAL_STT_MODEL=base`
 for a faster first run. See [Configuration](README.md#configuration) for the
 full list of env knobs.
+
+`npm run dev` is intentionally long-lived and foreground-only. End users should
+use `node scripts/bootstrap.mjs --launch`; do not use its owned background
+runtime as the development server.
 
 ## Before you open a PR
 
@@ -63,6 +68,20 @@ npm run typecheck && npm run lint && npm test && npm run check:links && npm run 
 5. Wait for **CI to go green** and address review feedback.
 6. PRs are merged via **squash merge**, so the PR title becomes the commit — make
    it a good one (see below).
+
+For deterministic browser regression, install the pinned Chromium once and use
+the repository-owned synthetic commands:
+
+```bash
+npm run test:e2e:install
+npm run test:e2e:doctor
+npm run test:e2e
+```
+
+The scenario uses an allowlisted temporary snapshot, empty `data/`, synthetic
+`HOME`, disabled worker, disconnected Whisper, and no external browser traffic.
+Chrome DevTools MCP is optional qualitative inspection, not a gate or runtime
+dependency. See [ADR 0020](docs/decisions/0020-deterministic-synthetic-browser-verification.md).
 
 ## Commit style
 

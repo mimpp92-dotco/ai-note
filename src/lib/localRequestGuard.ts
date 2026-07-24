@@ -31,6 +31,7 @@ export const DATA_SURFACE_INVENTORY = [
   "/api/organization-pending",
   "/api/settings/llm",
   "/api/settings/llm/health",
+  "/api/settings/llm/models",
   "/api/settings/profile",
   "/api/search",
   "/api/summary-work",

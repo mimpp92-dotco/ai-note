@@ -65,6 +65,15 @@ test("manual transcript and summary editing keeps hierarchy, freshness, and navi
   await expect(detailLink).toHaveAttribute("href", detailPath);
   await detailLink.click();
   await expect(page.getByRole("heading", { name: fixture.title })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "회의록 요약", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByText(
+    "합성 회의에서 수동 편집과 안전한 이탈 보호를 검증한다.",
+    { exact: true },
+  )).toBeVisible();
+  await page.getByRole("tab", { name: "전체 스크립트", exact: true }).click();
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
     origin: new URL(page.url()).origin,
   });

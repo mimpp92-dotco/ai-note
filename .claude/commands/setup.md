@@ -1,14 +1,16 @@
-AI NOTE 설치를 점검하고 막힌 전제 도구(`uv`·`ffmpeg`·요약기)를 설치·안내한다. 인자 없음.
+AI NOTE의 안전한 target을 정하고 canonical bootstrap으로 설치·기동한다. 인자 없음.
 
 ## 이 커맨드의 역할 (읽고 반드시 지킬 것)
 - 설치 절차의 **정본은 `AGENTS.md`의 `## 설치` 섹션**이다. 이 커맨드는 그 절차를 실행하는 얇은 래퍼일 뿐 — 설치 단계를 여기 중복 기술하지 않는다.
-- 바이너리 설치(`brew`/`apt`/`uv`)는 시스템 변경이므로 **사용자에게 명령을 보여주고 실행**한다(sudo·확인 필요할 수 있음).
+- 이 공개 계약은 저장소 문서를 읽은 뒤부터 적용된다. Pre-clone agent host 정책까지 저장소가 보장한다고 말하지 않는다.
+- 바이너리 설치(`brew`/`apt`/`uv`)와 provider 로그인은 새 권한이 필요할 때만 사용자에게 명령과 이유를 보여 주고 승인을 받는다.
 - `data/settings.json`을 직접 쓰지 않는다(app-api 단일 writer). 요약기 provider 선택은 앱 Settings 화면으로 유도한다.
-- 검증 때 `npm run dev`를 **포그라운드로 붙잡지 않는다**(long-lived + 첫 모델 다운로드).
+- `npm run dev`는 contributor용 foreground command이며 설치 성공 경로로 사용하지 않는다.
 
 ## 절차
-1. `node scripts/setup.mjs`를 실행해 진단을 얻는다(무의존이라 `npm install` 전에도 됨).
-2. `AGENTS.md`의 `## 설치` 절차(0~5단계)대로 각 ✗ 항목을 해결한다: Node 확보 → `ffmpeg`/`uv` OS별 설치 → `npm install` → 요약기 준비.
-3. `node scripts/setup.mjs`를 다시 실행해 필수 전제(Node/uv/ffmpeg)가 전부 ✓, exit 0 인지 확인한다.
-4. `npm run build`로 build-green을 확인한다. 실제 구동 확인이 필요하면 `LOCAL_STT_MODEL=base npm run dev`를 백그라운드로 띄우고 `GET /api/whisper/health`를 확인한다.
-5. 요약기 provider는 앱 기동 후 Settings 화면에서 선택·검증하도록 사용자에게 안내한다.
+1. 이미 이 저장소 root에서 실행 중이면 그 exact root를 선택된 target으로 사용한다. 저장소 URL만 받은 상태라면 `AGENTS.md` 규칙대로 absolute target을 먼저 보고한다: 다른 Git repo 안은 그 root의 sibling `ai-note`, 그 밖은 cwd 아래 새 `ai-note`; 충돌 시 첫 free `ai-note-N`. 명시 target이 non-empty/다른 origin이면 exact path와 함께 중단한다.
+2. Clone·설치는 target 안에서만 수행하고 ancestor/global config/다른 project/process를 건드리지 않는다.
+3. Target root에서 `node scripts/bootstrap.mjs --launch`를 실행한다. Doctor가 Node/`uv`/`ffmpeg`에서 멈추면 출력된 안전한 OS별 조치를 보여 주고 필요한 권한을 받은 뒤 같은 command를 재실행한다.
+4. Bootstrap이 `HUSKY=0 npm ci`, build, owned background app/Whisper, 두 health check를 마치도록 기다린다. Fixed 3000을 가정하지 않고 출력된 `AI_NOTE_URL=http://localhost:<actual-port>`를 사용한다.
+5. Desktop opener가 실패하거나 headless면 server 성공을 유지하고 exact URL을 사용 가능한 agent browser surface로 연다.
+6. 최종 handoff에 absolute install path, branch/revision, 실제 앱 URL을 보고한다. 요약기는 앱 Settings에서 선택·저장·자동 health 확인하도록 안내한다.

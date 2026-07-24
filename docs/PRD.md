@@ -20,6 +20,8 @@
 8. **로컬 회의 라이브러리** — desktop rail/mobile drawer에서 workspace를 전환하고 모든 회의·미분류·최대 3단계 folder의 direct meeting을 bounded page로 본다. Workspace/folder 생성·이름 수정과 folder semantic color 편집을 제공한다. Meeting은 same/cross-workspace의 folder·미분류로 이동할 수 있고 folder subtree는 같은 workspace 안에서만 reparent한다. Folder 삭제는 direct meeting rehome+child 승격, workspace 삭제는 destination unfiled rehome이며 둘 다 preview 뒤 조직 metadata만 제거하고 meeting artifact를 보존한다. 중앙 `library.json` placement/tree metadata만 바꾸며 Meeting artifact는 안정적인 `data/meetings/{id}/`에 둔다. Workspace는 계정·팀·권한·암호화 또는 물리 저장 경계가 아니다. Registry degraded 시 last-good/global fallback을 읽기 전용으로 제공하고, corrupt에만 fingerprint 확인·원본 archive 보존형 명시적 재구축을 제공한다. Unsupported/I/O/conflict는 덮지 않는다.
 9. **단건 독립 재생성** — 요약 완료 회의에서 두 operation을 분리한다. **"원문에서 스크립트 다시 만들기"**는 최초 자동 전사 원문과 현재 단어장으로 전체 스크립트만 교정하고 기존 요약을 보존한다. **"현재 스크립트로 요약 다시 만들기"**는 현재 저장된 전체 스크립트로 요약만 만들고 스크립트를 보존한다. 스크립트 변경 뒤 기존 요약은 삭제하지 않고 **"요약 갱신 필요"**로 표시하며, 요약 직접 저장 또는 재생성 뒤 다시 최신 상태가 된다. **자동·일괄 재생성은 비목표**이고 단어장 저장도 기존 회의를 자동 갱신하지 않는다.
 10. **회의 지식 검색·질문 확장** — 파생 지식 카드와 corpus map으로 전체 회의를 결정적으로 검색하고, configured CLI/Ollama를 재사용하는 도구 호출형 챗봇이 서버가 실제 read·live 재검증한 근거에만 claim-level inline citation과 reference list를 제공한다. **단, 챗봇(질문/회의 도우미) UI는 현재 dormant다** — build-time flag `MEETING_ASSISTANT_ENABLED`(기본 `false`)로 마운트만 차단하고 코드·`/api/chat`·공유 지식 인덱스는 보존한다(ADR 0019). AI 없는 단순 검색과 검색 파생물은 dormant와 무관하게 동작한다. 아래 서술은 챗봇을 되살릴 때(flag=`true`)의 목표 계약이다. 번호·현재 제목·링크는 서버가 만들며, 사용자 프로필은 선택적 개인화라 미설정이어도 일반 검색·질문은 동작한다. 질문 응답은 non-streaming이고 완결 4 turn의 현재 탭 메모리만 사용한다. 진입은 별도 `/search` 페이지가 아니라 앱 셸의 두 표면이다: 좌측 사이드바 최상단 돋보기 `검색` 트리거가 여는 검색 오버레이와, 우측 접이식 `회의 도우미` 챗봇 패널(모바일은 drawer). 챗봇은 요약 기반 `search_meetings` 외에 전사 본문을 훑는 discovery 전용 `search_transcripts` 도구를 가져 고유명사·별칭이 요약에서 사라진 회의도 후보로 찾되, discovery 결과 자체는 근거가 아니며 그 회의를 요약·전사 도구로 다시 읽어야 citation이 된다. AI 없는 단순 검색은 여전히 전사 전문을 읽지 않는다.
+11. **설치·첫 실행** — Clone 뒤 `node scripts/bootstrap.mjs --launch` 하나가 전제 진단, `HUSKY=0 npm ci`, build, bounded dynamic loopback port의 owned background app/Whisper, health, 실제 URL browser open을 조율한다. 첫 화면은 요약 모델 미설정/불가를 recorder 앞에서 비차단으로 안내하고 **AI 요약 설정 / 요약 없이 회의 녹음**을 제공한다. Provider별 native model selector와 저장 직후 persisted health를 제공하며 요약 모델이나 optional 내 정보가 없어도 녹음·로컬 전사·일반 검색은 가능하다.
+12. **전사 실패 복구·완료 기본 보기** — `retry_transcription`은 목록·상세·저장 결과에 지속 표시하고 exact meeting ID로 기존 durable transcribe API를 다시 호출한다. 완료 회의는 explicit query가 없고 usable summary가 있으면 **회의록 요약**을 기본 tab으로 연다.
 
 ## MVP 제외 사항 (비목표)
 
@@ -33,7 +35,7 @@
 - 최초 생성 뒤 스크립트 교정과 요약을 한 번에 다시 실행하는 결합 재생성, 스크립트 변경 직후의 무확인 자동 요약 갱신
 
 ### v2로 명시적 연기
-chunk-append 크래시 복구 + 디코드 게이트 · 전체 상태 FSM + stale-job 워치독 · map-reduce 요약/refine 청킹 · auto-queue-on-green · 세그먼트 클릭 재생 · 무음 워치독/장치 선택/일시정지 · capture_id 재스캔 idempotency · Playwright e2e.
+chunk-append 크래시 복구 + 디코드 게이트 · 전체 상태 FSM + stale-job 워치독 · map-reduce 요약/refine 청킹 · auto-queue-on-green · 세그먼트 클릭 재생 · 무음 워치독/장치 선택/일시정지 · capture_id 재스캔 idempotency.
 
 ## 아키텍처/제품 상 유의점
 
@@ -44,8 +46,10 @@ chunk-append 크래시 복구 + 디코드 게이트 · 전체 상태 FSM + stale
 - **범위별 recorder 위치·복구 UX**: Ready의 Workspace All/미분류는 해당 workspace 미분류, folder는 exact folder를 녹음 시작 순간 ID로 고정한다. Last-good은 마지막 위치를 요청하되 실제 배치가 unavailable/fallback일 수 있음을 먼저 알리고, fresh global fallback은 조직 위치 없이 저장한다. 응답 유실·5xx에서는 같은 ID를 body 없이 probe한 뒤 미게시가 확인된 경우에만 보존 Blob을 다시 전송한다. 저장 결과는 원본 내구성·실제 위치·재생 준비·전사를 각각 표시한다.
 - **원본 불가침**: `audio.webm`·`raw.md`·`segments.json`은 불변. `transcript.md`·`summary.json`은 언제든 재생성 가능.
 - **파생 콘텐츠 최신성**: 전체 스크립트 직접 저장·재생성은 기존 요약을 보존하되 최신이 아님을 표시한다. 요약 직접 저장·재생성은 반드시 현재 전체 스크립트를 기준으로 하며, 저장 충돌이나 결과 불명확 상태에서는 사용자 입력을 보존하고 확인 없이 덮어쓰거나 재전송하지 않는다.
+- **설치 target·runtime 경계**: URL만 받은 agent는 다른 repo 안이면 그 root sibling, 아니면 cwd child의 새 `ai-note`를 선택하고 충돌 시 deterministic suffix를 쓴다. 명시 non-empty/다른 origin target은 중단한다. Clone/install은 target 밖 ancestor/global/project/process를 수정하지 않는다. Bootstrap은 기존 port process를 재사용·종료하지 않고 repository-local ownership state가 검증된 supervisor만 status/stop한다. 성공 handoff는 absolute path, revision, actual URL을 포함한다.
+- **첫 실행 정직성**: `회의 녹음 시작`이 recording CTA다. 선택 Whisper model의 첫 download는 오래 걸릴 수 있고 download 전에는 가짜 progress를 표시하지 않는다. CLI health 성공은 binary 감지일 뿐 인증/실제 생성 성공을 보장하지 않으며 Ollama 성공은 선택한 설치 model의 loopback 연결을 뜻한다.
 
 ## 디자인 방향
 
 - 웜 베이지/브라운 미니멀, "도구처럼"(마케팅 페이지 아님). Pretendard.
-- 상세는 2탭. 상단 우측 다크 "실시간 기록 시작" 버튼. 자세한 규칙은 `UI_GUIDE.md`.
+- 상세는 2탭. 녹음 CTA는 다크 **"회의 녹음 시작"** 버튼. 자세한 규칙은 `UI_GUIDE.md`.

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One-command installation and owned background runtime**: a dependency-free
+  `node scripts/bootstrap.mjs --launch` flow now runs the prerequisite doctor,
+  installs exact npm dependencies with hooks disabled, builds, chooses bounded
+  free loopback ports, starts app and Whisper under a repository-owned
+  supervisor, waits for both health checks, and opens or prints the actual app
+  URL. Ownership-checked `app:start`, `app:status`, and `app:stop` commands do
+  not attach to or signal unrelated or unverifiable processes.
+- **First-use summary readiness and provider-aware model selection**: the home
+  screen offers non-blocking summary setup or recorder focus, Settings puts the
+  summary model before optional profile information, and a successful save
+  automatically checks persisted health. Claude exposes default/Sonnet/Opus/
+  Haiku/custom choices, Codex exposes default/custom, and Ollama discovers only
+  locally installed models with refresh and custom-input fallback.
 - **Local workspace/folder library**: a 272px desktop rail and accessible mobile
   drawer now switch between workspace All, Unfiled, and direct folder pages.
   Users can create/rename workspaces and create/edit folders up to three levels
@@ -64,6 +77,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- End-user installation now uses the dynamic URL printed by the background
+  bootstrap instead of assuming `localhost:3000`; foreground `npm run dev` is
+  documented as a contributor command. First-transcription copy now explains
+  the selected Whisper model download without showing invented progress.
+- Completed meetings with a usable summary now open the summary tab by default
+  unless the script tab is explicitly requested. Recorder and first-use copy
+  consistently explain that recording and local transcription work without a
+  configured summary model.
 - **App-wide UI/UX hardening**: modal dialogs and the mobile drawer now use the
   browser's native top layer, so focus stays contained, background content is
   inert, Escape/backdrop only dismiss the topmost surface, and a busy mutation
@@ -83,6 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Persistent transcription failure and real retry**: list rows, meeting
+  detail, and recorder save results retain a visible transcription-failure
+  state. Retry posts the exact meeting ID to the existing durable
+  `/api/transcribe` route, prevents duplicate in-flight polling, refreshes
+  server state after accepted/already-running races, preserves safe error copy,
+  and returns focus to the retry control.
 - **Re-summarize reliability** (ADR 0009):
   - **Timeout**: LLM correction/summary calls now use a fixed 10-minute timeout
     (`LLM_GENERATION_TIMEOUT_MS`) instead of the 120s subprocess default — a long

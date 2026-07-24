@@ -11,7 +11,10 @@ import { LibraryRecoveryPanel } from "@/components/LibraryRecoveryPanel";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
 import { Recorder } from "@/components/Recorder";
-import { getLlmReadiness } from "@/components/healthStatus";
+import {
+  getLlmReadiness,
+  type LlmReadiness,
+} from "@/components/healthStatus";
 import { useHealth } from "@/components/useHealth";
 import {
   libraryScopeKey,
@@ -58,6 +61,46 @@ function emptyCopy(scope: LibraryMeetingScope): string {
   if (scope.kind === "unfiled") return "미분류 회의가 없습니다.";
   if (scope.kind === "workspace") return "이 워크스페이스에는 아직 회의가 없습니다.";
   return "아직 회의록이 없습니다.";
+}
+
+function SummaryReadinessCard({ readiness }: { readiness: LlmReadiness }) {
+  if (readiness === "loading" || readiness === "ready") return null;
+  const unavailable = readiness === "unavailable";
+
+  const focusRecorder = () => {
+    const start = document.getElementById("meeting-recorder-start");
+    start?.scrollIntoView?.({ block: "center" });
+    start?.focus();
+  };
+
+  return (
+    <section className="min-w-0 rounded-[16px] border border-warn/40 bg-warnBg p-4 sm:p-6">
+      <h2 className="text-[16px] font-bold text-ink">
+        {unavailable ? "요약 모델을 확인하세요" : "회의록 요약을 준비하세요"}
+      </h2>
+      <p className="mt-2 break-words text-[13px] leading-relaxed text-inkSoft">
+        {unavailable
+          ? "저장한 요약 모델을 지금 사용할 수 없습니다. 설정에서 설치와 실행 상태를 확인하세요."
+          : "AI 요약을 사용하려면 로컬 CLI 또는 Ollama 모델을 먼저 설정하세요."}
+        {" "}요약 모델이 없어도 회의 녹음과 로컬 전사는 계속 사용할 수 있습니다.
+      </p>
+      <div className="mt-4 flex min-w-0 flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <GuardedLink
+          href="/settings"
+          className="inline-flex min-h-11 w-full items-center justify-center rounded-full bg-ink px-5 text-[13px] font-semibold text-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:w-auto"
+        >
+          AI 요약 설정
+        </GuardedLink>
+        <button
+          type="button"
+          onClick={focusRecorder}
+          className="min-h-11 w-full rounded-full border border-line bg-panel px-5 text-[13px] font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:w-auto"
+        >
+          요약 없이 회의 녹음
+        </button>
+      </div>
+    </section>
+  );
 }
 
 export function HomeClient() {
@@ -180,6 +223,7 @@ export function HomeClient() {
         <div className="rounded-[14px] border border-warn/40 bg-warnBg p-4 text-[14px] text-ink sm:px-6">
           새 녹음은 <span className="font-semibold">조직 위치 없이 저장</span>되며 조직 정보 없이 발견된 회의로 표시됩니다.
         </div>
+        <SummaryReadinessCard readiness={getLlmReadiness(llm)} />
         <Recorder />
         {rows.length === 0 ? (
           <EmptyState />
@@ -277,7 +321,9 @@ export function HomeClient() {
         <h1 ref={headingRef} tabIndex={-1} className="text-2xl font-bold tracking-tight text-ink">
           {scopeTitle(scope, library)}
         </h1>
-        <p className="mt-2 text-[15px] leading-relaxed text-inkSoft">회의 녹음 → 로컬 전사 → 회의록 요약.</p>
+        <p className="mt-2 break-words text-[15px] leading-relaxed text-inkSoft">
+          회의를 녹음하면 로컬에서 전사하고, 설정한 Claude/Codex CLI 또는 Ollama로 회의록을 요약합니다. 요약 모델이 없어도 녹음과 전사는 가능합니다.
+        </p>
       </header>
       <span className="sr-only" aria-live="polite">{canonicalMessage}</span>
 
@@ -321,6 +367,8 @@ export function HomeClient() {
           onRetry={libraryState.refreshLibrary}
         />
       )}
+
+      <SummaryReadinessCard readiness={getLlmReadiness(llm)} />
 
       {libraryState.mode === "ready" ? (
         <section className="space-y-3">

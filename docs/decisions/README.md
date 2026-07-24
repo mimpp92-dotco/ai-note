@@ -8,8 +8,8 @@
 ## 새 ADR 추가
 
 ```bash
-cp docs/decisions/0000-template.md docs/decisions/0023-내-결정.md
-$EDITOR docs/decisions/0023-내-결정.md   # 5칸 채우고 아래 목록에 추가
+cp docs/decisions/0000-template.md docs/decisions/0024-내-결정.md
+$EDITOR docs/decisions/0024-내-결정.md   # 5칸 채우고 아래 목록에 추가
 ```
 
 ## 목록
@@ -36,3 +36,4 @@ $EDITOR docs/decisions/0023-내-결정.md   # 5칸 채우고 아래 목록에 �
 | [0020](0020-deterministic-synthetic-browser-verification.md) | 반복 browser gate는 격리 synthetic Playwright, Chrome DevTools MCP는 선택적 정성 검토 | 채택됨 |
 | [0021](0021-manual-transcript-and-summary-editing.md) | 불변 원본 위 editable transcript/summary와 독립 재생성·freshness·저장 probe | 채택됨 |
 | [0022](0022-inline-freeform-meeting-content-editing.md) | Tab-local action과 본문 교체형 single-textarea 편집 — 0021의 footer·structured summary form만 부분 대체 | 채택됨 |
+| [0023](0023-installation-and-first-run-ux.md) | 안전한 install target, owned background runtime과 provider-aware first-run UX | 채택됨 |
