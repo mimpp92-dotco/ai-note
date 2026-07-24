@@ -414,14 +414,13 @@
         "e2e/installation-and-first-run.spec.ts",
         "scripts/e2e-first-run-fixture.mjs",
         "scripts/__tests__/e2e-first-run-fixture.test.mjs",
+        "src/app/meetings/*/page.tsx",
+        "src/components/Recorder.tsx",
+        "src/components/MeetingDetailView.tsx",
         "docs/media/home.png",
         "docs/media/settings.png"
       ],
-      "repairAllowedPaths": [
-        "src/app/meetings/*/page.tsx",
-        "src/components/Recorder.tsx",
-        "src/components/MeetingDetailView.tsx"
-      ],
+      "repairAllowedPaths": [],
       "riskLevel": "standard",
       "requiresBrowser": true,
       "dataPolicy": "synthetic-only",
