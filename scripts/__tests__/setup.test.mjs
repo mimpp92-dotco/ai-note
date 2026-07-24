@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkNode,
+  doctorCompletionMessage,
   nodeMajor,
   parseOllamaModels,
   resolveFfmpeg,
@@ -106,5 +107,22 @@ describe("parseOllamaModels", () => {
     expect(parseOllamaModels({})).toEqual([]);
     expect(parseOllamaModels({ models: [] })).toEqual([]);
     expect(parseOllamaModels(null)).toEqual([]);
+  });
+});
+
+describe("doctor completion guidance", () => {
+  it("makes the canonical bootstrap resume command primary", () => {
+    const message = doctorCompletionMessage({ blocked: false });
+    expect(message).toContain("node scripts/bootstrap.mjs --launch");
+    expect(message).toContain("npm run dev");
+    expect(message.indexOf("node scripts/bootstrap.mjs --launch")).toBeLessThan(
+      message.indexOf("npm run dev"),
+    );
+  });
+
+  it("uses the same resume command after missing prerequisites are installed", () => {
+    expect(doctorCompletionMessage({ blocked: true })).toContain(
+      "node scripts/bootstrap.mjs --launch",
+    );
   });
 });

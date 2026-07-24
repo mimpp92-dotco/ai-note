@@ -65,6 +65,21 @@ export function parseOllamaModels(data) {
   return ((data && data.models) || []).map((m) => m && m.name).filter(Boolean);
 }
 
+export function doctorCompletionMessage({ blocked }) {
+  if (blocked) {
+    return (
+      "✗ 필수 전제(Node/uv/ffmpeg) 미충족. 위 안내대로 설치한 뒤 " +
+      "`node scripts/bootstrap.mjs --launch`를 다시 실행하세요.\n" +
+      "  에이전트: AGENTS.md `## 설치` 참조 · Claude Code: `/setup`"
+    );
+  }
+  return (
+    "✓ 필수 전제 충족. 설치·빌드·background 기동을 계속하려면 " +
+    "`node scripts/bootstrap.mjs --launch`를 실행하세요.\n" +
+    "  기여자용 foreground 개발 명령: `npm run dev`"
+  );
+}
+
 // ── 부수효과 헬퍼 (가드 뒤에서만 호출) ───────────────────────────────
 function realWhich(bin) {
   return which(bin, { env: process.env, platform: process.platform, existsSync });
@@ -142,16 +157,10 @@ async function main() {
 
   console.log("");
   if (blocked) {
-    console.error(
-      "✗ 필수 전제(Node/uv/ffmpeg) 미충족. 위 안내대로 설치 후 다시 실행하세요.\n" +
-        "  에이전트: AGENTS.md `## 설치` 참조 · Claude Code: `/setup`",
-    );
+    console.error(doctorCompletionMessage({ blocked: true }));
     process.exit(1);
   }
-  console.log(
-    "✓ 필수 전제 충족. `npm install && npm run dev` (첫 실행은 whisper 모델 다운로드).\n" +
-      "  자동 설치가 필요하면 — 에이전트: AGENTS.md `## 설치` · Claude Code: `/setup`",
-  );
+  console.log(doctorCompletionMessage({ blocked: false }));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

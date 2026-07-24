@@ -13,6 +13,10 @@
   },
   "scripts": {
     "setup": "node scripts/setup.mjs",
+    "bootstrap": "node scripts/bootstrap.mjs --launch",
+    "app:start": "node scripts/bootstrap.mjs start",
+    "app:status": "node scripts/bootstrap.mjs status",
+    "app:stop": "node scripts/bootstrap.mjs stop",
     "dev": "concurrently \"next dev --turbopack --hostname 127.0.0.1\" \"uv run --project whisper python whisper/server.py\"",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
