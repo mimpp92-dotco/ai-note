@@ -582,6 +582,58 @@
         "console error, page error, external request, screenshot, assertion, console evidence 또는 manifest가 누락되면 중단",
         "검증 전후 product tree가 달라지면 중단"
       ]
+    },
+    {
+      "id": 7,
+      "name": "final-gate-transcription-race-repair",
+      "file": "phase-7-final-gate-transcription-race-repair.md",
+      "requirements": [
+        "R5",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0014-durable-transcription-dispatch.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "package.json",
+        "playwright.config.ts",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "scripts/run-e2e.mjs",
+        "e2e/installation-and-first-run.spec.ts",
+        "e2e/support/synthetic-test.ts",
+        "e2e/support/evidence-reporter.ts",
+        "src/components/MeetingDetailView.tsx",
+        "src/components/__tests__/views.test.tsx"
+      ],
+      "allowedPaths": [
+        "src/components/MeetingDetailView.tsx"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "requiresBrowser": true,
+      "dataPolicy": "synthetic-only",
+      "verification": {
+        "testMode": "existing-tests",
+        "testCommand": "npm test -- src/components/__tests__/views.test.tsx -t \"이미 진행 중인 race도 refresh하고 전사 poll은 한 번에 하나만 두며 상태 변경에서 정리한다\"",
+        "additionalCommands": [
+          "npm run typecheck",
+          "npm run test:e2e"
+        ],
+        "evidence": [
+          "browser"
+        ],
+        "reason": "전체 final gate가 재현한 409 transcription race의 기존 RED 테스트를 제품 코드 한 파일에서 수리하고, 최종 synthetic browser evidence를 변경 후 다시 확인한다."
+      },
+      "blockIf": [
+        "409 meeting_conflict를 성공으로 숨기거나 기존 전사 retry/poll 테스트를 약화해야 하면 중단",
+        "새 endpoint, dispatch ID, status schema 또는 artifact writer가 필요하면 중단",
+        "실제 data, Whisper, provider, credential 또는 외부 network가 필요하면 중단",
+        "MeetingDetailView.tsx 밖 제품 또는 테스트 파일 수정이 필요하면 중단"
+      ]
     }
   ],
   "finalGate": [

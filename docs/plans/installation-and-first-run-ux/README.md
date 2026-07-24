@@ -119,6 +119,7 @@ repo URL 전달
 | 4 | synthetic first-run/retry browser scenario와 현재 screenshot | standard | fixture TDD + 3 viewport Playwright |
 | 5 | 공개 문서와 ADR 0023 | low | link check |
 | 6 | 변경 없는 최종 synthetic browser gate | standard | verify-only Playwright evidence |
+| 7 | final gate에서 발견된 transcription 409 race 수리와 browser 재확인 | standard | existing RED test + typecheck + 3 viewport Playwright |
 
 ## 안전·데이터 경계
 
