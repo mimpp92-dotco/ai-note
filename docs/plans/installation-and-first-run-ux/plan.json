@@ -252,6 +252,7 @@
         "src/services/llm/__tests__/claudeCli.test.ts",
         "src/services/llm/__tests__/codexCli.test.ts",
         "src/services/llm/__tests__/ollama.test.ts",
+        "src/lib/__tests__/localRequestGuard.test.ts",
         "src/app/api/__tests__/routes.integration.test.ts"
       ],
       "allowedPaths": [
@@ -262,6 +263,7 @@
         "src/components/HomeClient.tsx",
         "src/components/Recorder.tsx",
         "src/components/healthStatus.ts",
+        "src/lib/localRequestGuard.ts",
         "src/services/llm/claudeCli.ts",
         "src/services/llm/codexCli.ts",
         "src/services/llm/ollama.ts",
@@ -279,7 +281,7 @@
       "riskLevel": "critical",
       "verification": {
         "testMode": "strict-tdd",
-        "testCommand": "npm test -- src/components/__tests__/views.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx src/components/__tests__/RecorderSessionProvider.test.tsx src/components/__tests__/healthStatus.test.ts src/services/llm/__tests__/claudeCli.test.ts src/services/llm/__tests__/codexCli.test.ts src/services/llm/__tests__/ollama.test.ts src/app/api/__tests__/routes.integration.test.ts",
+        "testCommand": "npm test -- src/components/__tests__/views.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx src/components/__tests__/RecorderSessionProvider.test.tsx src/components/__tests__/healthStatus.test.ts src/services/llm/__tests__/claudeCli.test.ts src/services/llm/__tests__/codexCli.test.ts src/services/llm/__tests__/ollama.test.ts src/lib/__tests__/localRequestGuard.test.ts src/app/api/__tests__/routes.integration.test.ts",
         "additionalCommands": [
           "npm run typecheck"
         ],

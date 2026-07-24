@@ -48,6 +48,7 @@
 - `src/components/HomeClient.tsx`
 - `src/components/Recorder.tsx`
 - `src/components/healthStatus.ts`
+- `src/lib/localRequestGuard.ts`
 - `src/services/llm/claudeCli.ts`
 - `src/services/llm/codexCli.ts`
 - `src/services/llm/ollama.ts`
@@ -108,6 +109,6 @@ Settings, first-use와 local discovery 정본은 Phase 5에서 갱신한다. 이
 ## 완료 게이트
 
 ```bash
-npm test -- src/components/__tests__/views.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx src/components/__tests__/RecorderSessionProvider.test.tsx src/components/__tests__/healthStatus.test.ts src/services/llm/__tests__/claudeCli.test.ts src/services/llm/__tests__/codexCli.test.ts src/services/llm/__tests__/ollama.test.ts src/app/api/__tests__/routes.integration.test.ts
+npm test -- src/components/__tests__/views.test.tsx src/components/__tests__/UserProfileForm.test.tsx src/components/__tests__/LibraryNavigation.test.tsx src/components/__tests__/RecorderSessionProvider.test.tsx src/components/__tests__/healthStatus.test.ts src/services/llm/__tests__/claudeCli.test.ts src/services/llm/__tests__/codexCli.test.ts src/services/llm/__tests__/ollama.test.ts src/lib/__tests__/localRequestGuard.test.ts src/app/api/__tests__/routes.integration.test.ts
 npm run typecheck
 ```
