@@ -5,7 +5,10 @@ import { EmptyState } from "@/components/EmptyState";
 import { CopyButton } from "@/components/CopyButton";
 import { GlossaryClient } from "@/components/GlossaryClient";
 import { splitBacklog } from "@/components/HomeClient";
-import { MeetingDetailView } from "@/components/MeetingDetailView";
+import {
+  MeetingDetailView,
+  resolveInitialMeetingTab,
+} from "@/components/MeetingDetailView";
 import { MeetingList, type MeetingListItem } from "@/components/MeetingList";
 import { PendingBanner } from "@/components/PendingBanner";
 import { Recorder } from "@/components/Recorder";
@@ -758,6 +761,14 @@ describe("MeetingDetailView — 전체 스크립트 탭", () => {
 });
 
 describe("MeetingDetailView — 회의록 요약 탭", () => {
+  it("명시 query가 우선하고 query가 없으면 usable summary 유무로 초기 탭을 정한다", () => {
+    expect(resolveInitialMeetingTab("script", SUMMARY)).toBe("script");
+    expect(resolveInitialMeetingTab("summary", null)).toBe("summary");
+    expect(resolveInitialMeetingTab(null, SUMMARY)).toBe("summary");
+    expect(resolveInitialMeetingTab(null, null)).toBe("script");
+    expect(resolveInitialMeetingTab("unknown", SUMMARY)).toBe("summary");
+  });
+
   it("renders the summary sections", () => {
     render(
       <MeetingDetailView
@@ -822,6 +833,145 @@ describe("MeetingDetailView — 요약 상태 카드", () => {
     );
     expect(screen.getByText(/모델 응답 오류/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "재시도" })).toBeInTheDocument();
+  });
+
+  it("전사 실패를 안전하게 유지하고 기존 endpoint로 재시도한 뒤 상태를 새로 확인한다", async () => {
+    viewNavigation.refresh.mockReset();
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/transcribe") {
+        return new Response(JSON.stringify({
+          id: "m1",
+          status: "transcribing",
+          durability: "durable",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return healthResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({
+          status: "transcribing",
+          error: { message: "/tmp/private/provider output", action: "retry_transcription" },
+        })}
+        transcript={{ text: "", corrected: false }}
+        segments={[]}
+        summary={null}
+        hasAudio={false}
+      />,
+    );
+
+    expect(screen.getByText("전사 실패")).toBeInTheDocument();
+    expect(screen.queryByText(/\/tmp|provider output/u)).not.toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "전사 다시 시도" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("button", { name: "전사 요청 중…" })).toBeDisabled();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/transcribe", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "m1" }),
+    }));
+    await waitFor(() => expect(viewNavigation.refresh).toHaveBeenCalled());
+    expect(screen.getByRole("status", { name: "전사 다시 시도 상태" }))
+      .toHaveTextContent("전사 요청을 접수했습니다. 최신 상태를 확인합니다.");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("전사 retry network 실패는 기존 artifact와 retry control을 유지한다", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === "/api/transcribe") throw new Error("/tmp/private");
+      return healthResponse(input);
+    }));
+    render(
+      <MeetingDetailView
+        id="m1"
+        status={makeStatus({
+          status: "recorded",
+          error: { message: "private provider output", action: "retry_transcription" },
+        })}
+        transcript={{ text: "기존에 확인 가능한 내용", corrected: false }}
+        segments={[]}
+        summary={null}
+        hasAudio={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "전사 다시 시도" }));
+    expect(await screen.findByRole("status", { name: "전사 다시 시도 상태" })).toHaveTextContent(
+      "전사 요청을 보내지 못했습니다. 녹음 원본과 현재 내용은 유지됐습니다. 잠시 후 다시 시도하세요.",
+    );
+    expect(screen.getByText("기존에 확인 가능한 내용")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "전사 다시 시도" })).toBeEnabled();
+    expect(screen.queryByText(/private provider|\/tmp/u)).not.toBeInTheDocument();
+  });
+
+  it("이미 진행 중인 race도 refresh하고 전사 poll은 한 번에 하나만 두며 상태 변경에서 정리한다", async () => {
+    vi.useFakeTimers();
+    viewNavigation.refresh.mockReset();
+    let finishPoll: ((response: Response) => void) | null = null;
+    let pollCalls = 0;
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "/api/transcribe") {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: { code: "meeting_conflict", message: "private race detail" },
+        }), { status: 409 }));
+      }
+      if (url === "/api/meetings/m1") {
+        pollCalls += 1;
+        return new Promise<Response>((resolve) => {
+          finishPoll = resolve;
+        });
+      }
+      return Promise.resolve(healthResponse(input));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const props = {
+      id: "m1",
+      transcript: { text: "", corrected: false },
+      segments: [] as never[],
+      summary: null,
+      hasAudio: false,
+    };
+    const view = render(
+      <MeetingDetailView
+        {...props}
+        status={makeStatus({
+          status: "transcribing",
+          error: { message: "safe persisted failure", action: "retry_transcription" },
+        })}
+      />,
+    );
+
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "전사 다시 시도" }));
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      expect(viewNavigation.refresh).toHaveBeenCalled();
+      expect(screen.getByRole("status", { name: "전사 다시 시도 상태" }))
+        .toHaveTextContent("최신 상태를 확인합니다.");
+
+      await act(async () => vi.advanceTimersByTimeAsync(9_000));
+      expect(pollCalls).toBe(1);
+
+      await act(async () => {
+        finishPoll?.(new Response(JSON.stringify({ status: "transcribing", error: null }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }));
+      });
+      view.rerender(
+        <MeetingDetailView
+          {...props}
+          status={makeStatus({ status: "transcribed", error: null })}
+        />,
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(6_000));
+      expect(pollCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders the export toolbar once summarized", () => {

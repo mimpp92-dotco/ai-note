@@ -303,6 +303,15 @@ function StatusBadge({
     );
   }
 
+  if (error?.action === "retry_transcription") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-error/10 px-3 py-1 text-[12px] font-medium text-error">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-error" aria-hidden="true" />
+        전사 실패
+      </span>
+    );
+  }
+
   return (
     <span className="shrink-0 rounded-full bg-soft px-3 py-1 text-[12px] font-medium text-inkSoft">
       {STATUS_LABELS[status]}

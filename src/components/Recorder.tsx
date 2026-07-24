@@ -26,6 +26,7 @@ export function Recorder({
     error,
     serverStatus,
     finalizeResult,
+    meetingId,
     hasRetainedBlob,
     retryDisposition,
     start,
@@ -162,8 +163,12 @@ export function Recorder({
             </button>
           </div>
         )}
-        {phase === "saved" && finalizeResult && (
-          <RecorderFinalizeResultView result={finalizeResult} onRefresh={() => void probe()} />
+        {phase === "saved" && finalizeResult && meetingId && (
+          <RecorderFinalizeResultView
+            meetingId={meetingId}
+            result={finalizeResult}
+            onRefresh={() => probe()}
+          />
         )}
       </div>
     </section>

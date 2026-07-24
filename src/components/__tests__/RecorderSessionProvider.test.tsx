@@ -640,6 +640,49 @@ describe("RecorderSessionProvider", () => {
     expect(finalizeCalls[2].url.split("?")[0]).toBe(finalizeCalls[0].url.split("?")[0]);
   });
 
+  it("preserves the saved recorder meeting ID through the finalize transcription retry surface", async () => {
+    const transcribeCalls: RequestInit[] = [];
+    let finalizeCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/transcribe") {
+        transcribeCalls.push(init ?? {});
+        return new Response(JSON.stringify({
+          id: JSON.parse(String(init?.body)).id,
+          status: "transcribing",
+          durability: "durable",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/finalize?")) {
+        finalizeCalls += 1;
+        return new Response(JSON.stringify({
+          artifact: finalizeCalls === 1 ? "published" : "already_published",
+          durability: "durable",
+          playback: finalizeCalls === 1 ? "ready" : "unchanged",
+          placement: {
+            requested: null,
+            actual: null,
+            outcome: "unavailable",
+            fallbackReason: null,
+          },
+          transcription: finalizeCalls === 1 ? "failed" : "accepted",
+          status: "transcribing",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ status: "transcribing", error: null }), { status: 200 });
+    }));
+    render(<App />);
+    await startRecording();
+    fireEvent.click(screen.getAllByRole("button", { name: "기록 중지" })[0]);
+    await waitFor(() => expect(screen.getByTestId("session")).toHaveTextContent(/^saved:/));
+    const exactMeetingId = screen.getByTestId("session").textContent?.split(":")[1];
+
+    fireEvent.click(screen.getByRole("button", { name: "전사 다시 시도" }));
+    await waitFor(() => expect(transcribeCalls).toHaveLength(1));
+    expect(JSON.parse(String(transcribeCalls[0].body))).toEqual({ id: exactMeetingId });
+    expect(new Headers(transcribeCalls[0].headers).get("content-type")).toBe("application/json");
+  });
+
   it("keeps the full-recorder timer and meter out of any live region and announces only the phase", async () => {
     vi.useFakeTimers();
     render(<App />);

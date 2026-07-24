@@ -3,7 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import Link from "next/link";
 import { headers } from "next/headers";
 
-import { MeetingDetailView, type Segment } from "@/components/MeetingDetailView";
+import {
+  MeetingDetailView,
+  resolveInitialMeetingTab,
+  type Segment,
+} from "@/components/MeetingDetailView";
 import type { Summary } from "@/domain/summary";
 import { summarySchema } from "@/domain/summarySchema";
 import { readArtifactPair } from "@/lib/artifactPair";
@@ -159,7 +163,7 @@ export default async function MeetingDetailPage({
       // agreement even after a restart or orphaned lease, when the in-memory lock is gone but
       // the attempt persists until reconciliation clears it (R6).
       resummarizeInflight={contentOperation === "initial" || contentOperation === "summary"}
-      initialTab={contentTab === "summary" ? "summary" : "script"}
+      initialTab={resolveInitialMeetingTab(contentTab, parsedSummary)}
       backHref={detailSource?.backHref ?? "/"}
       location={placement
         ? { workspaceId: placement.workspaceId, folderId: placement.folderId }
