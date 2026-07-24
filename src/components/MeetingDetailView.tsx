@@ -364,6 +364,7 @@ export function MeetingDetailView({
   const summaryGenerationTriggerRef = useRef<HTMLButtonElement>(null);
   const generationCancelRef = useRef<HTMLButtonElement>(null);
   const generationReturnFocusRef = useRef<HTMLElement | null>(null);
+  const transcriptionRetryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const continueEditingRef = useRef<HTMLButtonElement>(null);
 
   confirmedRef.current = confirmed;
@@ -581,7 +582,23 @@ export function MeetingDetailView({
           cache: "no-store",
           signal: controller.signal,
         });
-        if (!cancelled && response.ok) router.refresh();
+        if (!cancelled && response.ok) {
+          const latest = await responseBody(response);
+          const latestErrorAction = isRecord(latest)
+            && isRecord(latest.error)
+            && typeof latest.error.action === "string"
+            ? latest.error.action
+            : null;
+          if (
+            isRecord(latest)
+            && (
+              latest.status !== status.status
+              || latestErrorAction !== (status.error?.action ?? null)
+            )
+          ) {
+            router.refresh();
+          }
+        }
       } catch {
         // A later single-inflight poll can recover a transient local request failure.
       }
@@ -593,7 +610,17 @@ export function MeetingDetailView({
       if (timer) clearTimeout(timer);
       controller?.abort();
     };
-  }, [id, router, status.status, transcriptionPollDeadline]);
+  }, [id, router, status.error?.action, status.status, transcriptionPollDeadline]);
+
+  useEffect(() => {
+    if (transcriptionRetrying || !transcriptionRetryTriggerRef.current) return;
+    const trigger = transcriptionRetryTriggerRef.current;
+    transcriptionRetryTriggerRef.current = null;
+    const frame = window.requestAnimationFrame(() => {
+      if (trigger.isConnected) trigger.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [transcriptionRetrying]);
 
   useEffect(() => {
     if (!localGeneration) return;
@@ -1054,6 +1081,7 @@ export function MeetingDetailView({
 
   const beginTranscriptionRetry = async (trigger: HTMLButtonElement) => {
     if (transcriptionRetrying) return;
+    transcriptionRetryTriggerRef.current = trigger;
     setTranscriptionRetrying(true);
     setTranscriptionRetryStatus("전사 요청을 보내는 중…");
     try {
@@ -1074,16 +1102,12 @@ export function MeetingDetailView({
           : "전사가 이미 진행 중일 수 있어 최신 상태를 확인합니다.",
       );
       setTranscriptionPollDeadline(Date.now() + TRANSCRIPTION_POLL_TIMEOUT_MS);
-      router.refresh();
     } catch {
       setTranscriptionRetryStatus(
         "전사 요청을 보내지 못했습니다. 녹음 원본과 현재 내용은 유지됐습니다. 잠시 후 다시 시도하세요.",
       );
     } finally {
       setTranscriptionRetrying(false);
-      window.setTimeout(() => {
-        if (trigger.isConnected) trigger.focus();
-      }, 0);
     }
   };
 

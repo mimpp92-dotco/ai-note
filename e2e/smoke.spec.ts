@@ -21,13 +21,15 @@ test("synthetic library shell is usable without external traffic", async ({ page
   ).toBe(true);
   expect(await libraryResponse.json(), "synthetic library state").toMatchObject({
     mode: "ready",
-    library: { counts: { visibleMeetingCount: 3 } },
+    library: { counts: { visibleMeetingCount: 6 } },
   });
   expect(await whisperResponse.json(), "synthetic Whisper state").toMatchObject({ connected: false });
   expect(await llmResponse.json(), "synthetic LLM state").toEqual({ configured: false });
   await expect(page).toHaveTitle("AI NOTE");
   await expect(page.locator("main#main")).toBeVisible();
-  await expect(page.getByText("회의 녹음 → 로컬 전사 → 회의록 요약.")).toBeVisible();
+  await expect(page.getByText(
+    "회의를 녹음하면 로컬에서 전사하고, 설정한 Claude/Codex CLI 또는 Ollama로 회의록을 요약합니다. 요약 모델이 없어도 녹음과 전사는 가능합니다.",
+  )).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: /· 모든 회의$/u })).toBeVisible();
   await expect(page.getByRole("heading", { name: "회의 목록" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "아직 회의록이 없습니다" })).toHaveCount(0);

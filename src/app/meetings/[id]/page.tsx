@@ -5,7 +5,6 @@ import { headers } from "next/headers";
 
 import {
   MeetingDetailView,
-  resolveInitialMeetingTab,
   type Segment,
 } from "@/components/MeetingDetailView";
 import type { Summary } from "@/domain/summary";
@@ -63,6 +62,14 @@ function parseSummary(raw: string | null): Summary | null {
   } catch {
     return null;
   }
+}
+
+function resolveInitialMeetingTab(
+  contentTab: string | null,
+  summary: Summary | null,
+): "script" | "summary" {
+  if (contentTab === "script" || contentTab === "summary") return contentTab;
+  return summary ? "summary" : "script";
 }
 
 function NotFound() {
