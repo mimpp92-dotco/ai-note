@@ -20,6 +20,7 @@
 
 ## 허용 범위
 
+- `e2e/installation-and-first-run.spec.ts`
 - `src/components/MeetingDetailView.tsx`
 
 ## 금지 및 중단 조건
@@ -34,11 +35,12 @@
 1. 현재 RED 테스트를 그대로 실행해 409 `meeting_conflict` 뒤 즉시 server state refresh가 누락된 상태를 확인한다.
 2. 기존 `/api/transcribe` 요청, safe status copy, single-inflight polling과 cleanup을 유지하면서 접수 성공 또는 이미 진행 중 race 뒤 `router.refresh()`를 호출한다.
 3. polling deadline, unmount/status-change cleanup, timeout copy와 focus 복원을 바꾸지 않는다.
-4. 수정 후 targeted test, typecheck와 전체 synthetic Playwright를 실행한다.
+4. Phase 4가 추가한 deferred retry resolver의 TypeScript narrowing 오류는 동작이나 assertion을 바꾸지 않는 최소 타입 수정으로 해결한다.
+5. 수정 후 targeted test, typecheck와 전체 synthetic Playwright를 실행한다.
 
 ## 테스트 (먼저 작성)
 
-새 테스트를 만들거나 기존 assertion을 바꾸지 않는다. 이미 RED인 race 테스트를 회귀 계약으로 사용하며 제품 코드 수정으로 GREEN을 만든다.
+새 테스트를 만들거나 기존 assertion을 바꾸지 않는다. 이미 RED인 race 테스트를 회귀 계약으로 사용하며 제품 코드 수정으로 GREEN을 만든다. E2E 수정은 deferred resolver의 호출 가능 타입을 보존하는 데만 한정한다.
 
 ## 문서 최신화
 

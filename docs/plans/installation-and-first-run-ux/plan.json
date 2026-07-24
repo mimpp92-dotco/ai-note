@@ -610,6 +610,7 @@
         "src/components/__tests__/views.test.tsx"
       ],
       "allowedPaths": [
+        "e2e/installation-and-first-run.spec.ts",
         "src/components/MeetingDetailView.tsx"
       ],
       "repairAllowedPaths": [],
@@ -632,7 +633,7 @@
         "409 meeting_conflict를 성공으로 숨기거나 기존 전사 retry/poll 테스트를 약화해야 하면 중단",
         "새 endpoint, dispatch ID, status schema 또는 artifact writer가 필요하면 중단",
         "실제 data, Whisper, provider, credential 또는 외부 network가 필요하면 중단",
-        "MeetingDetailView.tsx 밖 제품 또는 테스트 파일 수정이 필요하면 중단"
+        "MeetingDetailView.tsx와 installation-and-first-run.spec.ts 밖 제품 또는 테스트 파일 수정이 필요하면 중단"
       ]
     }
   ],
