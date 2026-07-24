@@ -400,8 +400,10 @@
         "e2e/support/synthetic-test.ts",
         "e2e/support/evidence-reporter.ts",
         "src/app/api/settings/llm/models/route.ts",
+        "src/app/meetings/*/page.tsx",
         "src/components/HomeClient.tsx",
         "src/components/SettingsForm.tsx",
+        "src/components/Recorder.tsx",
         "src/components/MeetingRow.tsx",
         "src/components/MeetingDetailView.tsx"
       ],
@@ -415,7 +417,11 @@
         "docs/media/home.png",
         "docs/media/settings.png"
       ],
-      "repairAllowedPaths": [],
+      "repairAllowedPaths": [
+        "src/app/meetings/*/page.tsx",
+        "src/components/Recorder.tsx",
+        "src/components/MeetingDetailView.tsx"
+      ],
       "riskLevel": "standard",
       "requiresBrowser": true,
       "dataPolicy": "synthetic-only",

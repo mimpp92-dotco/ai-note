@@ -22,6 +22,7 @@
 - `e2e/support/synthetic-test.ts`
 - `e2e/support/evidence-reporter.ts`
 - Phase 2와 3의 변경된 settings/home/recorder/meeting component와 route
+- Browser가 발견한 server/client 경계 또는 programmatic focus 회귀는 `plan.json`의 좁은 `repairAllowedPaths`에 지정한 meeting page, `Recorder`, `MeetingDetailView`에서만 수리한다.
 - 기존 `docs/media/home.png`, `docs/media/settings.png`는 required text context가 아니라 visual inspection 대상으로만 비교한다.
 
 ## 요구사항
