@@ -25,18 +25,28 @@ flowchart LR
 
 ## 설치 (Installation)
 
-> 사람 대상 요약은 `README.md`. 이 절차는 **에이전트가 레포 URL을 받아 clone 후 그대로 실행**하면 설치가 완료되도록 자기완결적으로 쓴다. `npm run dev` 두 줄이 정본이지만, npm 바깥 전제 도구 3종(`uv`·`ffmpeg`·요약기)은 사용자/에이전트가 준비해야 하므로 아래 순서를 따른다.
+> 사람 대상 요약은 `README.md`. 아래 계약은 에이전트가 이 저장소의 공개 문서를 읽은 시점부터 적용된다. 저장소를 clone하기 전 agent host의 정책까지 이 저장소가 강제한다고 주장하지 않는다.
 
-0. **Node ≥ 20 확보** — `node -v`. 없거나 낮으면 nvm 또는 OS 패키지 매니저로 설치(이게 있어야 나머지가 돈다).
-1. **진단** — `node scripts/setup.mjs`. 이 닥터는 무의존이라 `npm install` 전에도 돈다. Node·`uv`·`ffmpeg`·요약기·`.env.local`을 ✓/⚠/✗로 보고하고, 필수(Node/uv/ffmpeg) 미충족이면 exit 1.
-2. **✗ 전제 설치(OS 감지 후 실제 실행 — 사용자에게 보이게, sudo/확인 필요할 수 있음)**:
-   - `ffmpeg` — macOS `brew install ffmpeg` · Debian/Ubuntu `sudo apt install ffmpeg` · Windows `choco install ffmpeg`.
-   - `uv` — https://docs.astral.sh/uv/ 설치 스크립트(또는 macOS `brew install uv`). whisper venv/모델은 `npm run dev`가 런타임에 처리한다(여기서 `uv sync`·모델 다운로드 하지 말 것).
-3. **의존성** — `npm install`. 이 단계에서 Playwright package는 설치되지만 browser binary는 자동 다운로드하지 않는다. Synthetic browser QA를 실행할 개발/CI 환경만 최초 1회 `npm run test:e2e:install`을 실행한다(일반 앱 사용에는 불필요).
-4. **요약기 준비(자동화 불가한 유일한 수동 단계)** — Claude/Codex CLI 또는 로컬 Ollama 중 하나. 이미 있으면 그대로 두고, 없으면 하나 준비: `claude` 로그인 · `codex` · `ollama serve` + `ollama pull <model>`. **provider 선택·검증은 `npm run dev` 기동 후 앱 Settings 화면에서** 한다(설치 시점엔 서버 미기동이라 API 설정 불가; `data/settings.json`은 app-api 단일 writer라 직접 쓰지 않는다).
-5. **검증(포그라운드로 붙잡지 말 것)** — `node scripts/setup.mjs`(전부 ✓) + `npm run build`. 실제 구동 확인은 `LOCAL_STT_MODEL=base npm run dev`(백그라운드)로 띄운 뒤 `http://localhost:3000` / `GET /api/whisper/health`. `npm run dev`는 long-lived + 첫 모델 다운로드라 검증용으로 붙잡으면 안 된다.
+### 저장소 URL만 받은 에이전트
 
-Claude Code 세션이면 위 절차를 `/setup` 커맨드로 대신 실행할 수 있다(내용은 이 절차와 동일; Codex 등 다른 에이전트는 이 절차를 직접 따른다).
+1. 먼저 설치 target을 absolute path로 결정하고 사용자에게 알린다.
+   - 사용자가 target을 명시하지 않았으면 현재 디렉터리 자체에 설치하지 않는다. 현재 위치가 다른 Git 저장소 안이면 그 저장소 root의 sibling `ai-note`를, 아니면 현재 디렉터리 아래의 새 `ai-note`를 선택한다.
+   - 기본 이름이 이미 있으면 재사용·덮어쓰기·`pull`하지 않는다. `ai-note-2`, `ai-note-3`처럼 첫 번째 비어 있는 deterministic suffix path를 선택한다.
+   - 사용자가 명시한 target이 non-empty이거나 이미 다른 origin을 가리키면 중단하고 exact absolute path를 보고한다.
+2. Clone과 이후 설치는 선택한 target 안에서만 수행한다. 상위 `.git`·`.claude`·`.harness`, 사용자 Git 설정, 다른 `package.json`, 실행 중인 프로젝트를 수정하거나 종료하지 않는다.
+3. 단순 경로 충돌은 안전한 새 suffix target으로 해결한다. OS package 설치의 `sudo`/확인이나 provider 로그인처럼 새 권한이 필요한 경우에만 사용자 승인을 요청한다.
+
+### Clone 뒤 정본 실행
+
+1. **Node ≥ 20 확보** — `node -v`. 없거나 낮으면 nvm 또는 OS package manager 설치 명령을 사용자에게 보여 주고 필요한 권한을 받는다.
+2. Target root에서 `node scripts/bootstrap.mjs --launch`를 실행한다. 이 무의존 command가 먼저 doctor를 실행하고, 통과하면 `HUSKY=0 npm ci` → `npm run build` → repository-owned background app/Whisper 기동 → 두 health 확인 → 실제 브라우저 열기 순서로 완료한다.
+3. Doctor가 필수 `uv` 또는 `ffmpeg` 누락으로 멈추면 출력된 OS별 조치를 사용자에게 보여 주고 설치한 뒤 같은 `--launch` command를 다시 실행한다. Bootstrap은 `sudo`, package manager, provider 로그인, `ollama pull`, Whisper model download를 몰래 실행하지 않는다.
+4. 요약기는 녹음·전사의 설치 blocker가 아니다. 앱이 열린 뒤 **설정 → 요약 모델**에서 Claude/Codex CLI 또는 Ollama를 선택하고 저장한다. 필요한 CLI 로그인, `ollama serve`/`ollama pull <model>`은 사용자 권한과 선택으로 수행하며 `data/settings.json`을 직접 쓰지 않는다.
+5. 성공 시 `AI_NOTE_URL=http://localhost:<actual-port>`를 정본으로 사용한다. Headless/opener 실패도 server 성공을 유지하므로 출력된 exact URL을 사용 가능한 agent browser surface로 연다. 최종 handoff에는 absolute install path, branch 또는 revision, 실제 앱 URL을 함께 보고한다.
+
+앱은 `127.0.0.1:3000`부터, Whisper는 `127.0.0.1:8123`부터 bounded 후보를 고르며 기존 process에 연결하거나 종료하지 않는다. 선택 포트는 child environment에만 전달하고 `.env.local`을 만들거나 덮어쓰지 않는다. Runtime state/heartbeat/log는 gitignored `.ai-note-runtime/`에 mode를 제한해 저장하며 credential이나 inherited environment를 기록하지 않는다. `npm run app:status`/`npm run app:stop`은 live ownership token이 검증된 supervisor만 조회·종료하고 stale 또는 검증 불가 PID에는 signal을 보내지 않는다.
+
+Claude Code 세션은 같은 계약의 `/setup` command를 사용할 수 있다. `npm run dev`는 contributor용 foreground command이며 end-user 설치 성공 경로가 아니다.
 
 ## 아키텍처 규칙
 
@@ -70,7 +80,11 @@ Claude Code 세션이면 위 절차를 `/setup` 커맨드로 대신 실행할 �
 
 ## 명령어
 ```bash
-npm run dev         # next dev + 로컬 whisper 동시 기동(concurrently)
+npm run bootstrap   # doctor + npm ci + build + owned background app/Whisper + browser
+npm run app:start   # 설치된 build를 owned background runtime으로 시작
+npm run app:status  # ownership 확인 뒤 실제 URL과 app/Whisper 상태 조회
+npm run app:stop    # ownership 확인된 supervisor만 종료
+npm run dev         # contributor용 foreground next dev + whisper
 npm run build       # 프로덕션 빌드 (시크릿 없이 통과해야 함)
 npm run lint        # ESLint
 npm test            # vitest run (+ component test), watch 금지

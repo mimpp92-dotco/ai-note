@@ -135,15 +135,18 @@
 오류·복구 문장은 `무엇이 실패했는지 → 입력과 기존 결과가 보존됐는지 → 다음 행동` 순서로 쓴다. Raw path, meeting ID, provider output, 내부 상태 코드는 표시하지 않는다.
 
 ### 녹음 화면
-- 상단 우측 **다크 "실시간 기록 시작"** 버튼. 녹음 중: 펄스 red dot + "기록 중" + `mm:ss` 타이머(mono) + **레벨 미터**(입력 소리 확인). 마이크 무음 시 레벨 0 = 사용자가 문제 인지. 페이지 이탈 시 `beforeunload` 경고.
+- 상단 우측 **다크 "회의 녹음 시작"** 버튼. 실시간 자막/기록을 약속하지 않는다. 녹음 중: 펄스 red dot + "기록 중" + `mm:ss` 타이머(mono) + **레벨 미터**(입력 소리 확인). 마이크 무음 시 레벨 0 = 사용자가 문제 인지. 페이지 이탈 시 `beforeunload` 경고.
+- 첫 전사는 선택한 Whisper model을 먼저 내려받느라 오래 걸릴 수 있다고 recorder helper에서 알린다. Model download가 끝나기 전에는 전사 percentage를 알 수 있는 것처럼 가짜 progress를 표시하지 않는다. 내부 `best-effort` 같은 운영 용어는 사용자 copy에 쓰지 않는다.
 - 시각 timer와 `role="meter"`의 빠른 값 변화는 live region 밖에 둔다. Full/compact recorder 모두 작은 전용 `role="status" aria-live="polite"`가 권한 확인·기록 시작·정리·저장·실패 같은 phase 전환만 알린다.
 - Non-idle 녹음 session은 layout 우하단 compact control(`min-height:44px`)로 모든 route에 유지한다. 상태 텍스트와 함께 기록 중지, captured 저장, ambiguous same-ID probe, 확인 후 재전송을 제공하며 full Recorder가 unmount돼도 숨기지 않는다. `녹음 버리기`는 원본과 복구 상태를 되돌릴 수 없이 지운다는 별도 확인을 거친다.
 - Unsaved capture에서 non-scope navigation을 시도하면 modal dialog를 띄운다. 초기 focus는 `계속 녹음/현재 화면에 머물기`, Escape/cancel은 trigger로 focus를 복귀한다. Recording은 `기록 중지하고 머물기`, 유일한 destructive escape는 텍스트가 명시된 `녹음 버리고 이동`이다. 색만으로 파괴성을 전달하지 않는다.
 
 ### 홈(목록)
-- 회의 카드 목록(제목·날짜·상태 라벨). **처리 대기 배너**: `transcribed`(교정 대기) 회의가 있으면 상단에 "N개 회의 교정 대기 — 터미널에서 `/meeting-summarize` 실행" + 복사 버튼.
+- **First-use readiness**: LLM health가 미설정이면 `회의록 요약을 준비하세요`, 저장 설정이 unavailable이면 `요약 모델을 확인하세요` card를 recorder 바로 앞에 둔다. 공통 copy는 요약 모델 없이도 녹음·로컬 전사가 가능하다고 명시한다. Primary **AI 요약 설정**은 Settings로 이동하고 secondary **요약 없이 회의 녹음**은 같은 화면 recorder로 scroll한 뒤 **회의 녹음 시작**에 focus한다. Route/modal tour/step persistence/account/recording gate는 만들지 않는다.
+- 회의 카드 목록(제목·날짜·상태 라벨). **전역 처리 배너**는 `summary-work`의 전체 library aggregate로 요약 처리 중과 확인 필요를 분리하고, 확인 필요는 bounded attention detail로 연결한다. Terminal command를 active product action으로 안내하지 않는다.
 - 빈 상태: "아직 회의록이 없습니다 — 첫 회의를 녹음해보세요" + 큰 녹음 버튼 + 3단계 안내(녹음 → 전사 → 요약 확인). Default All은 heading·border surface를 한 번만 렌더하고 onboarding을 같은 surface에 통합하며, folder/unfiled는 해당 scope copy만 한 번 표시한다.
 - **상태 표시**: 색만으로 전달하지 않는다. whisper는 `Whisper {model} · 준비됨/준비 중/연결 안 됨`, 요약 모델은 `{Provider} {model?} · 연결됨/감지됨/미설정/실패`처럼 dot + 텍스트를 함께 표시한다. CLI provider(claude·codex)는 바이너리 감지라 “감지됨”, Ollama는 검증된 “연결됨”으로 라벨을 구분한다. 긴 모델명/오류는 truncate하고 full detail은 `title` 또는 설정 화면에서 확인한다. `baseUrl`은 사이드바에 노출하지 않는다.
+- **전사 실패 row**: `retry_transcription`은 일반 `전사 중` label로 덮지 않고 error tone+text `전사 실패`를 지속 표시한다. Row detail href는 같은 meeting을 가리키며 상세에서도 persisted failure와 recovery action이 보여야 한다.
 - **행 액션(케밥 ⋯ 메뉴)**: 각 회의 행 우측의 44px kebab 버튼(카드 링크 바깥 형제) → ready library에서는 **이동**, 요약 완료 회의는 **이름 수정**, 모든 회의는 **삭제**. Mobile row는 title/date/breadcrumb와 status를 세로로 reflow하고 content owner는 `w-full min-w-0`을 가진다. 이름 수정은 320px에서 full-width input + action row로 stack하고(Enter=저장, Esc=취소, Korean IME 조합 Enter 무시), 실패 시 값·입력 focus를 유지한다. 삭제 확인도 copy 아래 action row로 stack하며 취소에 initial focus를 둔다. 삭제 버튼은 파괴적 색뿐 아니라 `영구 삭제` text를 유지하고 저장/삭제 완료·실패는 `aria-live="polite"`로 공지한다.
 - **Scoped list**: Workspace All row는 effective folder breadcrumb를 표시하고, 미분류/folder는 direct meeting만 표시한다. 이전/다음 cursor page를 제공하고 client는 current±2/max 5 pages만 유지한다. Empty copy는 All/미분류/folder를 구분한다.
 - **Organization pending**: default workspace All의 별도 경고 section에 actual 위치 없는 pending/unavailable row, safe requested hint, detail-probe action을 표시한다. Canonical folder counts/list에 섞지 않고 모든 scope에서 persistent count link로 접근한다.
@@ -163,6 +166,8 @@
 - **Global action bar**: 상단 `회의 작업`에는 전역 동작인 **회의 이동 / 폴더 열기 / 회의록 다운로드(.md)**만 둔다. 복사·수정·재생성·JSON은 넣지 않는다. 모든 visible sibling은 rectangular radius, 최소 44px 높이, 같은 gap/alignment를 사용한다. 폴더 열기는 immediate success/failure를 `aria-live`로 알리며 detached OS viewer는 `열기 요청됨`까지만 표현한다.
 - **회의 정보**: audio와 참석자 form은 긴 transcript 뒤가 아니라 action bar와 tabs 사이에 둔다. Mobile은 stack하고, 넓은 화면에서만 두 column `items-start`로 배치해 억지 equal-height 빈 공간을 만들지 않는다. 참석자 저장 실패는 입력을 보존한 inline status로 보이고, 성공 response의 검증된 participants를 reload 없이 copy/export에 즉시 반영한다. Parent refresh는 pristine field만 동기화하고 dirty draft를 덮지 않는다.
 - **Tabs keyboard/ARIA**: 공유 horizontal controlled Tabs가 stable `tab`/`tabpanel` id, `aria-controls`/`aria-labelledby`, selected-only `tabIndex=0`과 panel 렌더를 소유한다. Left/Right는 wrap하며 automatic activation, Home/End는 first/last로 이동한다. Click도 선택+focus를 맞추고 Tab key는 가로 탐색 handler가 가로막지 않는다.
+- **기본 tab**: URL에 explicit `contentTab=script|summary`가 있으면 그대로 연다. Query가 없고 usable summary가 있는 완료 회의는 **회의록 요약**, summary가 없으면 **전체 스크립트**를 기본으로 연다.
+- **전사 실패 recovery**: `retry_transcription` detail은 safe failure copy와 **전사 다시 시도**를 보여 준다. 요청 중에는 **전사 요청 중…**으로 disable하고 accepted/already-running 뒤 최신 상태를 다시 확인한다. 실패 copy는 원본 보존과 다음 행동만 말하고 path/dispatch/provider output을 노출하지 않는다. Polite status를 알리고 완료 뒤 trigger로 focus를 돌린다. Polling은 single in-flight이며 timeout 자체를 실패로 표시하지 않는다.
 - **Tab-local action bar**: 각 selected tabpanel은 `tablist → tab-local action/status → 요약 갱신 경고(해당할 때) → 읽기 본문 또는 editor` 순서다. 전체 스크립트는 **전체 스크립트 복사 / 전체 스크립트 수정 / 원문에서 스크립트 다시 만들기**, 회의록 요약은 **요약 복사 / JSON 다운로드 / 회의록 요약 수정 / 현재 스크립트로 요약 다시 만들기** 순서를 고정한다. 최초 교정 전 fallback은 `교정 전 원문 · 자동 전사`로 표시해 빈 탭을 만들지 않는다. 제목과 참석자는 summary editor에서 바꾸지 않고 각각 기존 제목 수정과 `회의 정보` 참석자 입력을 사용한다.
 - **본문 교체형 editor**: 수정 중에는 저장된 읽기 본문을 아래나 옆에 남기지 않고 같은 content region을 editor로 교체한다. 전체 스크립트는 하나의 multiline textarea로 현재 교정본을 lossless하게 편집한다. CRLF만 LF로 정규화하고 비어 있거나 UTF-8 1 MiB 초과면 입력에 focus한 채 저장을 막는다. Helper는 “교정된 스크립트만 바뀌며 녹음 원본과 자동 전사 원문은 유지됩니다”를 명시한다.
 - **회의록 요약 editor**: visible `회의록 요약 본문` label과 helper, resizable multiline textarea 하나만 제공한다. Generated structured summary는 읽기 순서와 같은 `요약`(oneLine 뒤 highlight bullet) → `목적` → `논의 내용` → `결정 사항` → `액션 아이템` → `리스크` → `후속 확인` plain text로 시작하며 빈 section은 생략한다. Block 사이는 LF 두 개이고 trailing LF가 없다. Existing manual body는 그대로 시작한다. Heading·bullet은 모두 삭제 가능한 일반 text이고 item 내부 개행도 parse·trim·재구성하지 않는다. 표시 제목·topicSlug·participants는 textarea에 넣지 않는다.
@@ -192,16 +197,31 @@
 
 ### 설정 화면 · 내 정보
 
-- Settings page는 `<main>`과 `h1 "설정"`을 하나씩만 가진다. `내 정보`와 `요약 모델`은 같은 정보 단계의 중첩되지 않은 sibling section이며 각 section의 loading/load error/dirty/saving/saved/pending/save error는 다른 section의 편집과 상태를 가리거나 막지 않는다.
+- Settings page는 `<main>`과 `h1 "설정"`을 하나씩만 가진다. `요약 모델`을 먼저, `내 정보`를 다음 sibling section으로 둔다. 각 section의 loading/load error/dirty/saving/saved/pending/save error는 다른 section의 편집과 상태를 가리거나 막지 않는다.
 - `내 정보`는 선택 설정이다. 제목 바로 아래에서 ‘내 할 일’·상대 날짜 개인화를 보완하지만 일반 검색/질문의 필수 조건은 아님을 설명한다. 표시 이름과 쉼표/줄바꿈 별칭은 첫 group에 보이고, timezone/주 시작 요일은 기본이 닫힌 native `날짜 기준` disclosure에 둔다. 사용자가 열었거나 검증 오류가 있는 disclosure를 저장/상태 갱신 때문에 임의로 닫지 않는다.
+- First-use에서는 **내 정보가 없어도 녹음·전사·일반 검색을 사용할 수 있습니다**를 명시한다. Dormant 질문 기능을 현재 활성 pipeline처럼 소개하지 않는다.
 - Missing profile의 timezone은 local runtime default 또는 판정 불가 시 `UTC`로 제안하되 `아직 저장되지 않음`을 함께 표시한다. IANA 값을 직접 입력할 수 있고 native datalist가 가능한 환경에서는 bounded suggestion만 제공한다. Pending durability는 실패/재저장 CTA가 아니라 `저장됨 · 디스크 동기화 확인 대기` committed warning으로 표시한다.
 - 320px에서는 두 section 모두 field와 action/status를 한 열로 reflow하고 timezone·별칭·CJK 장문이 action과 폭을 경쟁하거나 horizontal overflow를 만들지 않는다.
 
 ### 요약 모델 설정
 - Initial GET은 `loading|ready|load_error`를 구분한다. `{provider:null}`만 명시적 미설정 ready이며, read 실패를 기본 Claude 설정으로 가장하지 않고 editor/save를 잠근 뒤 재시도를 제공한다.
 - Server-confirmed `savedSnapshot`과 editable draft를 분리한다. Provider/model/baseUrl을 정규화해 비교하고 저장은 `ready && dirty && valid && !saving`에서만 활성화한다. Save 실패는 draft/dirty를 보존하고 성공 body로 snapshot과 draft를 함께 맞춘다.
+- **Native selector**: Claude CLI는 **CLI 기본값 (권장) / Sonnet / Opus / Haiku / 직접 입력**, Codex CLI는 **CLI 기본값 (권장) / 직접 입력**만 제공한다. Empty default는 model field를 저장하지 않는다. Ollama는 draft loopback Base URL의 설치 model을 select에 표시하고 **설치된 모델 새로고침 / 직접 입력**을 제공한다. 설치 model이 없거나 discovery가 실패해도 자동 pull/download하지 않고 custom 입력을 유지한다.
+- Unknown stored model은 **직접 입력**으로 exact 표시한다. Custom은 save 직전 trim한 exact identifier를 전달하며 alias 보정/fuzzy matching을 약속하지 않는다. Provider를 바꿔도 session 안 각 provider의 selection/custom/Base URL draft를 보존하고 다른 provider model을 조용히 재사용하지 않는다.
 - Ollama 선택 직후에는 required 표시와 neutral helper만 보인다. Model blur 또는 submit 시도 뒤에만 red error·`aria-invalid`·error relation을 연결하고 CLI provider로 바꾸면 Ollama-only error를 지운다.
+- 저장 성공 직후 persisted snapshot health를 자동 검사한다. Claude/Codex success는 **감지됨**으로 CLI binary만 확인하며 인증이나 실제 요약 성공을 보장하지 않는다. Ollama success는 선택 model이 설치된 loopback service에 **연결됨**을 뜻한다. 성공하면 **첫 회의 녹음** action을 제공하고 실패하면 saved snapshot과 provider별 draft를 유지한 채 설치/PATH 또는 Ollama 실행/model 조치를 보여 준다.
 - `연결 테스트`는 화면의 미저장 draft가 아니라 디스크에 저장된 설정을 검사한다. Loading/load error, 미설정, dirty, saving/testing 동안 disabled reason을 보여 주며 결과에는 검사한 provider/model만 표시하고 `baseUrl`은 표시하지 않는다.
+
+#### 설치·첫 실행 상태 matrix
+
+| Surface | 상태 | 필수 UX |
+|---|---|---|
+| Home readiness | health loading / ready / unconfigured / unavailable | loading·ready면 card 없음, 나머지는 비차단 설정+recorder focus, recorder enabled |
+| Model selector | known / unknown custom / provider switch / Ollama loading·empty·error | exact draft 보존, native select, 44px refresh, no auto download |
+| Persisted health | saving / checking / CLI detected / Ollama connected / unavailable | save snapshot 보존, 정직한 provider별 문구, success recorder action |
+| Transcription recovery | list failure / detail failure / requesting / accepted / safe error | persistent `전사 실패`, one request, disabled busy label, status+focus return |
+
+Readiness card, selector/refresh, retry action, recorder CTA는 320px에서 한 열 또는 wrap으로 reflow하고 horizontal overflow를 만들지 않는다. 독립 control은 최소 44px target과 visible focus를 유지한다.
 
 ## 접근성
 - 상태 변화는 `aria-live="polite"`로 안내("기록 중"·"전사 완료"). `prefers-reduced-motion` 존중. 소형 텍스트에 `#9A8F84` 금지(대비).
