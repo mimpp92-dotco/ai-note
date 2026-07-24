@@ -147,7 +147,7 @@ function App({
 }
 
 async function startRecording() {
-  fireEvent.click(screen.getByRole("button", { name: "실시간 기록 시작" }));
+  fireEvent.click(screen.getByRole("button", { name: "회의 녹음 시작" }));
   await waitFor(() => expect(screen.getByTestId("session")).toHaveTextContent(/^recording:/));
 }
 

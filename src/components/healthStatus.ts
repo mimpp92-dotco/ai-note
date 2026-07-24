@@ -138,7 +138,7 @@ export function formatLlmStatus(health: LlmHealthState | null): StatusDisplay {
     return withTone({
       label: `${name} · 감지됨`,
       shortLabel: "감지됨",
-      title: `${health.detail}. 인증과 실제 요약 가능 여부는 첫 요약에서 확인됩니다.`,
+      title: `${name}가 감지되었습니다. 인증과 실제 요약 가능 여부는 첫 요약에서 확인됩니다.`,
       tone: "success",
     });
   }

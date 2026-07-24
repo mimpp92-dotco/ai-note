@@ -42,14 +42,20 @@ export class CodexCliAdapter implements LlmAdapter {
       await runProcess("codex", ["--version"], { timeoutMs: 15_000 });
       return {
         ok: true,
-        detail: "codex CLI available (best-effort backend; auth verified on first summary)",
+        detail: "Codex CLI가 감지되었습니다. 인증과 실제 요약 가능 여부는 첫 요약에서 확인합니다.",
       };
     } catch (err) {
       const e = err as NodeJS.ErrnoException | undefined;
       if (e?.code === "ENOENT" || (e?.message?.includes("ENOENT") ?? false)) {
-        return { ok: false, detail: "codex CLI not found on PATH" };
+        return {
+          ok: false,
+          detail: "Codex CLI를 찾을 수 없습니다. 설치 후 PATH를 확인하세요.",
+        };
       }
-      return { ok: false, detail: "codex not ready" };
+      return {
+        ok: false,
+        detail: "Codex CLI 상태를 확인할 수 없습니다. 설치와 PATH를 확인하세요.",
+      };
     }
   }
 }

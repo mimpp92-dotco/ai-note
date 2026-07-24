@@ -28,7 +28,7 @@ const healthState = vi.hoisted(() => ({
     model: "sonnet",
     ok: true,
     detail: "ready",
-  } as LlmHealthState,
+  } as LlmHealthState | null,
 }));
 
 vi.mock("next/link", () => ({
@@ -435,7 +435,7 @@ describe("activated library navigation", () => {
     const pendingRow = screen.getByRole("link", { name: /위치 대기 회의/ });
     expect(pendingRow).toHaveClass("flex-col", "sm:flex-row");
     expect(screen.getByText("위치 대기 회의")).toHaveClass("min-w-0", "break-words");
-    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "회의 녹음 시작" })).toBeInTheDocument();
     expect(screen.getByText(/이 워크스페이스의 미분류에 저장/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "위치 선택" })).toBeInTheDocument();
 
@@ -520,6 +520,50 @@ describe("activated library navigation", () => {
     expect(surface).not.toBeNull();
     expect(surface?.querySelectorAll("section")).toHaveLength(0);
     expect(surface).toHaveTextContent("아래 3단계로 회의록이 만들어집니다");
+  });
+
+  it.each([
+    [
+      { configured: false } as LlmHealthState,
+      "회의록 요약을 준비하세요",
+    ],
+    [
+      {
+        configured: true,
+        provider: "ollama",
+        model: "missing-model",
+        ok: false,
+        detail: "unavailable",
+      } as LlmHealthState,
+      "요약 모델을 확인하세요",
+    ],
+  ])("shows a non-blocking readiness card before the recorder for %j", (llm, heading) => {
+    healthState.llm = llm;
+    renderShell();
+
+    const cardHeading = screen.getByRole("heading", { name: heading });
+    const settings = screen.getByRole("link", { name: "AI 요약 설정" });
+    const continueRecording = screen.getByRole("button", { name: "요약 없이 회의 녹음" });
+    const start = screen.getByRole("button", { name: "회의 녹음 시작" });
+
+    expect(settings).toHaveAttribute("href", "/settings");
+    expect(settings).toHaveClass("min-h-11");
+    expect(continueRecording).toHaveClass("min-h-11");
+    expect(cardHeading.closest("section")!.compareDocumentPosition(start.closest("section")!)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText(/요약 모델이 없어도 회의 녹음과 로컬 전사는 계속 사용할 수 있습니다/))
+      .toBeInTheDocument();
+
+    fireEvent.click(continueRecording);
+    expect(start).toHaveFocus();
+  });
+
+  it("does not show a readiness warning while summary health is loading", () => {
+    healthState.llm = null;
+    renderShell();
+    expect(screen.queryByRole("heading", { name: /회의록 요약을 준비하세요|요약 모델을 확인하세요/ }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "회의 녹음 시작" })).toBeInTheDocument();
   });
 
   it("opens the shared same-workspace folder move picker", () => {
@@ -634,7 +678,7 @@ describe("activated library navigation", () => {
     navigation.search = `workspace=${OTHER_WORKSPACE}`;
     libraryState = readyState({ scope: { kind: "workspace", workspaceId: OTHER_WORKSPACE } });
     renderShell();
-    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "회의 녹음 시작" })).toBeInTheDocument();
     expect(screen.getByText(/이 워크스페이스의 미분류에 저장/)).toBeInTheDocument();
   });
 
@@ -651,7 +695,7 @@ describe("activated library navigation", () => {
     expect(screen.getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "데이터 폴더 열기" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "조직 정보 재구축" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "실시간 기록 시작" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "회의 녹음 시작" })).toBeInTheDocument();
     expect(screen.getByText(/마지막으로 확인된 위치를 요청/)).toBeInTheDocument();
   });
 

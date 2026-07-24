@@ -81,7 +81,7 @@ async function fillRequiredProfile(displayName = "Dylan") {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("UserProfileForm", () => {
-  it("renders one Settings main/page heading with sibling model and profile sections", async () => {
+  it("renders one Settings main/page heading with the model before the optional profile", async () => {
     stubProfile();
     render(<SettingsPage />);
 
@@ -95,6 +95,11 @@ describe("UserProfileForm", () => {
     expect(modelSection).not.toBeNull();
     expect(profileSection).not.toBe(modelSection);
     expect(profileSection?.parentElement).toBe(modelSection?.parentElement);
+    expect(
+      modelSection!.compareDocumentPosition(profileSection!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText(/내 정보가 없어도 녹음·전사·일반 검색을 사용할 수 있습니다/))
+      .toBeInTheDocument();
     await within(profileSection as HTMLElement).findByText(/아직 저장되지 않음/);
   });
 

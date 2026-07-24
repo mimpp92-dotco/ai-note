@@ -163,7 +163,7 @@ describe("ClaudeCliAdapter.health — lightweight detection", () => {
       expect.objectContaining({ timeoutMs: 15_000 }),
     );
     expect(health.ok).toBe(true);
-    expect(health.detail).toMatch(/first summary/i);
+    expect(health.detail).toBe("Claude CLI가 감지되었습니다. 인증과 실제 요약 가능 여부는 첫 요약에서 확인합니다.");
   });
 
   it("reports not-found on ENOENT", async () => {
@@ -174,7 +174,7 @@ describe("ClaudeCliAdapter.health — lightweight detection", () => {
     const health = await new ClaudeCliAdapter({ provider: "claude-cli" }).health();
 
     expect(health.ok).toBe(false);
-    expect(health.detail).toMatch(/not found on PATH/i);
+    expect(health.detail).toBe("Claude CLI를 찾을 수 없습니다. 설치 후 PATH를 확인하세요.");
   });
 
   it("never returns the misleading 'check login' catch-all for a generic error", async () => {
@@ -183,6 +183,6 @@ describe("ClaudeCliAdapter.health — lightweight detection", () => {
     const health = await new ClaudeCliAdapter({ provider: "claude-cli" }).health();
 
     expect(health.ok).toBe(false);
-    expect(health.detail).not.toMatch(/login/i);
+    expect(health.detail).toBe("Claude CLI 상태를 확인할 수 없습니다. 설치와 PATH를 확인하세요.");
   });
 });
