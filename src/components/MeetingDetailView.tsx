@@ -1101,6 +1101,7 @@ export function MeetingDetailView({
           ? "전사 요청을 접수했습니다. 최신 상태를 확인합니다."
           : "전사가 이미 진행 중일 수 있어 최신 상태를 확인합니다.",
       );
+      router.refresh();
       setTranscriptionPollDeadline(Date.now() + TRANSCRIPTION_POLL_TIMEOUT_MS);
     } catch {
       setTranscriptionRetryStatus(

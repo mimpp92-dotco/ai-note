@@ -77,6 +77,7 @@ test("installation first run, provider models, summary default, and transcriptio
   const healthProviders: Array<Provider | "unconfigured"> = [];
   const transcribePayloads: Array<Record<string, unknown>> = [];
   let releaseTranscribe: (() => void) | null = null;
+  const releasePendingTranscribe = () => releaseTranscribe?.();
   let activeMeetingPolls = 0;
   let maximumMeetingPolls = 0;
 
@@ -297,7 +298,7 @@ test("installation first run, provider models, summary default, and transcriptio
   await expect(retry).toBeDisabled();
   await expect(retry).toHaveText("전사 요청 중…");
   expect(transcribePayloads).toEqual([{ id: failureMeeting.meetingId }]);
-  releaseTranscribe?.();
+  releasePendingTranscribe();
   await expect(page.getByRole("status", { name: "전사 다시 시도 상태" })).toContainText(
     "전사 요청을 접수했습니다.",
   );
