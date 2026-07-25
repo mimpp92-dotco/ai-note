@@ -6,12 +6,6 @@ Review the transcript or summary, search meetings without AI, and copy or export
 
 > UI strings are currently Korean (v0.1). Internationalization is planned — see [Roadmap](#roadmap).
 
-## Screenshots
-
-| Home | Structured summary | Model settings | Mobile library |
-|:---:|:---:|:---:|:---:|
-| ![Home — workspace folder and meeting list](docs/media/home.png) | ![Meeting detail with structured summary and export toolbar](docs/media/detail.png) | ![Keyless model settings](docs/media/settings.png) | ![Mobile library drawer with workspace switcher and folders](docs/media/mobile.png) |
-
 ## Why it's private
 
 - **Local app and storage.** Audio, transcripts, summaries, your optional profile, and derived search data stay under the local `data/` directory. The web server and transcription service bind to `127.0.0.1` only (never your LAN).
@@ -32,15 +26,18 @@ record (browser mic) → local Whisper (STT) → optional configured summary (wo
    review and **copy / download / reveal the folder**.
 5. Use **검색 (Search)** to find a meeting without AI. (Asking across meetings — the **질문/회의 도우미 (Questions/Meeting assistant)** chatbot — is currently on hold; see below.)
 
+If local transcription fails, the original recording remains intact and **전사 다시 시도 (Retry transcription)** stays available from the save result, meeting list, and meeting detail. You do not need to record the meeting again.
+
 ## Edit a finished meeting
 
-After the first corrected script and summary are created, each can be edited or regenerated independently from the meeting detail:
+After the first corrected script and summary are created, each can be edited or regenerated independently from the meeting detail. A finished meeting with a usable summary opens the summary tab by default unless the script tab was explicitly requested:
 
 - Each selected tab starts with its own actions: script **copy / edit / rebuild from the original**, or summary **copy / JSON download / edit / rebuild from the current script**. Editing replaces the saved reading surface with one multiline textarea instead of adding a second surface below it.
 - **전체 스크립트 수정** saves the corrected script as plain text. **회의록 요약 수정** opens the whole readable summary as one freeform plain-text body; generated sections and bullets become ordinary editable text, so headings can be removed and internal line breaks are preserved exactly.
 - **원문에서 스크립트 다시 만들기** rebuilds only the full script from the initial automatic transcript. It keeps the existing summary and marks it **요약 갱신 필요** if the script changed.
 - **현재 스크립트로 요약 다시 만들기** rebuilds only the summary from the currently saved full script; it never replaces that script.
 - Saving or rebuilding the summary makes it current again. The meeting title and participant list keep their existing dedicated controls and are not changed by the summary editor.
+- **회의록 다운로드(.md)** exports the current summary and full script as one readable document; **JSON 다운로드** exports the canonical summary data.
 
 There is no autosave: save or cancel an open edit before leaving. Copy and download actions continue to use the last confirmed saved content while an editor is open, and the action status says so. AI NOTE also guards links, browser back, and other app navigation so an unsaved draft or unresolved save is not discarded silently.
 
@@ -76,6 +73,10 @@ Meetings can move to any workspace, folder, or Unfiled location without moving
 their artifact directory. Folder subtrees can be reparented within their current
 workspace; cross-workspace folder moves are intentionally not supported.
 
+From a meeting row's management menu, a summarized meeting can be renamed and
+any meeting can be permanently deleted after confirmation. Meeting deletion is
+irreversible and removes that meeting's recording and derived artifacts.
+
 Deleting a folder or workspace is an organization-only operation: a preview
 shows every affected meeting, hidden placement, child folder, and pending save
 intent. Meetings and their recordings/transcripts/summaries are rehomed and
@@ -109,6 +110,10 @@ Run this from a fresh clone with Node.js ≥ 20. It checks `uv` and `ffmpeg`, th
 
 If the doctor reports a missing prerequisite, follow its visible OS-specific instruction and rerun the same command. Bootstrap does not silently use `sudo`, install OS packages, log in to a provider, pull an Ollama model, or download a Whisper model. A summarizer is optional for recording and local transcription; choose and verify one later in **Settings → 요약 모델**.
 
+On a clean clone, `npm ci` and the first `uv run` may download project dependencies. The selected Whisper model is downloaded only when the first transcription begins.
+
+In **Settings → 요약 모델**, Claude CLI offers its default, Sonnet, Opus, Haiku, or a custom model; Codex CLI offers its default or a custom model; and Ollama discovers locally installed models with refresh and custom-input fallback. Saving immediately checks the persisted configuration. A successful Claude/Codex check confirms that the CLI binary was detected; authentication and actual generation are confirmed by the first summary.
+
 ```bash
 npm run app:status  # ownership-checked status and actual URL
 npm run app:stop    # stop only this repository's owned supervisor
@@ -140,7 +145,7 @@ Copy `.env.example` to `.env.local` and adjust as needed. Common knobs:
 | `LOCAL_STT_MODEL` | `large-v3` | Whisper model (`base`/`small` for speed) |
 | `LOCAL_STT_LANG` | `ko` | Whisper decode language (`auto` to detect) |
 | `LOCAL_STT_VAD` | `1` | Silence/hallucination filter (VAD); `0` to disable |
-| `LOCAL_STT_HOST` / `LOCAL_STT_PORT` | `127.0.0.1` / `8123` | Whisper service address; bootstrap overrides the port only in its child environment when it selects another bounded candidate |
+| `LOCAL_STT_HOST` / `LOCAL_STT_PORT` | `127.0.0.1` / `8123` | Whisper loopback address; owned bootstrap pins the host to `127.0.0.1` and selects a bounded child-only port without rewriting `.env.local` |
 | `FFMPEG_PATH` | (from `PATH`) | Explicit ffmpeg binary |
 
 Manage domain terms and "misheard → correct" pairs in the app's **단어 관리 (Glossary)** tab. They are applied by the LLM **correction** step (not the Whisper transcriber) to fix names and numbers. Stored in `glossary.json` as `{ terms, corrections }` (see `glossary.example.json`; a legacy string array is still read as `terms`).
@@ -151,8 +156,10 @@ Manage domain terms and "misheard → correct" pairs in the app's **단어 관�
 |------|------|
 | `src/` | Next.js app — recorder UI, API routes, domain contracts |
 | `whisper/` | Local STT service (Python, `127.0.0.1`) |
+| `data/` | Local meetings, artifacts, library registry, and settings (gitignored) |
+| `.ai-note-runtime/` | Owned supervisor state, heartbeat, and logs (gitignored) |
 | `docs/` | PRD · ARCHITECTURE · UI_GUIDE + decision records |
-| `scripts/` | dev tooling (setup/link checks + isolated Playwright harness) |
+| `scripts/` | End-user bootstrap/owned runtime, prerequisite and link checks, and isolated Playwright harness |
 | `e2e/` | synthetic Chromium scenarios and command-owned evidence reporter |
 
 Module boundaries & data flow → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Working with an AI agent? Start at [AGENTS.md](AGENTS.md).
