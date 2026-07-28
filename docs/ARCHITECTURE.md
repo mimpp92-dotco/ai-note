@@ -17,10 +17,13 @@ playwright.config.ts   # Chromium 3-viewport, isolated webServer 계약
 .claude/commands/      # meeting-summarize.md
 data/meetings/{id}/    # 런타임 산출물(gitignore, fixtures 제외)
 data/meetings/{id}/knowledge-card.json # meeting별 재생성 가능한 검색 파생물
+data/meetings/{id}/.correction-checkpoint.json # summarize coordinator-owned local resume checkpoint
 data/meeting-tombstones/{id}.json # 영구 ID delete fence(app lifecycle writer)
 data/library.json      # workspace/folder/placement 중앙 registry(app-api 단일 writer)
+data/pipeline-settings.json # fixed Whisper model + correction mode(app-api 단일 writer)
 data/user-profile.json # optional 개인화 프로필(app-api 단일 writer, LLM settings와 분리)
 data/knowledge/corpus-map.json # bounded 전체 검색 후보 projection
+.ai-note-runtime/benchmarks/ # explicit real-data benchmark private snapshots
 fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fallback
 ```
 
@@ -34,7 +37,7 @@ fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fall
 
 - Clone 뒤 canonical command는 Node stdlib만 필요한 `node scripts/bootstrap.mjs --launch`다. `scripts/setup.mjs` doctor를 먼저 실행하고 성공한 경우에만 `HUSKY=0 npm ci` → `npm run build` → background supervisor를 순서대로 수행한다. Doctor의 Node/`uv`/`ffmpeg` failure는 안전한 OS별 조치와 같은 command 재실행을 안내한다. Bootstrap이 `sudo`, package manager, provider login, Ollama pull 또는 Whisper model download를 몰래 실행하지 않는다.
 - Supervisor는 Whisper `127.0.0.1:8123..8142`, app `127.0.0.1:3000..3019` 후보를 순회한다. Availability probe 뒤 bind race가 확인되면 다음 후보로 이동하며 기존 listener에 연결하거나 signal하지 않는다. 선택한 app/Whisper port는 child env `PORT`/`LOCAL_STT_PORT`에만 주입하고 `.env.local`을 쓰지 않는다.
-- App root와 same-origin `/api/whisper/health`가 모두 ready일 때만 `AI_NOTE_URL=http://localhost:<actual-app-port>`를 출력한다. Supported desktop opener는 URL을 shell interpolation 없는 argv로 전달한다. Headless/unsupported/opener failure는 server 성공을 유지하고 exact URL과 agent browser surface fallback을 출력한다. Playwright, Chrome extension, MCP는 runtime dependency가 아니다.
+- App root와 same-origin `/api/whisper/health`는 모두 `canonicalAppUrl()`의 `http://localhost:<actual-app-port>` authority로 probe하며 둘 다 ready일 때만 같은 `AI_NOTE_URL`을 출력한다. `app:status`도 이 authority를 사용해 local Host guard의 403을 service failure로 오인하지 않는다. Child bind와 direct App→Whisper egress는 계속 explicit-port `127.0.0.1`이다. Supported desktop opener는 URL을 shell interpolation 없는 argv로 전달한다. Headless/unsupported/opener failure는 server 성공을 유지하고 exact URL과 agent browser surface fallback을 출력한다. Playwright, Chrome extension, MCP는 runtime dependency가 아니다.
 - `.ai-note-runtime/`은 gitignored repository-local owner namespace다. Directory mode `0700`, state/heartbeat/log mode `0600`을 유지하고 state에는 root/token/PID/port/time만 기록하며 inherited env/credential을 직렬화하지 않는다. `app:status`/`app:stop`은 canonical root, matching 256-bit token, fresh heartbeat, live supervisor가 모두 확인된 경우에만 조회/signal한다. Missing/stale/invalid/unverifiable state는 fail-closed다.
 - Bootstrap module import는 side-effect free이며 process/network/port/browser/time/fs boundary를 주입할 수 있다. Unit test는 fake와 temp directory만 사용해 `npm ci`, build, long-lived server, browser opener, external network, model download를 실행하지 않는다. Foreground `npm run dev`는 contributor lifecycle로 분리한다. 설치 target/agent handoff 결정은 ADR [0023](decisions/0023-installation-and-first-run-ux.md)을 따른다.
 
@@ -42,7 +45,7 @@ fixtures/              # 테스트 픽스처(커밋): raw.md, summary happy/fall
 ```
 브라우저(녹음, 오디오만·메모리 버퍼) ─stop─▶ POST /api/meetings/{id}/finalize(바이너리 스트림)
   app-api: durable intent → hidden audio+status+receipt → directory publish → remux/placement/전사 독립 처리
-app-api ─POST /transcribe({meetingId,dispatchId})─▶ whisper(127.0.0.1, 배치 ko large-v3)
+app-api ─POST /transcribe({meetingId,dispatchId})─▶ whisper(127.0.0.1, 배치 ko, claim-snapshotted fixed model)
   whisper: raw.md(세그먼트-per-line) + segments.json 디스크 기록 → 상태 HTTP 반환
   app-api: 잡 폴링 → status.json 갱신(transcribing→transcribed)
 콘텐츠 coordinator(로컬 CLI/Ollama) {initial|transcript_regenerate|summary_regenerate}: intent별 입력 → staging payload → app publisher → transcript.md + summary.json
@@ -66,13 +69,50 @@ flowchart LR
 | `audio.webm` / `play.webm` | app finalize publisher | 원본 불변 / 리먹스 |
 | `.finalize-receipt.json` | app finalize publisher | immutable metadata/location/audio identity; same-ID probe source |
 | `raw.md` + `segments.json` | whisper | 원본 불변 |
+| `.whisper-dispatch.json` | whisper | v2는 audio identity + fixed model snapshot + durable publication phase. v1 호환 |
+| `.correction-checkpoint.json` | app summarize coordinator | exact-key full/fast correction resume. canonical pair 발행 전에는 보존 |
 | `transcript.md` + `summary.json` | **app summarize publisher만** | API/UI/adapter 직접 쓰기 금지. 수동 저장·독립 재생성도 full pair로 발행하며 `summary.json`이 completion marker |
 | `data/library.json` | **library repository만** | workspace/folder/placement metadata. Meeting directory는 이동하지 않음 |
+| `data/pipeline-settings.json` | **pipeline settings app-api만** | fixed Whisper model과 correction mode를 한 atomic document로 저장 |
 | `data/user-profile.json` | **profile settings app-api만** | optional 표시 이름/별칭/시간 기준. `data/settings.json` LLM provider 설정과 분리 |
-| `.whisper-dispatch.json` | **whisper만** | audio identity + durable dispatch publication phase |
 | `meeting-tombstones/{id}.json` | **app lifecycle만** | 영구 logical-delete fence. 물리 cleanup 후에도 보존 |
 | `data/meetings/{id}/knowledge-card.json` | knowledge index repository | meeting별 검색 파생물. source summary/transcript SHA-256 포함, 삭제 후 재생성 가능 |
 | `data/knowledge/corpus-map.json` | knowledge index repository | card의 bounded summary projection만 모은 전체 검색 파생물, 삭제 후 재생성 가능 |
+
+## Quality-first pipeline settings·model prepare
+
+`data/pipeline-settings.json` v1은 strict `{schemaVersion:1,transcription:{model},correction:{mode}}` 한 문서다. `model`은 `large-v3|large-v3-turbo`, `mode`는 `full|fast`만 허용하며 unknown/duplicate field와 임의 Hugging Face repo/filesystem path/model 문자열은 거부한다. Missing settings와 기존 설치는 `large-v3`+`full`로 읽고 read가 파일을 만들지 않는다. App-api write는 두 설정을 함께 temp→file fsync→rename→parent sync해 한쪽 저장이 다른 쪽을 clobber하지 않게 한다.
+
+Fixed catalog는 다음과 같다.
+
+| logical model | MLX repo | faster-whisper |
+|---|---|---|
+| `large-v3` | `mlx-community/whisper-large-v3-mlx` | `large-v3` |
+| `large-v3-turbo` | `mlx-community/whisper-large-v3-turbo` | `large-v3-turbo` |
+
+설정 저장은 model download/load를 시작하지 않는다. 별도 `POST /api/whisper/models/prepare`만 selected catalog model의 asynchronous prepare를 시작하고 health의 `idle|preparing|ready|error` aggregate로 확인한다. 첫 실제 전사는 준비되지 않은 model의 기존 lazy download를 계속 허용한다. Whisper의 prepare와 inference는 같은 process-global execution fence를 잡아 동시 model swap/download/Metal·CPU inference를 막는다.
+
+새 `.whisper-dispatch.json` schema v2는 acceptance 시 effective catalog snapshot `{source,id,mlxRepo,fasterWhisperModel}`을 audio/dispatch identity와 함께 commit한다. 이후 pipeline settings 변경은 이미 accepted/processing인 dispatch와 같은 dispatch의 수동 resume에 영향을 주지 않는다. Stored pipeline settings가 없을 때만 `LOCAL_STT_MODEL`/`LOCAL_STT_MLX_REPO`를 legacy startup source로 허용한다. Schema-v1 claim은 그 claim이 만들어질 때의 legacy startup model로 이어가며 claim-less legacy raw는 completed 호환으로 읽는다.
+
+`large-v3`와 `full`은 품질 우선 default다. Turbo는 같은 실제 audio에서 중요 이름·숫자·결정 오류 증가 0과 wall time 2× 이상 개선, fast는 같은 transcript/provider에서 같은 품질 조건과 wall time 30% 이상 단축이 사람 검수로 확인돼야 추천 후보가 된다. 구현이나 threshold 계산만으로 label/default를 바꾸지 않는다.
+
+## Correction checkpoint·fast runner·manual retry
+
+Full mode는 transcript 전체를 한 correction prompt에 넣고 실제 provider context/timeout 실패를 그대로 모델 실패로 처리한다. 과거 40,000자 초과 notice와 앞부분-only/truncated 결과는 없다. Generated summary는 full corrected transcript를 사용한다.
+
+Fast mode는 immutable segments/raw의 자연 경계에서 deterministic target chunks를 계획하고, 단일 oversized segment만 safe text boundary로 나눈다. 각 chunk는 stable ID/target hash/range와 read-only preceding/following context를 갖는다. Prompt는 target correction만 출력하게 하며 context는 merge output에 포함하지 않는다. Claude/Codex worker concurrency는 최대 2, Ollama는 1이다. 결과는 empty/length ratio/script·context contamination을 chunk마다 검사하고 source order·exact target coverage·whole-output sanity를 다시 검증한 뒤에만 merge한다. 첫 실패를 관측하면 아직 시작하지 않은 chunk를 시작하거나 full mode로 fallback하지 않는다.
+
+Meeting 내부 hidden `.correction-checkpoint.json`은 raw SHA-256, canonical glossary SHA-256, provider/model, normalized loopback provider endpoint identity hash, correction prompt version, correction mode, chunk plan SHA-256과 corrected transcript/completed chunk identity를 포함한다. App summarize coordinator만 operation→artifact lease/tombstone fence 순서 안에서 bounded no-follow read하고 temp→file fsync→rename→parent sync로 replace한다. Full correction guard를 통과한 뒤 summary 호출 전에 commit하며 fast는 valid chunk마다 같은 JSON을 replace하고 모든 chunk가 valid할 때 merged transcript를 commit한다.
+
+Manual retry는 exact key/plan/chunk identity가 일치하는 checkpoint만 사용해 full correction 또는 completed chunks를 생략하고 summary를 정확히 한 번 실행한다. Provider/model/glossary/raw/prompt/mode/plan 변경, corruption, unsafe path는 reuse가 아니다. Summary failure/process interruption은 valid checkpoint를 보존하고 canonical pair publication 성공 뒤에만 best-effort 삭제한다. 삭제 실패는 발행된 pair를 rollback하지 않는다. Initial transcription/summarize dispatch는 계속 자동이지만 명시적 failure 뒤에는 worker, network 복귀, app restart가 새 attempt를 자동 생성하지 않으며 retry 접수만 오류를 지우고 기존 operation/dispatch fence 아래 다시 시작한다.
+
+## Explicit isolated pipeline benchmark
+
+`npm run benchmark:pipeline -- --meeting-id <exact-id>`만 real-data comparison entrypoint다. Safe exact meeting ID가 없거나 `latest`/path이면 시작하지 않는다. 사용자가 실제 audio/transcript/glossary와 configured provider 전송을 승인한 경우에만 source meeting을 bounded no-follow read하고 mode-0700 `.ai-note-runtime/benchmarks/<run-id>/` snapshot으로 필요한 bytes만 복사한다.
+
+Large-v3/Turbo transcription과 full/fast correction은 snapshot을 writer target으로 하는 별도 run이다. Source status/library/canonical artifact/tombstone, real dispatch와 summarize publisher를 호출하거나 수정하지 않는다. Interrupt/timeout/failure는 child를 정리하고 failed snapshot만 남기며 자동 재실행하지 않는다. Report JSON은 logical model/provider/mode, input/output SHA-256, stage wall time, speed ratio와 2×/30% threshold를 기록하고 Markdown은 중요 이름·숫자·결정을 사람이 audio/output과 비교하는 빈 checklist다. Human review가 비어 있으면 recommendation은 `undecided`다. Terminal에는 safe status와 run directory만 출력하고 transcript/audio/provider output을 출력하지 않는다.
+
+Unit/final gate/Playwright/ordinary startup은 실제 meeting, glossary, provider, model download 또는 external network를 사용하지 않는다. Benchmark orchestration test는 injected filesystem/process/clock과 synthetic placeholder만 사용하고 output을 Git/docs/media/public API에 남기지 않는다.
 
 ## 회의 지식 인덱스 계약
 
@@ -313,7 +353,7 @@ Surviving claim의 meeting은 첫 등장 순서로 `1..N` 번호를 서버가 �
   },
   "paths": { "audio":"...","play":"...","raw":"...","transcript":"...","summary":"...","segments":"..." },
   "review": { "participants": [] },  // 상세 UI(app-api 경유) 입력
-  "summarizeAttempts": 0,            // 선택. 모델 생성 실패 횟수(워커 백오프용). 성공/명시적 재시도 시 0으로 리셋
+  "summarizeAttempts": 0,            // 선택. 모델 생성 실패 횟수. 실패 뒤 worker는 자동 재시도하지 않고 명시적 retry 접수 시 0으로 리셋
   "summarizeAttempt": {              // 선택. adapter 실행·202 또는 수동 pair 발행 전 durable acceptance receipt
     "attemptId": "uuid",
     "kind": "initial|resummarize|manual_edit|transcript_regenerate|summary_regenerate",
@@ -334,7 +374,7 @@ Surviving claim의 meeting은 첫 등장 순서로 `1..N` 번호를 서버가 �
 }
 ```
 StatusJson은 runtime schema로 known field를 검증한다. Legacy optional `review`는 메모리에서만 기본값을 적용하고 read가 write를 유발하지 않는다. Top-level future unknown field는 보존하며 directory ID와 status ID가 다르면 corrupt record다.
-**FSM 6상태:** `recording → recorded → transcribing → transcribed → summarizing → summarized`. 임의 상태에서 오류 시 `error{message,action}` 세팅(상태는 유지); 복구=사용자가 "재시도" → 직전 정상 상태로 재진입. `recording`은 클라이언트 임시 상태, 서버 영속은 `recorded`부터.
+**FSM 6상태:** `recording → recorded → transcribing → transcribed → summarizing → summarized`. 임의 상태에서 오류 시 `error{message,action}` 세팅(상태와 이미 발행된 artifact는 유지); 복구=사용자가 "재시도"를 접수할 때만 직전 정상 상태로 재진입한다. Worker poll/network 복귀/app restart는 명시적 실패의 새 attempt를 만들지 않는다. `recording`은 클라이언트 임시 상태, 서버 영속은 `recorded`부터.
 
 ## summary.json 스키마
 정본(happy): `{title, topicSlug, oneLine, purpose, participants[], highlights[], discussion[], decisions[], actionItems[{owner,task,due}], risks[], followups[], body?}`. zod로 검증. **happy + fallback 두 픽스처 커밋.** Body 없는 legacy structured summary는 migration 없이 계속 읽는다.
@@ -420,7 +460,7 @@ Manual freeform mode에서 `body`는 하나의 current editable truth다. Body�
 - `POST /transcribe` `{meetingId,dispatchId}` → `202 {dispatchId,status}`. Poll은 `GET /jobs/{meetingId}/{dispatchId}`. Absolute path/filename/output directory는 받지 않는다.
 - Whisper는 configured data root 아래의 `audio.webm`, `segments.json`, `raw.md`를 no-follow/containment 검사 후 파생한다. `segments.json`을 먼저, authoritative `raw.md`를 마지막에 publish한다.
 - App은 remote await 전 `status.transcriptionDispatch` proposed marker를 durable/best-effort commit한다. Response loss·app restart·retry는 같은 ID를 재전송하고, service가 기존 canonical ID를 반환할 때만 expected-proposed CAS로 adopt한 뒤 canonical request를 보낸다(ADR 0014).
-- Service-owned `.whisper-dispatch.json`은 `{schemaVersion,meetingId,dispatchId,audioSha256,phase,durability}`를 meeting lock 아래 durable create/update한다. `durability`는 `pending|durable|best_effort`, phase는 `accepted|segments_published|raw_published`다. Same pair retry/restart는 resume, same audio fresh proposal은 `adopt_existing_dispatch`, 다른 audio identity는 reject한다.
+- Service-owned 새 `.whisper-dispatch.json` v2는 `{schemaVersion:2,meetingId,dispatchId,audioSha256,model,phase,durability}`를 meeting lock 아래 durable create/update한다. `model`은 acceptance 시 effective fixed-catalog snapshot, `durability`는 `pending|durable|best_effort`, phase는 `accepted|segments_published|raw_published`다. Same pair retry/restart는 same snapshotted model로 resume, same audio fresh proposal은 `adopt_existing_dispatch`, 다른 audio identity는 reject한다. Schema-v1 claim과 claim-less legacy raw를 계속 읽는다.
 - `segments.json`을 먼저 발행하고 claim을 `segments_published`로 올린 뒤 `raw.md`를 downstream completion marker로 마지막 발행한다. New record는 matching dispatch/audio + valid segments + `raw_published` + `durable|best_effort`일 때만 transcribed/detail/summary candidate로 본다. Claim-less legacy raw는 immutable completed로 호환한다.
 - Direct service는 exact Host/port, exact JSON+byte cap, unknown field reject, browser Origin/Fetch Metadata reject, no CORS다. App marker는 browser/server fetch 구분용이고 path 선택 권한을 만들지 않는다.
 - `FAKE_WHISPER=1` 스텁이 **동일 계약** 준수(모델 없이 canned segments 반환) → hermetic 테스트용.
@@ -436,9 +476,13 @@ Manual freeform mode에서 `body`는 하나의 current editable truth다. Body�
 - `GET /api/settings/llm/health` → `{ configured:false }` 또는 `{ configured:true, provider, model?, ok, detail }`. `model`은 settings의 모델명만 노출하고 `baseUrl`은 반환하지 않는다. legacy Ollama 설정에 `model`이 없으면 daemon 상태와 무관하게 `{ ok:false, detail:"Ollama model not set" }`.
 - Settings의 connection test는 이 GET으로 persisted configuration만 검사한다. Saved snapshot이 없거나 draft가 dirty이거나 load/save/test 중이면 호출하지 않으며, 결과의 safe context label도 snapshot의 provider/model만 사용하고 `baseUrl`은 노출하지 않는다. Unsaved draft를 검사하는 별도 POST endpoint는 없다.
 - Save success body를 persisted snapshot/draft에 반영한 직후 같은 snapshot health를 자동 검사한다. Success면 `첫 회의 녹음` action을 제공한다. Failure도 saved snapshot과 provider별 draft를 보존하고 provider별 safe 조치를 제공한다.
-- health는 UI와 설정 화면의 readiness/test-connection 용도다. **CLI provider(claude/codex)의 `ok`는 바이너리 감지이지 인증 보장이 아니다(낙관적)** — 실제 인증·요약 가능 여부는 첫 요약에서 확인된다. 홈 배너와 상세 상태 카드는 `configured && ok`일 때만 “요약 자동 처리 중”으로 안내한다. 감지형 health는 로그인 깨짐을 요약 전에 못 잡으므로, 홈 배너는 전사됐지만 요약 안 된 회의를 **“처리 중 N”(에러 없음)과 “확인 필요 M”(`retry_summary` 에러)로 분리**해 거짓초록을 막는다. 배경 워커 후보 선정은 기존처럼 settings 존재 기반이며, 실제 실행 실패는 `runSummarize()`의 retryable error로 기록한다(claude는 미로그인 시 이유를 stdout으로 출력하므로 `exec.ts`가 stderr가 비면 stdout 꼬리를 에러에 싣는다).
+- health는 UI와 설정 화면의 readiness/test-connection 용도다. **CLI provider(claude/codex)의 `ok`는 바이너리 감지이지 인증 보장이 아니다(낙관적)** — 실제 인증·요약 가능 여부는 첫 요약에서 확인된다. 홈 배너와 상세 상태 카드는 `configured && ok`일 때만 “요약 자동 처리 중”으로 안내한다. 감지형 health는 로그인 깨짐을 요약 전에 못 잡으므로, 홈 배너는 전사됐지만 요약 안 된 회의를 **“처리 중 N”(에러 없음)과 “확인 필요 M”(`retry_summary` 에러)로 분리**해 거짓초록을 막는다. 배경 워커는 아직 실패하지 않은 최초 후보만 settings 존재 기반으로 시작하며, 실제 실행 실패는 `runSummarize()`의 manual-retry error로 기록하고 다시 선택하지 않는다(claude는 미로그인 시 이유를 stdout으로 출력하므로 `exec.ts`가 stderr가 비면 stdout 꼬리를 에러에 싣는다).
 - Claude·Codex CLI health는 `claude --version`/`codex --version` 수준의 binary 감지다(인증 불요·즉시 반환이라 콜드 스타트 타임아웃 오탐이 없다). UI 문구는 둘 다 “감지됨”으로 표시하고 인증/실제 요약 가능 여부는 첫 요약 실행에서 확인한다.
-- **claude 요약 호출 격리(ADR 0010):** claude 생성 호출(`run()`)은 invocation별 `mkdtemp` 격리 cwd에서 인라인 MCP-off(`--strict-mcp-config --mcp-config '{"mcpServers":{}}'`)·slash-off(`--disable-slash-commands`)로 실행하고, 종료 뒤 temp를 best-effort cleanup한다. 자식 env에서 유료 청구 env(자격증명 `ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY` + 백엔드 리다이렉트 `ANTHROPIC_BASE_URL`·`CLAUDE_CODE_USE_BEDROCK`/`VERTEX`)를 스크럽한다(구독 OAuth와 `HOME`/`PATH`는 유지 → $0 유지). 프로젝트 디렉토리 밖에서 돌기 때문에 워크스페이스 `CLAUDE.md`/MCP 컨텍스트가 교정 출력에 새지 않는다(과거 오염 버그 제거). 전사(PII)는 stdin으로만 전달하며, 프롬프트·`summary.json` 스키마·`summarizeCore` 계약은 불변. 생성 타임아웃은 600초(위 참조).
+- `LlmAdapter.run` option은 chat/tool loop의 generic JSON hint와 summary 전용 explicit JSON Schema를 구분한다. Summary만 static strict generated-summary schema를 넘기며 manual `body`는 금지하고 required `participants`는 `maxItems:0`인 빈 배열로 고정해 `status.review` ownership을 바꾸지 않는다. Claude는 지원 시 `--json-schema`, Codex는 `--output-schema`와 bounded last-message file, Ollama는 `format` JSON Schema object를 사용한다. Generic JSON은 Claude/Codex 기존 JSON hint와 Ollama `"json"`을 유지한다. Fenced/prose/wrapper JSON salvage와 final summary schema validation/fallback은 구조화 output 뒤에도 최종 방어선이다.
+- CLI optional flag는 process당 한 번의 bounded `--help` capability probe 결과로만 generation 전에 결정한다. Probe는 prompt/transcript를 받지 않고 timeout/output cap/failure 시 known-safe args로 내려간다. Generation을 시작한 뒤 unsupported flag를 이유로 같은 prompt를 재실행하지 않는다.
+- **Claude 격리(ADR 0010, 0024):** invocation별 `mkdtemp` cwd, strict empty MCP/slash-off와 지원되는 `--safe-mode`, `--no-session-persistence`, `--tools ""`, `--no-chrome`를 사용한다. OAuth/keychain을 유지하므로 `--bare`를 쓰지 않는다. 유료 청구 env(자격증명 `ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY` + 백엔드 리다이렉트 `ANTHROPIC_BASE_URL`·`CLAUDE_CODE_USE_BEDROCK`/`VERTEX`)는 scrub하고 `HOME`/`PATH`는 유지한다.
+- **Codex 격리(ADR 0024):** 지원되는 `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, color-off와 read-only temp cwd를 사용한다. Schema와 last-message file은 invocation별 mode-0700 temp directory에 두고 bounded no-follow read 뒤 cleanup한다. Last-message capability가 없으면 같은 한 번의 generation call에서 기존 JSONL final-message salvage를 쓴다.
+- Prompt/transcript는 stdin/request body로만 전달하고 argv, public response, generic log에 넣지 않는다. Schema/output temp path와 raw provider output도 public surface에 노출하지 않는다. 모든 correction/summary generation call의 상한은 `LLM_GENERATION_TIMEOUT_MS=1_800_000`(30분)이며 health는 별도 짧은 timeout을 사용한다.
 
 ## User profile settings 계약
 
@@ -466,7 +510,7 @@ Manual freeform mode에서 `body`는 하나의 current editable truth다. Body�
 
 [원문]
 ```
-- **길이 sanity guard**: 교정본 길이가 원문의 30% 미만이면 그 부분은 원문 유지(over-edit 방지). MVP는 단일패스(전체를 한 번에). refine 실패/폴백 시에도 최소 세그먼트→문장 병합으로 가독 floor 확보.
+- **길이 sanity guard**: full correction이 원문의 30% 미만이거나 script contamination이면 기존 compatibility guard가 raw를 유지하고 그 safe transcript만 checkpoint한다. 기본 full은 transcript 전체를 한 번에 보내며 40,000자에서 자르지 않는다. Fast는 chunk별/전체 empty·length·script/context·coverage guard를 모두 통과해야 하며 실패 chunk를 raw로 대체해 성공 처리하지 않는다.
 
 **요약(summarize) 프롬프트**:
 ```
@@ -486,7 +530,7 @@ JSON 스키마: {SUMMARY_SCHEMA_HINT}
 **SUMMARY_SCHEMA_HINT** (여기에 `purpose`를 추가해 사용):
 ```
 {"title":"회의 제목(한국어)","topicSlug":"english-kebab-core-topic","oneLine":"한 줄 요약",
- "purpose":"이 회의의 목적/안건","participants":["이름"],"highlights":["핵심 논의 불릿"],
+ "purpose":"이 회의의 목적/안건","participants":[],"highlights":["핵심 논의 불릿"],
  "discussion":["논의 상세 불릿"],"decisions":["결정사항"],
  "actionItems":[{"owner":"담당자","task":"할 일","due":"기한"}],
  "risks":["리스크/이슈"],"followups":["후속 확인/티켓 제안"]}

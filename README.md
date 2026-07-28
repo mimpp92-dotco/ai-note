@@ -9,7 +9,7 @@ Review the transcript or summary, search meetings without AI, and copy or export
 ## Why it's private
 
 - **Local app and storage.** Audio, transcripts, summaries, your optional profile, and derived search data stay under the local `data/` directory. The web server and transcription service bind to `127.0.0.1` only (never your LAN).
-- **Your model choice controls inference.** Ollama keeps model inference on the configured loopback service. Claude/Codex CLI runs as a local process but may send the bounded transcript and summary prompt to the provider you signed in to; that processing follows the CLI provider's terms. AI NOTE adds no hosted backend of its own.
+- **Your model choice controls inference.** Ollama keeps model inference on the configured loopback service. Claude/Codex CLI runs as a local process but may send the full correction transcript and summary prompt to the provider you signed in to; that processing follows the CLI provider's terms. AI NOTE adds no hosted backend of its own.
 - **No API keys.** Summaries run through a CLI you're already signed in to (Claude/Codex) or a local model (Ollama). AI NOTE never stores an API key.
 - **No AI NOTE telemetry.** There is no analytics or hosted sync surface. Recordings and generated artifacts live under `data/` (gitignored); model-provider traffic, if any, is determined only by the summarizer you select above.
 
@@ -26,7 +26,7 @@ record (browser mic) → local Whisper (STT) → optional configured summary (wo
    review and **copy / download / reveal the folder**.
 5. Use **검색 (Search)** to find a meeting without AI. (Asking across meetings — the **질문/회의 도우미 (Questions/Meeting assistant)** chatbot — is currently on hold; see below.)
 
-If local transcription fails, the original recording remains intact and **전사 다시 시도 (Retry transcription)** stays available from the save result, meeting list, and meeting detail. You do not need to record the meeting again.
+If local transcription or summary generation fails, the original recording and every already-published artifact remain intact. The app leaves a visible failure and waits for **전사 다시 시도 (Retry transcription)** or the corresponding manual summary retry; network recovery or an app restart does not silently create another attempt. A summary retry can reuse a matching durable correction checkpoint instead of correcting the same transcript again.
 
 ## Edit a finished meeting
 
@@ -98,7 +98,7 @@ preserved; only the selected container metadata is removed.
 | **Apple Silicon (M-series)** | fast — uses `mlx-whisper` |
 | **Linux / Windows / Intel Mac** | works — CPU fallback via `faster-whisper` (slower, no GPU path) |
 
-The first transcription may take longer while the selected Whisper model is downloaded. The UI does not invent progress before that download finishes. The default (`large-v3`) is multi-GB; set `LOCAL_STT_MODEL=base` (or `small`) before launch for a faster first use.
+The first transcription may take longer while the selected Whisper model is downloaded. The UI does not invent progress before that download finishes. **Settings → 전사·교정** offers exactly `large-v3` (quality-first default) and `large-v3-turbo` (faster candidate, not yet recommended). Saving a choice does not download or load it; use **선택 모델 미리 준비** explicitly, or let the first real transcription use the existing lazy-download path.
 
 ## Quick start
 
@@ -113,6 +113,8 @@ If the doctor reports a missing prerequisite, follow its visible OS-specific ins
 On a clean clone, `npm ci` and the first `uv run` may download project dependencies. The selected Whisper model is downloaded only when the first transcription begins.
 
 In **Settings → 요약 모델**, Claude CLI offers its default, Sonnet, Opus, Haiku, or a custom model; Codex CLI offers its default or a custom model; and Ollama discovers locally installed models with refresh and custom-input fallback. Saving immediately checks the persisted configuration. A successful Claude/Codex check confirms that the CLI binary was detected; authentication and actual generation are confirmed by the first summary.
+
+In **Settings → 전사·교정**, model and correction mode are saved together. `large-v3` and **전체 교정** are the quality-first defaults. **빠른 교정** is an explicit experimental opt-in: it corrects deterministic transcript chunks with bounded concurrency (Claude/Codex 2, Ollama 1), persists each valid chunk for manual resume, and runs the summary only after every chunk is valid. A failed chunk does not fall back to full mode or start new work automatically. LLM generation calls have a fixed 30-minute per-call ceiling; a real context or timeout failure stays visible for manual retry.
 
 ```bash
 npm run app:status  # ownership-checked status and actual URL
@@ -142,13 +144,24 @@ Copy `.env.example` to `.env.local` and adjust as needed. Common knobs:
 
 | Env | Default | Purpose |
 |---|---|---|
-| `LOCAL_STT_MODEL` | `large-v3` | Whisper model (`base`/`small` for speed) |
+| `LOCAL_STT_MODEL` | `large-v3` | Legacy startup model only when `data/pipeline-settings.json` does not exist. New installs should use the fixed Settings catalog; arbitrary values are not offered by the UI. |
+| `LOCAL_STT_MLX_REPO` | catalog mapping | Legacy MLX repository override only while no stored pipeline settings exist. |
 | `LOCAL_STT_LANG` | `ko` | Whisper decode language (`auto` to detect) |
 | `LOCAL_STT_VAD` | `1` | Silence/hallucination filter (VAD); `0` to disable |
 | `LOCAL_STT_HOST` / `LOCAL_STT_PORT` | `127.0.0.1` / `8123` | Whisper loopback address; owned bootstrap pins the host to `127.0.0.1` and selects a bounded child-only port without rewriting `.env.local` |
 | `FFMPEG_PATH` | (from `PATH`) | Explicit ffmpeg binary |
 
 Manage domain terms and "misheard → correct" pairs in the app's **단어 관리 (Glossary)** tab. They are applied by the LLM **correction** step (not the Whisper transcriber) to fix names and numbers. Stored in `glossary.json` as `{ terms, corrections }` (see `glossary.example.json`; a legacy string array is still read as `terms`).
+
+## Isolated pipeline benchmark
+
+After explicitly approving use of one real local meeting and the configured provider, run:
+
+```bash
+npm run benchmark:pipeline -- --meeting-id <exact-meeting-id>
+```
+
+The exact safe ID is mandatory; the command never guesses `latest`. It reads the source meeting without modifying it and writes a mode-0700 snapshot only under `.ai-note-runtime/benchmarks/`, including hashes, stage timings, comparison outputs, and a human-review template. It does not publish canonical artifacts or update status/library data, and terminal output contains only the safe status and run directory—not transcript, audio, or provider output. The report calculates the 2× Turbo and 30% fast thresholds, but recommendation remains `undecided` until a person confirms no additional important-name, number, or decision errors. Automated tests and ordinary startup never run this real-data benchmark.
 
 ## Project layout
 

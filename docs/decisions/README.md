@@ -16,14 +16,14 @@ $EDITOR docs/decisions/0024-내-결정.md   # 5칸 채우고 아래 목록에 �
 
 | # | 결정 | 상태 |
 |---|------|------|
-| [0001](0001-local-whisper-batch.md) | STT는 로컬 whisper 완전 배치 | 채택됨 |
+| [0001](0001-local-whisper-batch.md) | STT는 로컬 whisper 완전 배치 | 채택됨(고정 large-v3만 0024가 부분 대체) |
 | [0002](0002-claude-command-no-app-llm.md) | 교정·요약은 로컬 CLI/Ollama로 처리 (팀 모드에서 갱신) | 채택됨(갱신) |
 | [0003](0003-local-files-single-writer.md) | 로컬 파일 저장 + 단일 writer 소유권 | 채택됨 |
 | [0006](0006-lean-mvp-defer-v2.md) | 린 MVP-0 — 견고성 일부 v2 연기 | 채택됨 |
 | [0007](0007-delete-meeting-record.md) | 회의 삭제 = 폴더 전체 영구 삭제(rename-then-rm) | 대체됨(→0015) |
 | [0008](0008-title-override.md) | 표시 제목은 `titleOverride`로 app-api 소유(override 우선) | 채택됨 |
-| [0009](0009-async-resummarize-failure-visibility.md) | 재요약 비동기화(202) + 실패 가시성 + 생성 타임아웃 600초 | 채택됨 |
-| [0010](0010-isolated-claude-summarize-invocation.md) | claude 요약 호출 격리(cwd·MCP-off·$0 env 스크럽) — ADR 0002 정제 | 채택됨 |
+| [0009](0009-async-resummarize-failure-visibility.md) | 재요약 비동기화(202) + 실패 가시성 + 당시 생성 타임아웃 600초 | 채택됨(600초만 0024가 부분 대체) |
+| [0010](0010-isolated-claude-summarize-invocation.md) | claude 요약 호출 격리(cwd·MCP-off·$0 env 스크럽) — ADR 0002 정제 | 채택됨(CLI 상세·600초는 0024가 부분 대체) |
 | [0011](0011-library-registry-and-durable-commits.md) | 중앙 library registry, stable meeting path, 4-state 내구 commit | 채택됨 |
 | [0012](0012-local-ingress-and-fixed-id-service-boundary.md) | local-only request/DTO 경계와 fixed-ID Whisper protocol | 채택됨 |
 | [0013](0013-durable-summarize-pair-publication.md) | Durable summarize attempt와 generation-consistent pair 발행 | 채택됨 |
@@ -37,3 +37,4 @@ $EDITOR docs/decisions/0024-내-결정.md   # 5칸 채우고 아래 목록에 �
 | [0021](0021-manual-transcript-and-summary-editing.md) | 불변 원본 위 editable transcript/summary와 독립 재생성·freshness·저장 probe | 채택됨 |
 | [0022](0022-inline-freeform-meeting-content-editing.md) | Tab-local action과 본문 교체형 single-textarea 편집 — 0021의 footer·structured summary form만 부분 대체 | 채택됨 |
 | [0023](0023-installation-and-first-run-ux.md) | 안전한 install target, owned background runtime과 provider-aware first-run UX | 채택됨 |
+| [0024](0024-quality-first-meeting-pipeline.md) | 품질 우선 model/correction default, manual checkpoint retry, structured provider 격리와 evidence-based benchmark | 채택됨 |
