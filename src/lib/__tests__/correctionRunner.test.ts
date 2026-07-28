@@ -166,8 +166,8 @@ describe("bounded correction runner", () => {
   });
 
   it.each([
-    ["empty", (_target: string) => ""],
-    ["collapsed", (_target: string) => "짧음"],
+    ["empty", () => ""],
+    ["collapsed", () => "짧음"],
     ["script contamination", (target: string) => (
       target.replace(/[가-힣]/gu, "This is unrelated English reasoning ")
     )],

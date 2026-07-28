@@ -735,7 +735,6 @@ async function executePreparedGeneration(
   prepared: PreparedGeneration,
 ): Promise<SummarizeResult> {
   const { lease, adapter, intent } = prepared;
-  const paths = meetingPaths(id);
   const checkpointStore = intent === "initial"
     ? correctionCheckpointStore()
     : null;

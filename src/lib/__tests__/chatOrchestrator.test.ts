@@ -95,7 +95,10 @@ function executor(options: {
 
 function adapter(outputs: string[] | ((prompt: string, index: number) => string)): LlmAdapter & { run: ReturnType<typeof vi.fn> } {
   let index = 0;
-  const run = vi.fn(async (prompt: string, _options?: LlmRunOptions) => {
+  const run = vi.fn<(
+    prompt: string,
+    options?: LlmRunOptions,
+  ) => Promise<string>>(async (prompt) => {
     const output = typeof outputs === "function" ? outputs(prompt, index) : outputs[index];
     index += 1;
     if (output === undefined) throw new Error("unexpected model turn");

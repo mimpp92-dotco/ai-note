@@ -116,10 +116,10 @@ describe("PipelineSettingsForm", () => {
   });
 
   it("starts one explicit prepare request and reports its bounded state", async () => {
-    const fetchMock = vi.fn(async (
+    const fetchMock = vi.fn<(
       input: string | URL | Request,
-      _init?: RequestInit,
-    ) => {
+      init?: RequestInit,
+    ) => Promise<Response>>(async (input) => {
       if (String(input) === "/api/whisper/models/prepare") {
         return json({ model: "large-v3", status: "preparing" }, 202);
       }
