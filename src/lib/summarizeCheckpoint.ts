@@ -55,7 +55,26 @@ const completedChunkSchema = z.object({
   index: z.number().int().nonnegative(),
   inputSha256: z.string().regex(SHA256),
   outputSha256: z.string().regex(SHA256),
-}).strict();
+  chunkId: z.string().min(1).max(128).regex(SAFE_ID).optional(),
+  correctedText: z.string().max(MAX_CHECKPOINT_BYTES).optional(),
+}).strict().superRefine((chunk, context) => {
+  if ((chunk.chunkId === undefined) !== (chunk.correctedText === undefined)) {
+    context.addIssue({
+      code: "custom",
+      message: "fast chunk identity and text must be stored together",
+    });
+  }
+  if (
+    chunk.correctedText !== undefined
+    && chunk.outputSha256 !== sha256(chunk.correctedText)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["outputSha256"],
+      message: "chunk output hash does not match its text",
+    });
+  }
+});
 
 const correctionCheckpointSchema = checkpointKeySchema.extend({
   schemaVersion: z.literal(CORRECTION_CHECKPOINT_SCHEMA_VERSION),
@@ -67,18 +86,23 @@ const correctionCheckpointSchema = checkpointKeySchema.extend({
   const indexes = checkpoint.completedChunks.map((chunk) => chunk.index);
   if (
     new Set(indexes).size !== indexes.length
-    || indexes.some((index, position) => index !== position)
+    || indexes.some((index, position) => (
+      position > 0 && index <= indexes[position - 1]!
+    ))
   ) {
     context.addIssue({
       code: "custom",
       path: ["completedChunks"],
-      message: "completed chunk indexes must be unique and contiguous",
+      message: "completed chunk indexes must be unique and source ordered",
     });
   }
   if (
     checkpoint.correctionMode === "full"
     && (
       checkpoint.completedChunks.length !== 1
+      || checkpoint.completedChunks[0].index !== 0
+      || checkpoint.completedChunks[0].chunkId !== undefined
+      || checkpoint.completedChunks[0].correctedText !== undefined
       || checkpoint.completedChunks[0].inputSha256 !== checkpoint.rawSha256
       || checkpoint.completedChunks[0].outputSha256
         !== sha256(checkpoint.correctedTranscript)
@@ -90,10 +114,36 @@ const correctionCheckpointSchema = checkpointKeySchema.extend({
       message: "full correction checkpoint metadata does not match its transcript",
     });
   }
+  if (
+    checkpoint.correctionMode === "fast"
+    && (
+      checkpoint.completedChunks.some((chunk) => (
+        chunk.chunkId === undefined || chunk.correctedText === undefined
+      ))
+      || (
+        checkpoint.correctedTranscript !== ""
+        && checkpoint.completedChunks.map((chunk) => chunk.correctedText).join("")
+          !== checkpoint.correctedTranscript
+      )
+    )
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["completedChunks"],
+      message: "fast correction checkpoint metadata does not match its transcript",
+    });
+  }
 });
 
 export type CorrectionCheckpointKey = z.infer<typeof checkpointKeySchema>;
 export type CorrectionCheckpoint = z.infer<typeof correctionCheckpointSchema>;
+export type FastCorrectionCheckpointChunk = {
+  index: number;
+  chunkId: string;
+  inputSha256: string;
+  outputSha256: string;
+  correctedText: string;
+};
 
 export type CorrectionCheckpointObservation =
   | { state: "missing" }
@@ -178,6 +228,7 @@ export function buildCorrectionCheckpointKey(input: {
   glossary: Glossary;
   settings: LlmSettings;
   correctionMode: CorrectionMode;
+  chunkPlanSha256?: string;
   promptVersion?: string;
 }): CorrectionCheckpointKey {
   const rawSha256 = sha256(input.rawBytes);
@@ -201,7 +252,9 @@ export function buildCorrectionCheckpointKey(input: {
     ),
     correctionPromptVersion: input.promptVersion ?? CORRECTION_PROMPT_VERSION,
     correctionMode: input.correctionMode,
-    chunkPlanSha256: sha256(JSON.stringify(plan)),
+    chunkPlanSha256: input.correctionMode === "fast"
+      ? input.chunkPlanSha256
+      : sha256(JSON.stringify(plan)),
   });
 }
 
@@ -221,6 +274,26 @@ export function createCorrectionCheckpoint(input: {
       inputSha256: input.key.rawSha256,
       outputSha256: sha256(input.correctedTranscript),
     }],
+    committedAt: input.committedAt ?? new Date().toISOString(),
+  });
+}
+
+export function createFastCorrectionCheckpoint(input: {
+  meetingId: string;
+  key: CorrectionCheckpointKey;
+  correctedTranscript: string;
+  completedChunks: readonly FastCorrectionCheckpointChunk[];
+  committedAt?: string;
+}): CorrectionCheckpoint {
+  if (input.key.correctionMode !== "fast") {
+    throw new CorrectionCheckpointError("checkpoint_invalid");
+  }
+  return correctionCheckpointSchema.parse({
+    schemaVersion: CORRECTION_CHECKPOINT_SCHEMA_VERSION,
+    meetingId: input.meetingId,
+    ...input.key,
+    correctedTranscript: input.correctedTranscript,
+    completedChunks: input.completedChunks.map((chunk) => ({ ...chunk })),
     committedAt: input.committedAt ?? new Date().toISOString(),
   });
 }

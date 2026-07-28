@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SERVER = join(process.cwd(), "whisper", "server.py");
+const BENCHMARK_HELPER = join(process.cwd(), "whisper", "benchmark.py");
 const DISPATCH_A = "20000000-0000-4000-8000-000000000001";
 const DISPATCH_B = "20000000-0000-4000-8000-000000000002";
 const CATALOG = {
@@ -675,5 +676,81 @@ describe.sequential("whisper claim durability and restart", () => {
     } finally {
       server.process.kill("SIGKILL");
     }
+  });
+});
+
+describe("isolated whisper benchmark helper", () => {
+  it("uses the fixed catalog and writes fake outputs only below the explicit output fence", () => {
+    const root = join(workDir, "benchmark-helper");
+    const output = join(root, "runs", "large-v3-turbo");
+    const audio = join(root, "audio.webm");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(audio, "synthetic audio placeholder");
+
+    const run = spawnSync("python3", [
+      BENCHMARK_HELPER,
+      "--audio",
+      audio,
+      "--output-dir",
+      output,
+      "--allowed-root",
+      join(root, "runs"),
+      "--model",
+      "large-v3-turbo",
+      "--fake",
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({
+      status: "completed",
+      model: "large-v3-turbo",
+    });
+    expect(readFileSync(audio, "utf8")).toBe("synthetic audio placeholder");
+    expect(readFileSync(join(output, "raw.md"), "utf8")).toContain(
+      "합성 벤치마크 전사",
+    );
+    expect(JSON.parse(readFileSync(join(output, "segments.json"), "utf8")))
+      .toEqual(expect.any(Array));
+    expect(JSON.parse(readFileSync(join(output, "metrics.json"), "utf8")))
+      .toMatchObject({
+        model: "large-v3-turbo",
+        rawSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        segmentsSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      });
+  });
+
+  it("rejects unknown models and output directories outside the explicit fence", () => {
+    const root = join(workDir, "benchmark-helper-fence");
+    const audio = join(root, "audio.webm");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(audio, "synthetic audio placeholder");
+
+    for (const args of [
+      [
+        "--audio", audio,
+        "--output-dir", join(root, "outside"),
+        "--allowed-root", join(root, "runs"),
+        "--model", "large-v3",
+        "--fake",
+      ],
+      [
+        "--audio", audio,
+        "--output-dir", join(root, "runs", "unknown"),
+        "--allowed-root", join(root, "runs"),
+        "--model", "small",
+        "--fake",
+      ],
+    ]) {
+      const run = spawnSync("python3", [BENCHMARK_HELPER, ...args], {
+        encoding: "utf8",
+        env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+      });
+      expect(run.status).not.toBe(0);
+      expect(run.stdout).not.toContain("synthetic audio placeholder");
+    }
+    expect(existsSync(join(root, "outside", "raw.md"))).toBe(false);
   });
 });

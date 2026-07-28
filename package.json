@@ -22,6 +22,7 @@
     "start": "next start --hostname 127.0.0.1",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
+    "benchmark:pipeline": "node scripts/meeting-pipeline-benchmark.mjs",
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:e2e:doctor": "node scripts/e2e-doctor.mjs",
     "test:e2e:install": "playwright install chromium",

@@ -13,6 +13,10 @@ import {
   type FileOps,
 } from "@/lib/durableFileOps";
 import {
+  CORRECTION_CHUNK_TARGET_CHARS,
+  createCorrectionChunkPlan,
+} from "@/lib/correctionChunks";
+import {
   acquireMeetingOperation,
   resetMeetingLifecycleForTests,
 } from "@/lib/meetingLifecycle";
@@ -26,6 +30,7 @@ import {
   correctionCheckpointPath,
   createCorrectionCheckpoint,
   createCorrectionCheckpointStore,
+  createFastCorrectionCheckpoint,
   type CorrectionCheckpoint,
   type CorrectionCheckpointKey,
 } from "@/lib/summarizeCheckpoint";
@@ -272,5 +277,87 @@ describe("durable correction checkpoint", () => {
 
   it("matches only the exact correction identity", () => {
     expect(correctionCheckpointMatches(CHECKPOINT, KEY)).toBe(true);
+  });
+
+  it("durably round-trips sorted partial fast chunks with their exact output identities", async () => {
+    const raw = [
+      `${"가".repeat(CORRECTION_CHUNK_TARGET_CHARS - 100)}\n`,
+      `${"나".repeat(CORRECTION_CHUNK_TARGET_CHARS - 100)}\n`,
+      `${"다".repeat(CORRECTION_CHUNK_TARGET_CHARS - 100)}\n`,
+    ].join("");
+    const plan = createCorrectionChunkPlan(raw);
+    const key: CorrectionCheckpointKey = {
+      ...KEY,
+      rawSha256: sha256(raw),
+      correctionMode: "fast",
+      chunkPlanSha256: plan.planSha256,
+    };
+    const chunk = plan.chunks[1]!;
+    const correctedText = chunk.target.replace("나", "너");
+    const partial = createFastCorrectionCheckpoint({
+      meetingId: ID,
+      key,
+      correctedTranscript: "",
+      completedChunks: [{
+        index: chunk.index,
+        chunkId: chunk.id,
+        inputSha256: chunk.targetSha256,
+        outputSha256: sha256(correctedText),
+        correctedText,
+      }],
+      committedAt: "2026-07-28T07:00:00.000Z",
+    });
+    const store = createCorrectionCheckpointStore({ dataRoot: root });
+
+    await withSummarizeOperation(async (ownerToken) => {
+      await expect(store.write(ID, ownerToken, partial)).resolves.toMatchObject({
+        state: "committed_durable",
+      });
+      await expect(store.read(ID, ownerToken)).resolves.toEqual({
+        state: "valid",
+        checkpoint: partial,
+      });
+    });
+  });
+
+  it("rejects a fast chunk whose text does not match its output hash", () => {
+    const fastKey: CorrectionCheckpointKey = {
+      ...KEY,
+      correctionMode: "fast",
+    };
+
+    expect(() => createFastCorrectionCheckpoint({
+      meetingId: ID,
+      key: fastKey,
+      correctedTranscript: "",
+      completedChunks: [{
+        index: 0,
+        chunkId: "chunk-0-deadbeef",
+        inputSha256: sha256("input"),
+        outputSha256: sha256("different output"),
+        correctedText: "actual output",
+      }],
+    })).toThrow();
+  });
+
+  it("requires the completed fast merge to equal the ordered chunk outputs", () => {
+    const fastKey: CorrectionCheckpointKey = {
+      ...KEY,
+      correctionMode: "fast",
+    };
+    const correctedText = "첫 번째 교정 결과\n";
+
+    expect(() => createFastCorrectionCheckpoint({
+      meetingId: ID,
+      key: fastKey,
+      correctedTranscript: "다른 병합 결과\n",
+      completedChunks: [{
+        index: 0,
+        chunkId: "chunk-0-deadbeef",
+        inputSha256: sha256("input"),
+        outputSha256: sha256(correctedText),
+        correctedText,
+      }],
+    })).toThrow();
   });
 });

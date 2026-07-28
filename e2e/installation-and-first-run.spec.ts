@@ -266,6 +266,10 @@ test("installation first run, provider models, summary default, and transcriptio
     "large-v3 — 품질 우선(기본)",
     "large-v3-turbo — 더 빠른 후보",
   ]);
+  expect(await correctionMode.locator("option").allTextContents()).toEqual([
+    "전체 교정 — 품질 우선(기본)",
+    "빠른 교정 — 실험적·검증 필요",
+  ]);
   await whisperModel.selectOption("large-v3-turbo");
   await correctionMode.selectOption("fast");
   await pipelineSection.getByRole("button", { name: "설정 저장" }).click();

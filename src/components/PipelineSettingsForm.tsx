@@ -16,7 +16,7 @@ const MODEL_OPTIONS: Array<{ value: WhisperModel; label: string }> = [
 
 const CORRECTION_OPTIONS: Array<{ value: CorrectionMode; label: string }> = [
   { value: "full", label: "전체 교정 — 품질 우선(기본)" },
-  { value: "fast", label: "빠른 교정 — 명시적 선택" },
+  { value: "fast", label: "빠른 교정 — 실험적·검증 필요" },
 ];
 
 const fieldClass =

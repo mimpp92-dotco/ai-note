@@ -73,7 +73,7 @@ describe("PipelineSettingsForm", () => {
     expect(correction).toHaveValue("full");
     expect(within(correction).getAllByRole("option").map((option) => option.textContent)).toEqual([
       "전체 교정 — 품질 우선(기본)",
-      "빠른 교정 — 명시적 선택",
+      "빠른 교정 — 실험적·검증 필요",
     ]);
     expect(model.closest("form")).toHaveClass("p-4", "sm:p-6");
     expect(screen.getByRole("button", { name: "설정 저장" })).toHaveClass("min-h-11");

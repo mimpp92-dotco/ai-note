@@ -34,6 +34,15 @@ import { classifyLlmFailure, safeLog } from "@/lib/publicApi";
 import { readSettings } from "@/lib/settings";
 import { readStatus, updateStatus } from "@/lib/status";
 import {
+  createCorrectionChunkPlan,
+  type CorrectionSourceSegment,
+} from "@/lib/correctionChunks";
+import {
+  FAST_CORRECTION_PROMPT_VERSION,
+  runCorrectionChunks,
+  type CompletedCorrectionChunk,
+} from "@/lib/correctionRunner";
+import {
   resolveTranscript,
   summarizeTranscript,
 } from "@/lib/summarizeCore";
@@ -42,6 +51,7 @@ import {
   correctionCheckpointMatches,
   createCorrectionCheckpoint,
   createCorrectionCheckpointStore,
+  createFastCorrectionCheckpoint,
   type CorrectionCheckpointStore,
 } from "@/lib/summarizeCheckpoint";
 import {
@@ -465,11 +475,38 @@ async function resolveInitialCorrection(
   const rawBytes = await readFile(meetingPaths(id).raw);
   const raw = new TextDecoder("utf-8", { fatal: true }).decode(rawBytes);
   const glossary = await readGlossary();
+  let plan: ReturnType<typeof createCorrectionChunkPlan> | undefined;
+  if (context.correctionMode === "fast") {
+    let segments: CorrectionSourceSegment[] = [];
+    try {
+      const parsed: unknown = JSON.parse(
+        await readFile(meetingPaths(id).segments, "utf8"),
+      );
+      if (!Array.isArray(parsed) || !parsed.every((segment) => (
+        typeof segment === "object"
+        && segment !== null
+        && !Array.isArray(segment)
+        && typeof (segment as { start?: unknown }).start === "number"
+        && typeof (segment as { end?: unknown }).end === "number"
+        && typeof (segment as { text?: unknown }).text === "string"
+      ))) {
+        throw new Error("segments_invalid");
+      }
+      segments = parsed as CorrectionSourceSegment[];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    plan = createCorrectionChunkPlan(raw, segments);
+  }
   const key = buildCorrectionCheckpointKey({
     rawBytes,
     glossary,
     settings: context.settings,
     correctionMode: context.correctionMode,
+    ...(plan ? { chunkPlanSha256: plan.planSha256 } : {}),
+    ...(context.correctionMode === "fast"
+      ? { promptVersion: FAST_CORRECTION_PROMPT_VERSION }
+      : {}),
   });
   const observed = await store.read(id, prepared.lease.ownerToken);
   await requireCurrentAttempt(id, prepared);
@@ -479,22 +516,104 @@ async function resolveInitialCorrection(
   if (
     observed.state === "valid"
     && correctionCheckpointMatches(observed.checkpoint, key)
+    && context.correctionMode === "full"
   ) {
     return observed.checkpoint.correctedTranscript;
   }
 
-  const correction = await prepared.adapter.run(
-    buildCorrectionPrompt(raw, glossary),
-  );
-  const correctedTranscript = resolveTranscript(raw, correction);
+  if (context.correctionMode === "full") {
+    const correction = await prepared.adapter.run(
+      buildCorrectionPrompt(raw, glossary),
+    );
+    const correctedTranscript = resolveTranscript(raw, correction);
+    await requireCurrentAttempt(id, prepared);
+    const commit = await store.write(
+      id,
+      prepared.lease.ownerToken,
+      createCorrectionCheckpoint({
+        meetingId: id,
+        key,
+        correctedTranscript,
+      }),
+    );
+    if (
+      commit.state !== "committed_durable"
+      && commit.state !== "committed_best_effort"
+    ) {
+      throw new Error(
+        commit.state === "committed_durability_pending"
+          ? "checkpoint_durability_pending"
+          : "checkpoint_not_committed",
+      );
+    }
+    return correctedTranscript;
+  }
+
+  const completedChunks: CompletedCorrectionChunk[] = (
+    observed.state === "valid"
+    && correctionCheckpointMatches(observed.checkpoint, key)
+  )
+    ? observed.checkpoint.completedChunks.flatMap((chunk) => (
+        chunk.chunkId !== undefined && chunk.correctedText !== undefined
+          ? [{
+              index: chunk.index,
+              chunkId: chunk.chunkId,
+              inputSha256: chunk.inputSha256,
+              outputSha256: chunk.outputSha256,
+              correctedText: chunk.correctedText,
+            }]
+          : []
+      ))
+    : [];
+  const result = await runCorrectionChunks({
+    plan: plan!,
+    provider: context.settings.provider,
+    glossary,
+    completedChunks,
+    runChunk: async (prompt) => {
+      await requireCurrentAttempt(id, prepared);
+      return prepared.adapter.run(prompt);
+    },
+    onChunkCompleted: async (_chunk, completed) => {
+      await requireCurrentAttempt(id, prepared);
+      const commit = await store.write(
+        id,
+        prepared.lease.ownerToken,
+        createFastCorrectionCheckpoint({
+          meetingId: id,
+          key,
+          correctedTranscript: "",
+          completedChunks: completed,
+        }),
+      );
+      if (
+        commit.state !== "committed_durable"
+        && commit.state !== "committed_best_effort"
+      ) {
+        throw new Error(
+          commit.state === "committed_durability_pending"
+            ? "checkpoint_durability_pending"
+            : "checkpoint_not_committed",
+        );
+      }
+    },
+  });
+  if (
+    observed.state === "valid"
+    && correctionCheckpointMatches(observed.checkpoint, key)
+    && observed.checkpoint.correctedTranscript === result.transcript
+  ) {
+    return result.transcript;
+  }
   await requireCurrentAttempt(id, prepared);
   const commit = await store.write(
     id,
     prepared.lease.ownerToken,
-    createCorrectionCheckpoint({
+    createFastCorrectionCheckpoint({
       meetingId: id,
       key,
-      correctedTranscript,
+      correctedTranscript: result.transcript,
+      completedChunks: result.chunks,
     }),
   );
   if (
@@ -507,7 +626,7 @@ async function resolveInitialCorrection(
         : "checkpoint_not_committed",
     );
   }
-  return correctedTranscript;
+  return result.transcript;
 }
 
 async function refreshKnowledgeIndex(id: string, ownerToken: string): Promise<void> {

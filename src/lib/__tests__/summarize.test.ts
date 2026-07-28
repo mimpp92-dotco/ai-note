@@ -13,6 +13,10 @@ import {
   createNodeFileOps,
   type FileOps,
 } from "@/lib/durableFileOps";
+import {
+  CORRECTION_CHUNK_TARGET_CHARS,
+  createCorrectionChunkPlan,
+} from "@/lib/correctionChunks";
 import { readArtifactPair, type ArtifactPairRevision } from "@/lib/artifactPair";
 import {
   correctionCheckpointPath,
@@ -26,6 +30,7 @@ import {
   knowledgeCardPath,
   meetingPaths,
 } from "@/lib/paths";
+import { writePipelineSettings } from "@/lib/pipelineSettings";
 import { writeSettings } from "@/lib/settings";
 import { initialStatus, readStatus, writeStatus } from "@/lib/status";
 import {
@@ -55,6 +60,18 @@ const RAW = [
   "지난주 스프린트에서 딜러십 재고 견적 기능을 마무리했습니다.",
   "이번 주는 RIDE 온보딩 플로우를 개선할 예정입니다.",
 ].join("\n");
+
+function fastRaw(count = 3): string {
+  return Array.from({ length: count }, (_, index) => (
+    `${String.fromCharCode(65 + index)}${"가".repeat(
+      Math.floor(CORRECTION_CHUNK_TARGET_CHARS * 0.58),
+    )}\n`
+  )).join("");
+}
+
+function correctionTarget(prompt: string): string {
+  return prompt.slice(prompt.lastIndexOf("[원문]") + "[원문]".length).trim();
+}
 
 const BASE_SUMMARY = {
   title: "기존 회의 요약",
@@ -309,6 +326,130 @@ describe("runSummarize", () => {
       },
     });
     expect(pair.summaryOutdated).toBe(false);
+  });
+
+  it("runs explicit fast correction in deterministic chunks and summarizes the merged transcript once", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    await writePipelineSettings({
+      transcription: { model: "large-v3" },
+      correction: { mode: "fast" },
+    });
+    const id = "meeting-fast-correction";
+    await seedTranscribed(id);
+    const raw = fastRaw(4);
+    await writeFile(meetingPaths(id).raw, raw);
+    await writeFile(meetingPaths(id).segments, `${JSON.stringify(
+      raw.trimEnd().split("\n").map((text, index) => ({
+        start: index,
+        end: index + 1,
+        text,
+      })),
+    )}\n`);
+    const plan = createCorrectionChunkPlan(raw);
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    const correctionCalls = run.mock.calls.filter(([, options]) => options === undefined);
+    const summaryCalls = run.mock.calls.filter(([, options]) => options?.jsonSchema);
+    expect(correctionCalls).toHaveLength(plan.chunks.length);
+    expect(correctionCalls.every(([prompt]) => (
+      prompt.includes("[읽기 전용 앞 문맥]")
+      && prompt.includes("[읽기 전용 뒤 문맥]")
+    ))).toBe(true);
+    expect(summaryCalls).toHaveLength(1);
+    expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(raw);
+  });
+
+  it("preserves completed fast chunks after failure and resumes only unfinished chunks", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    await writePipelineSettings({
+      transcription: { model: "large-v3" },
+      correction: { mode: "fast" },
+    });
+    const id = "meeting-fast-resume";
+    await seedTranscribed(id);
+    const raw = fastRaw(3);
+    await writeFile(meetingPaths(id).raw, raw);
+    await writeFile(meetingPaths(id).segments, `${JSON.stringify(
+      raw.trimEnd().split("\n").map((text, index) => ({
+        start: index,
+        end: index + 1,
+        text,
+      })),
+    )}\n`);
+    const plan = createCorrectionChunkPlan(raw);
+    expect(plan.chunks).toHaveLength(3);
+    const firstTargets: string[] = [];
+    const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (prompt, options) => {
+        if (options?.jsonSchema) throw new Error("summary must not start");
+        const target = correctionTarget(prompt);
+        firstTargets.push(target[0]!);
+        if (target.startsWith("B")) {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          throw new Error("private chunk failure");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 8));
+        return target;
+      },
+    );
+
+    await expect(runSummarize(id)).resolves.toMatchObject({
+      ok: false,
+      reason: "error",
+    });
+
+    expect(firstTargets.sort()).toEqual(["A", "B"]);
+    const partial = JSON.parse(
+      await readFile(correctionCheckpointPath(id), "utf8"),
+    );
+    expect(partial.correctedTranscript).toBe("");
+    expect(partial.correctionPromptVersion).toBe("correction-fast-v1");
+    expect(partial.completedChunks.map((chunk: { index: number }) => chunk.index))
+      .toEqual([0]);
+    expect((await readStatus(id))?.error?.action).toBe("retry_summary");
+    firstRun.mockRestore();
+
+    const retryTargets: string[] = [];
+    const retryRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (prompt, options) => {
+        if (options?.jsonSchema) return JSON.stringify(BASE_SUMMARY);
+        const target = correctionTarget(prompt);
+        retryTargets.push(target[0]!);
+        return target;
+      },
+    );
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect(retryTargets.sort()).toEqual(["B", "C"]);
+    expect(retryRun.mock.calls.filter(([, options]) => options?.jsonSchema))
+      .toHaveLength(1);
+    expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(raw);
+    expect(existsSync(correctionCheckpointPath(id))).toBe(false);
+  });
+
+  it("keeps full mode on the single full-context correction path", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    await writePipelineSettings({
+      transcription: { model: "large-v3" },
+      correction: { mode: "full" },
+    });
+    const id = "meeting-full-correction-default";
+    await seedTranscribed(id);
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]?.[0]).not.toContain("[읽기 전용 앞 문맥]");
+    expect(run.mock.calls[1]?.[1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
   });
 
   it("retains a successful correction after summary failure and reuses it on manual retry", async () => {
