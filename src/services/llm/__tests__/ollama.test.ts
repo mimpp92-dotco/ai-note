@@ -1,13 +1,17 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { GENERATED_SUMMARY_JSON_SCHEMA } from "@/domain/generatedSummaryJsonSchema";
 import {
   discoverOllamaModels,
   OllamaAdapter,
   parseOllamaTags,
 } from "@/services/llm/ollama";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe("OllamaAdapter local egress", () => {
   it("rejects an unsafe legacy URL before fetch", async () => {
@@ -37,6 +41,62 @@ describe("OllamaAdapter local egress", () => {
       "http://localhost:11434/api/generate",
       expect.objectContaining({ redirect: "error" }),
     );
+  });
+
+  it("sends a schema object for generated summaries and keeps generic JSON as the string hint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      redirected: false,
+      json: async () => ({ response: "ok" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = new OllamaAdapter({
+      provider: "ollama",
+      model: "llama3",
+    });
+
+    await adapter.run("chat", { json: true });
+    await adapter.run("summary", { jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA });
+
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const genericBody = JSON.parse(String(calls[0]?.[1].body));
+    const schemaBody = JSON.parse(String(calls[1]?.[1].body));
+    expect(genericBody.format).toBe("json");
+    expect(schemaBody.format).toEqual(GENERATED_SUMMARY_JSON_SCHEMA);
+  });
+
+  it("rejects a redirected generation response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      redirected: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({ response: "must not be used" }),
+    }));
+
+    await expect(new OllamaAdapter({
+      provider: "ollama",
+      model: "llama3",
+    }).run("prompt")).rejects.toThrow("Ollama request failed");
+  });
+
+  it("aborts a generation request at the shared 30-minute timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn((_input: string, init: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        });
+      })
+    )));
+    const pending = new OllamaAdapter({
+      provider: "ollama",
+      model: "llama3",
+    }).run("prompt");
+    const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+
+    await vi.advanceTimersByTimeAsync(1_800_000);
+    await rejection;
   });
 
   it("parses only bounded exact model names with stable de-duplication", () => {

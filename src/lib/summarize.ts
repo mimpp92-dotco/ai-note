@@ -7,6 +7,7 @@ import type {
   StatusJson,
   SummarizeAttempt,
 } from "@/domain/meeting";
+import { GENERATED_SUMMARY_JSON_SCHEMA } from "@/domain/generatedSummaryJsonSchema";
 import { summarySchema } from "@/domain/summarySchema";
 import {
   readArtifactPair,
@@ -416,7 +417,9 @@ async function generateSummary(
   transcript: string,
   preservedParticipants: readonly string[] = [],
 ) {
-  let summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), { json: true });
+  let summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), {
+    jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+  });
   let result = await summarizeTranscript({
     title,
     transcript,
@@ -425,7 +428,9 @@ async function generateSummary(
   });
   if (result.usedFallback) {
     try {
-      summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), { json: true });
+      summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), {
+        jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+      });
       result = await summarizeTranscript({
         title,
         transcript,

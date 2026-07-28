@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
+import { GENERATED_SUMMARY_JSON_SCHEMA } from "@/domain/generatedSummaryJsonSchema";
 import { getAdapter } from "@/services/llm";
 import { FakeAdapter } from "@/services/llm/fake";
 
@@ -15,6 +16,12 @@ describe("FakeAdapter", () => {
     expect(typeof viaJsonOpt).toBe("object");
     for (const key of SUMMARY_KEYS) expect(viaJsonOpt).toHaveProperty(key);
     expect(viaJsonOpt.participants).toEqual([]);
+
+    const viaSchema = JSON.parse(await fake.run("구조화 요약", {
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    }));
+    for (const key of SUMMARY_KEYS) expect(viaSchema).toHaveProperty(key);
+    expect(viaSchema.participants).toEqual([]);
 
     // ...as does the "JSON 스키마" marker present in the real summary prompt.
     const viaMarker = await fake.run("규칙 ...\nJSON 스키마: {...}");
@@ -35,6 +42,9 @@ describe("FakeAdapter", () => {
     try {
       await expect(new FakeAdapter().run("아무 프롬프트")).rejects.toThrow();
       await expect(new FakeAdapter().run("요약", { json: true })).rejects.toThrow();
+      await expect(new FakeAdapter().run("요약", {
+        jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+      })).rejects.toThrow();
     } finally {
       if (saved === undefined) delete process.env.FAKE_LLM_FAIL;
       else process.env.FAKE_LLM_FAIL = saved;

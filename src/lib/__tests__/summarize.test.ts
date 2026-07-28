@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { GENERATED_SUMMARY_JSON_SCHEMA } from "@/domain/generatedSummaryJsonSchema";
 import {
   createDirectorySyncCapability,
   createNodeFileOps,
@@ -294,7 +295,9 @@ describe("runSummarize", () => {
     expect(run.mock.calls[0][0]).toContain("[원문]");
     expect(run.mock.calls[0][1]).toBeUndefined();
     expect(run.mock.calls[1][0]).toContain("JSON 스키마");
-    expect(run.mock.calls[1][1]).toEqual({ json: true });
+    expect(run.mock.calls[1][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
     const pair = await readArtifactPair(id);
     expect(pair.state).toBe("stable");
     expect(pair.contentRevision).toMatchObject({
@@ -315,7 +318,7 @@ describe("runSummarize", () => {
     await seedTranscribed(id);
     const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
       async (_prompt, options) => {
-        if (!options?.json) return RAW;
+        if (!options?.jsonSchema) return RAW;
         throw new Error("summary unavailable");
       },
     );
@@ -327,7 +330,9 @@ describe("runSummarize", () => {
 
     expect(firstRun).toHaveBeenCalledTimes(2);
     expect(firstRun.mock.calls[0][1]).toBeUndefined();
-    expect(firstRun.mock.calls[1][1]).toEqual({ json: true });
+    expect(firstRun.mock.calls[1][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
     expect(existsSync(correctionCheckpointPath(id))).toBe(true);
     expect((await readStatus(id))?.error?.action).toBe("retry_summary");
     firstRun.mockRestore();
@@ -340,7 +345,9 @@ describe("runSummarize", () => {
     await waitForSummarize(id);
 
     expect(retryRun).toHaveBeenCalledTimes(1);
-    expect(retryRun.mock.calls[0][1]).toEqual({ json: true });
+    expect(retryRun.mock.calls[0][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
     expect((await readStatus(id))?.status).toBe("summarized");
     expect((await readStatus(id))?.error).toBeNull();
     expect(existsSync(correctionCheckpointPath(id))).toBe(false);
@@ -353,7 +360,7 @@ describe("runSummarize", () => {
     await seedTranscribed(id);
     const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
       async (_prompt, options) => {
-        if (!options?.json) return RAW;
+        if (!options?.jsonSchema) return RAW;
         throw new Error("summary unavailable");
       },
     );
@@ -366,7 +373,9 @@ describe("runSummarize", () => {
 
     expect(retryRun).toHaveBeenCalledTimes(2);
     expect(retryRun.mock.calls[0][1]).toBeUndefined();
-    expect(retryRun.mock.calls[1][1]).toEqual({ json: true });
+    expect(retryRun.mock.calls[1][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
   });
 
   it("does not start summary generation from a durability-pending checkpoint commit", async () => {
@@ -576,7 +585,9 @@ describe("runSummarize", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run.mock.calls[0][0]).toContain("직접 수정한 현재 전체 스크립트");
     expect(run.mock.calls[0][0]).not.toContain("RAW_SENTINEL_SHOULD_NOT_BE_READ");
-    expect(run.mock.calls[0][1]).toEqual({ json: true });
+    expect(run.mock.calls[0][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
     expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(seeded.transcript);
     expect((await readStatus(id))?.contentRevision?.transcript.source).toBe("manual");
   });
@@ -777,7 +788,9 @@ describe("independent transcript and summary generation", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run.mock.calls[0][0]).toContain("사용자가 직접 수정한 전체 스크립트");
     expect(run.mock.calls[0][0]).not.toContain("[원문]");
-    expect(run.mock.calls[0][1]).toEqual({ json: true });
+    expect(run.mock.calls[0][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
     expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(seeded.transcript);
     const pair = await readArtifactPair(id);
     expect(pair.contentRevision?.transcript.source).toBe("manual");

@@ -7,7 +7,7 @@ import type { Glossary } from "@/domain/glossary";
 // that summarizeCore validates against summarySchema.
 
 export const SUMMARY_SCHEMA_HINT =
-  '{"title":"회의 제목(한국어)","topicSlug":"english-kebab-core-topic","oneLine":"한 줄 요약","purpose":"이 회의의 목적/안건","participants":["이름"],"highlights":["핵심 논의 불릿"],"discussion":["논의 상세 불릿"],"decisions":["결정사항"],"actionItems":[{"owner":"담당자","task":"할 일","due":"기한"}],"risks":["리스크/이슈"],"followups":["후속 확인/티켓 제안"]}';
+  '{"title":"회의 제목(한국어)","topicSlug":"english-kebab-core-topic","oneLine":"한 줄 요약","purpose":"이 회의의 목적/안건","participants":[],"highlights":["핵심 논의 불릿"],"discussion":["논의 상세 불릿"],"decisions":["결정사항"],"actionItems":[{"owner":"담당자","task":"할 일","due":"기한"}],"risks":["리스크/이슈"],"followups":["후속 확인/티켓 제안"]}';
 
 // Canonical correction-rule strings. Kept as named constants so the drift-guard
 // test can assert docs/skill quote them verbatim, and rule numbering stays flexible.
@@ -60,6 +60,7 @@ export function buildSummaryPrompt(transcript: string, title: string): string {
 - 전사에 근거한 내용만 작성합니다. 추측/창작 금지.
 - 담당자가 불명확하면 owner는 "TODO"로 둡니다.
 - 기한이 없으면 due는 "미정".
+- participants는 반드시 빈 배열로 둡니다. 참석자는 사용자 검토 상태에서 별도로 관리합니다.
 - topicSlug만 영문 kebab-case, 나머지 텍스트는 모두 한국어.
 - 출력은 순수 JSON 객체 하나만. 코드블록/설명/머리말 금지.
 JSON 스키마: ${SUMMARY_SCHEMA_HINT}
