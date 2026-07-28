@@ -691,6 +691,50 @@
         "허용된 중앙 inventory와 세 test 파일 밖 수정이 필요하면 중단"
       ],
       "produces": []
+    },
+    {
+      "id": 8,
+      "name": "lint-final-gate-repair",
+      "file": "phase-8-lint-final-gate-repair.md",
+      "requirements": [
+        "R2",
+        "R4",
+        "R5",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "src/components/__tests__/PipelineSettingsForm.test.tsx",
+        "src/lib/__tests__/chatOrchestrator.test.ts",
+        "src/lib/__tests__/correctionRunner.test.ts",
+        "src/lib/summarize.ts"
+      ],
+      "allowedPaths": [
+        "src/components/__tests__/PipelineSettingsForm.test.tsx",
+        "src/lib/__tests__/chatOrchestrator.test.ts",
+        "src/lib/__tests__/correctionRunner.test.ts",
+        "src/lib/summarize.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "low",
+      "verification": {
+        "testMode": "existing-tests",
+        "testCommand": "npx eslint src/components/__tests__/PipelineSettingsForm.test.tsx src/lib/__tests__/chatOrchestrator.test.ts src/lib/__tests__/correctionRunner.test.ts src/lib/summarize.ts",
+        "additionalCommands": [
+          "npm test -- src/components/__tests__/PipelineSettingsForm.test.tsx src/lib/__tests__/chatOrchestrator.test.ts src/lib/__tests__/correctionRunner.test.ts",
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "전체 lint가 보고한 unused callback parameter 4개와 unused local 1개만 제거하며 기존 targeted test와 typecheck로 무동작 변경을 확인한다."
+      },
+      "blockIf": [
+        "lint를 통과시키기 위해 ESLint 규칙이나 ignore 설정을 바꿔야 하면 중단",
+        "기존 assertion, callback 호출 수, summarize 동작을 변경해야 하면 중단",
+        "unused 식별자 제거 외 리팩터링이나 새 helper가 필요하면 중단",
+        "허용된 네 파일 밖 수정이 필요하면 중단"
+      ],
+      "produces": []
     }
   ],
   "finalGate": [
