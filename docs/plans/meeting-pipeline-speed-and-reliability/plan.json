@@ -1,0 +1,647 @@
+{
+  "schemaVersion": 2,
+  "profile": "balanced-autonomous-v1",
+  "slug": "meeting-pipeline-speed-and-reliability",
+  "sourceRequest": "회의 종료 뒤 노트북을 바로 덮어 네트워크와 실행이 중단될 수 있는 실제 사용 흐름을 전제로, 녹음 종료부터 Whisper 전사, AI 교정, 회의록 요약까지의 시간을 품질 저하 없이 줄이고 실패를 정직하게 복구한다. 최초 처리는 자동으로 시작하되 실패·중단 뒤에는 자동 재시작이나 재연결 재개를 추가하지 않고 사용자가 수동 재시도한다. Whisper large-v3를 품질 우선 기본값으로 유지하면서 large-v3-turbo 선택과 명시적 모델 준비를 제공하고, 교정 결과 체크포인트, 안전한 CLI 구조화 출력, 기본 비활성의 제한 병렬 빠른 교정, 실제 회의용 격리 벤치마크 도구, app:status 오진 수정과 문서·synthetic browser 회귀를 하나의 single-PR 계획으로 구현한다.",
+  "publishStrategy": "single-pr",
+  "base": {
+    "ref": "origin/main",
+    "sha": "cd2a19716670a9dd70d0d3ad54a11991470f953d"
+  },
+  "workspace": {
+    "mode": "task-worktree-v1",
+    "branch": "execute/meeting-pipeline-speed-and-reliability"
+  },
+  "executionPrerequisites": {
+    "noSelfMutationOfRunningProcess": true,
+    "realModelCallsInTests": false,
+    "networkCallsInTests": false
+  },
+  "executionState": {
+    "summaryLedger": "local",
+    "journal": "git-dir",
+    "statusCommits": "none"
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "최초 전사·교정·요약은 지금처럼 자동 시작하되 한 번 실패하거나 중단된 작업은 자동 retry·재연결 resume 없이 사용자에게 실패로 남기고 수동 재시도로만 다시 시작한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "녹음 finalize와 최초 transcription/summarize dispatch는 기존처럼 자동이며 노트북 sleep이나 network 단절 자체를 감지하는 새 daemon, watchdog, online listener 또는 OS startup 항목을 추가하지 않는다.",
+        "전사 또는 최초 교정·요약이 명시적 실패 상태가 되면 background poller가 같은 작업을 다시 시작하지 않고 기존 상세 화면의 안전한 수동 재시도 action을 유지한다.",
+        "수동 재시도 전에는 오류와 기존 immutable/canonical artifact가 그대로 보이고, retry 접수만 오류를 지우며 중복 inflight 요청은 기존 operation/dispatch fence로 거부한다.",
+        "프로세스가 sleep 뒤 자연스럽게 계속 실행되는 것은 막지 않지만, 실패 뒤 network 복귀·앱 재기동만으로 새 attempt를 만들지 않는다.",
+        "supervisor 자동 재시작, OS 로그인 자동 실행, 자동 queue, stale watchdog, browser pipeline-stage 진행률 UI를 추가하지 않는다."
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "Whisper는 large-v3 품질 우선 기본값과 large-v3-turbo를 고정 선택지로 제공하고, 저장과 download를 분리한 명시적 모델 준비 및 dispatch별 모델 snapshot으로 품질·재시도 정합을 보장한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "새 pipeline settings의 UI 선택지는 large-v3(기본·품질 우선)와 large-v3-turbo뿐이며 임의 Hugging Face repo, filesystem path 또는 model 문자열 입력을 받지 않는다.",
+        "Apple Silicon MLX repo는 large-v3=mlx-community/whisper-large-v3-mlx, large-v3-turbo=mlx-community/whisper-large-v3-turbo로 고정 매핑하고 faster-whisper fallback도 같은 logical model을 사용한다.",
+        "설정 저장은 model download/load를 시작하지 않는다. 별도 모델 미리 준비 action만 비동기 prepare를 시작하고 준비 중·완료·안전한 실패를 표시하며, 최초 실제 전사는 준비되지 않은 model의 기존 lazy download 경로를 계속 허용한다.",
+        "새 transcription claim은 acceptance 시 effective model을 durable snapshot한다. 설정 변경은 이미 accepted/processing인 dispatch와 같은 dispatch의 수동 resume에 영향을 주지 않고 다음 새 dispatch부터 적용된다.",
+        "기존 schema-v1 claim과 claim-less legacy raw를 계속 읽는다. 기존 LOCAL_STT_MODEL/LOCAL_STT_MLX_REPO는 pipeline settings가 아직 없을 때만 legacy startup default로 보존하고, 저장된 pipeline setting이 생기면 그 fixed catalog가 정본이다.",
+        "Whisper model prepare와 inference는 하나의 bounded global execution fence를 공유해 동시 model swap·Metal/CPU memory contention을 만들지 않으며 per-meeting claim/lock과 raw-last publication 순서를 유지한다.",
+        "large-v3-turbo는 실제 동일 오디오 비교에서 중요 이름·숫자·결정 오류 증가가 0이고 large-v3 대비 wall time이 2배 이상 빨라야만 권장 후보가 된다. 구현만으로 기본값이나 권장 표시를 자동 변경하지 않는다."
+      ]
+    },
+    {
+      "id": "R3",
+      "text": "교정 성공 뒤 요약 실패·프로세스 중단이 발생해도 같은 안전한 교정 결과를 재사용하도록 local durable correction checkpoint를 도입한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "checkpoint는 meeting 내부 hidden app-summarize-owned JSON 한 개이며 transcript와 source identity를 포함하므로 data와 함께 local-only·gitignored로 유지되고 public DTO/log에 내용이나 path를 노출하지 않는다.",
+        "validity key는 raw SHA-256, glossary SHA-256, provider, model, normalized local provider endpoint identity, correction prompt version, correction mode와 chunk plan hash를 포함한다.",
+        "full-context 교정이 over-edit/contamination guard를 통과한 뒤 summary 호출 전에 temp write, file fsync, rename, parent-directory fsync 순서로 checkpoint를 commit한다.",
+        "같은 key의 manual retry는 correction model call을 생략하고 checkpoint transcript에서 summary만 다시 실행한다. provider/model/glossary/raw/prompt/mode가 바뀌면 checkpoint를 재사용하지 않고 새 교정을 수행한다.",
+        "summary 실패 또는 process interruption은 valid checkpoint를 보존하고, canonical pair publication 성공 뒤에만 checkpoint를 best-effort 삭제한다. 삭제 실패가 이미 commit된 pair를 rollback하지 않는다.",
+        "checkpoint read/write/delete는 tombstone fence, meeting operation lease와 artifact lock order를 거스르지 않으며 canonical transcript.md/summary.json은 기존 summarizePublisher만 발행한다."
+      ]
+    },
+    {
+      "id": "R4",
+      "text": "Claude/Codex CLI와 Ollama 호출을 자기완결·구조화 출력 경로로 강화하고 실제로 자르지 않는 40,000자 경고를 제거해 긴 회의의 실패 원인을 정직하게 만든다.",
+      "source": "user-approved",
+      "acceptance": [
+        "summary 생성은 generated-summary 전용 strict JSON Schema를 adapter에 전달한다. Claude는 지원 시 --json-schema, Codex는 지원 시 --output-schema와 bounded last-message file, Ollama는 format JSON Schema object를 사용한다.",
+        "optional CLI flag는 process당 bounded help capability probe 결과로만 사용하고, 생성 호출이 시작된 뒤 unsupported flag를 이유로 같은 prompt를 자동 재실행하지 않는다. schema 미지원 버전은 기존 JSON hint와 tolerant parser로 한 번만 실행한다.",
+        "Claude는 OAuth를 유지하는 safe-mode/no-session-persistence/tools-off 격리를 지원 범위에서 사용하고 기존 temp cwd, MCP/slash off와 paid-billing env scrub을 보존한다. Codex는 지원 범위에서 ephemeral/ignore-user-config/ignore-rules, read-only temp cwd를 사용한다.",
+        "chat의 generic JSON envelope와 summary schema output을 adapter option에서 구분하며 기존 fenced/prose JSON salvage와 schema validation/fallback은 최종 방어선으로 유지한다.",
+        "현재 40,000자 초과 시 앞부분만 반영됐다고 쓰는 notice와 truncated 결과는 제거한다. full mode는 전체 transcript를 prompt에 넣고 provider context/timeout이 실제 실패하면 safe retry_summary 오류와 checkpoint를 남긴다.",
+        "LLM generation timeout의 실제 코드값 30분과 UI 최악 예산을 정본 문서·ADR에서 일치시키고 과거 600초 설명은 신규 ADR에서 부분 대체한다.",
+        "API key 저장·유료 API 직접 호출·prompt/provider raw output 공개·새 third-party dependency를 추가하지 않는다."
+      ]
+    },
+    {
+      "id": "R5",
+      "text": "기본 full-context 품질 모드는 유지하면서 사용자가 명시적으로 켤 수 있는 deterministic chunked fast correction을 제한 병렬로 구현하고 chunk별 durable resume를 제공한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "pipeline setting correction.mode의 기본값은 full이며 fast는 기본 비활성·실험적 선택이다. 기존 회의와 설정 파일이 없는 설치는 full로 동작한다.",
+        "fast planner는 immutable segments/raw의 자연 경계를 사용해 stable target chunks를 만들고 필요한 앞뒤 문맥은 read-only context로만 제공한다. model은 target text만 출력하며 merge에서 원문 target의 누락·중복·순서 변경을 허용하지 않는다.",
+        "동시 correction call 상한은 Claude/Codex CLI 2, Ollama 1이고 summary는 모든 correction chunk가 검증·commit된 뒤 정확히 한 번 실행한다.",
+        "각 valid chunk 결과를 동일 checkpoint에 durable commit해 수동 retry가 완료 chunk를 exact key로 재사용한다. 한 chunk 실패 시 남은 새 chunk를 자동 시작하거나 full mode로 몰래 fallback하지 않고 사용자-visible 실패로 끝낸다.",
+        "chunk 결과 각각에 over-edit/contamination/empty guard를 적용하고 전체 merge에도 coverage와 sanity guard를 적용한다. 실패 결과를 raw로 조용히 대체해 성공으로 표시하지 않는다.",
+        "fast mode는 동일 transcript/provider 비교에서 중요 이름·숫자·결정 오류 증가가 0이고 full 대비 wall time이 30% 이상 단축돼야 권장 후보가 된다. 구현만으로 품질 우선 default를 바꾸지 않는다."
+      ]
+    },
+    {
+      "id": "R6",
+      "text": "동일 실제 회의를 원본 변경 없이 비교할 수 있는 명시적 격리 benchmark를 제공해 Whisper model과 correction mode의 속도·품질 결정을 증거 기반으로 만든다.",
+      "source": "user-approved",
+      "acceptance": [
+        "benchmark command는 사용자가 exact meeting ID를 명시했을 때만 실행되고 original data/meeting artifact를 읽기 전용으로 사용하며, isolated runtime snapshot에서 large-v3 대 turbo와 full 대 fast를 각각 비교한다.",
+        "실제 audio/transcript/glossary와 provider 전송은 사용자가 승인한 explicit benchmark 실행에서만 허용한다. npm test, final gate, Playwright와 일반 app startup은 실제 meeting, model call 또는 외부 network를 사용하지 않는다.",
+        "output은 gitignored .ai-note-runtime/benchmarks 아래 mode 0700 run directory에만 두고 raw/corrected 비교본, hashes, stage wall times, model/provider identity와 review template를 남긴다. transcript/audio/provider output을 terminal, Git, public API 또는 generic log에 출력하지 않는다.",
+        "benchmark는 source meeting을 수정·재요약·dispatch하지 않고 canonical publisher나 real status/library writer를 호출하지 않는다. interruption은 snapshot만 실패로 남기며 자동 retry하지 않는다.",
+        "report는 2x Turbo와 30% fast threshold를 계산하되 중요 이름·숫자·결정의 사람 검수 결과가 없으면 추천 가능으로 판정하지 않는다.",
+        "실제 benchmark 결과에 따른 권장 label/default 변경은 이 plan에서 자동 결정하지 않고 사용자 검토 뒤 별도 승인으로 남긴다."
+      ]
+    },
+    {
+      "id": "R7",
+      "text": "runtime 상태 오진을 고치고 새 pipeline 계약을 정본 문서·ADR와 isolated synthetic Playwright 회귀로 검증한다.",
+      "source": "observed-bug",
+      "acceptance": [
+        "npm run app:status와 bootstrap health probe는 Next local request guard가 정본으로 인정하는 http://localhost:<actual-port> authority를 사용해 살아 있는 Whisper를 403/not_ready로 오진하지 않는다.",
+        "status 수정은 ownership token, stale PID no-signal, bounded dynamic ports, 127.0.0.1 bind와 canonical browser URL 계약을 바꾸지 않는다.",
+        "README, CONTRIBUTING, AGENTS, src/whisper/scripts module instructions, PRD, ARCHITECTURE, UI_GUIDE, CHANGELOG와 ADR index가 model selection/prepare, manual failure retry, checkpoint, correction modes, benchmark, 30-minute timeout과 non-goals를 일치시킨다.",
+        "신규 ADR 0024는 quality-first model/correction defaults, dispatch model snapshot, manual retry checkpoint, provider isolation/schema, benchmark decision gate를 기록하고 ADR 0001/0009/0010/0012/0013/0014/0020/0023 경계를 보존하거나 명시적으로 부분 대체한다.",
+        "repository-owned Playwright는 desktop-1440, mobile-390, mobile-320에서 pipeline setting default, 두 Whisper 선택지, save-no-download, explicit prepare 상태, fast-mode opt-in과 failure/manual retry 상태를 synthetic route로 검증한다.",
+        "browser test는 actual data, glossary, .env, Whisper/Ollama/Claude/Codex, model download와 external network를 사용하지 않고 screenshots/assertions/console evidence를 test-results 또는 execute journal에만 남긴다.",
+        "별도 Controller is already closed 녹음 오류, progress-stage UI, summary map-reduce, auto resume/retry, supervisor restart/autostart와 전체 UI redesign은 이 plan에서 수정하지 않는다."
+      ]
+    }
+  ],
+  "globalConstraints": {
+    "noUnplannedWork": true,
+    "noOpportunisticRefactor": true,
+    "noRealUserData": true
+  },
+  "forbiddenPaths": [
+    "data/**",
+    ".env*",
+    "glossary.json",
+    "fixtures/**",
+    "package-lock.json",
+    "whisper/pyproject.toml",
+    "whisper/uv.lock",
+    ".github/**",
+    ".husky/**",
+    "docs/plans/**",
+    "src/lib/summarizePublisher.ts",
+    "src/lib/artifactPair.ts",
+    "src/domain/summarySchema.ts",
+    "src/lib/library.ts",
+    "src/lib/libraryRepository.ts"
+  ],
+  "browserEvidence": {
+    "mode": "playwright",
+    "preflightCommand": "npm run test:e2e:doctor",
+    "verifyCommand": "npm run test:e2e",
+    "requiredArtifacts": [
+      "screenshots",
+      "assertions",
+      "console"
+    ],
+    "viewports": [
+      "desktop-1440",
+      "mobile-390",
+      "mobile-320"
+    ],
+    "dataPolicy": "synthetic-only"
+  },
+  "phases": [
+    {
+      "id": 1,
+      "name": "quality-first-whisper-models",
+      "file": "phase-1-quality-first-whisper-models.md",
+      "requirements": [
+        "R2",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "whisper/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PRD.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0001-local-whisper-batch.md",
+        "docs/decisions/0012-local-ingress-and-fixed-id-service-boundary.md",
+        "docs/decisions/0014-durable-transcription-dispatch.md",
+        "docs/decisions/0023-installation-and-first-run-ux.md",
+        "src/lib/atomicWrite.ts",
+        "src/lib/config.ts",
+        "src/lib/transcribe.ts",
+        "src/lib/transcriptionArtifacts.ts",
+        "src/lib/__tests__/transcriptionArtifacts.test.ts",
+        "src/services/whisperClient.ts",
+        "src/services/__tests__/whisperClient.test.ts",
+        "src/app/api/whisper/health/route.ts",
+        "src/app/api/__tests__/routes.integration.test.ts",
+        "src/app/settings/page.tsx",
+        "src/components/healthStatus.ts",
+        "src/components/useHealth.ts",
+        "src/components/__tests__/healthStatus.test.ts",
+        "src/components/__tests__/useHealth.test.tsx",
+        "src/components/__tests__/views.test.tsx",
+        "whisper/server.py",
+        "whisper/__tests__/server.contract.test.ts",
+        "e2e/installation-and-first-run.spec.ts"
+      ],
+      "allowedPaths": [
+        "src/lib/pipelineSettings.ts",
+        "src/lib/__tests__/pipelineSettings.test.ts",
+        "src/lib/transcriptionArtifacts.ts",
+        "src/lib/__tests__/transcriptionArtifacts.test.ts",
+        "src/services/whisperClient.ts",
+        "src/services/__tests__/whisperClient.test.ts",
+        "src/lib/publicApi.ts",
+        "src/lib/__tests__/publicApi.test.ts",
+        "src/app/api/settings/pipeline/route.ts",
+        "src/app/api/whisper/models/prepare/route.ts",
+        "src/app/api/whisper/health/route.ts",
+        "src/app/api/__tests__/routes.integration.test.ts",
+        "src/components/PipelineSettingsForm.tsx",
+        "src/components/__tests__/PipelineSettingsForm.test.tsx",
+        "src/components/healthStatus.ts",
+        "src/components/useHealth.ts",
+        "src/components/__tests__/healthStatus.test.ts",
+        "src/components/__tests__/useHealth.test.tsx",
+        "src/app/settings/page.tsx",
+        "whisper/model_catalog.py",
+        "whisper/server.py",
+        "whisper/__tests__/server.contract.test.ts",
+        "e2e/installation-and-first-run.spec.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "critical",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- whisper/__tests__/server.contract.test.ts src/services/__tests__/whisperClient.test.ts src/lib/__tests__/pipelineSettings.test.ts src/lib/__tests__/transcriptionArtifacts.test.ts src/lib/__tests__/publicApi.test.ts src/app/api/__tests__/routes.integration.test.ts src/components/__tests__/PipelineSettingsForm.test.tsx src/components/__tests__/healthStatus.test.ts src/components/__tests__/useHealth.test.tsx",
+        "additionalCommands": [
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "모델 선택·prepare ingress·claim migration·global inference fence가 immutable 전사와 local-only 경계에 닿으므로 download/network를 fake한 실패 테스트로 먼저 고정한다."
+      },
+      "blockIf": [
+        "large-v3를 기존 설정 없는 설치의 기본값에서 내리거나 Turbo를 자동 권장/default로 올려야 하면 중단",
+        "browser가 arbitrary repo/path/model을 Whisper에 전달해야 하면 중단",
+        "POST /transcribe의 exact meetingId/dispatchId body나 raw-last publication 순서를 넓혀야 하면 중단",
+        "model 저장만으로 network/download/load가 발생해야 하면 중단",
+        "같은 accepted dispatch의 retry에서 다른 model로 partial segments를 이어 써야 하면 중단",
+        "actual model download, real audio 또는 external network가 test에 필요하면 중단",
+        "새 Python/npm dependency 또는 forbidden path 변경이 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "src/lib/pipelineSettings.ts",
+        "src/lib/__tests__/pipelineSettings.test.ts",
+        "src/app/api/settings/pipeline/route.ts",
+        "src/app/api/whisper/models/prepare/route.ts",
+        "src/components/PipelineSettingsForm.tsx",
+        "src/components/__tests__/PipelineSettingsForm.test.tsx",
+        "whisper/model_catalog.py"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "durable-correction-checkpoint",
+      "file": "phase-2-durable-correction-checkpoint.md",
+      "requirements": [
+        "R1",
+        "R3"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0011-library-registry-and-durable-commits.md",
+        "docs/decisions/0013-durable-summarize-pair-publication.md",
+        "docs/decisions/0015-durable-meeting-tombstone.md",
+        "docs/decisions/0021-manual-transcript-and-summary-editing.md",
+        "src/domain/meeting.ts",
+        "src/lib/atomicWrite.ts",
+        "src/lib/artifactLease.ts",
+        "src/lib/artifactPair.ts",
+        "src/lib/glossary.ts",
+        "src/lib/meetingLifecycle.ts",
+        "src/lib/meetingTombstone.ts",
+        "src/lib/paths.ts",
+        "src/lib/status.ts",
+        "src/lib/summarize.ts",
+        "src/lib/summarizeCore.ts",
+        "src/lib/summarizePublisher.ts",
+        "src/lib/summarizeWorker.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizeWorker.test.ts",
+        "src/app/api/meetings/*/summarize/route.ts",
+        "src/app/api/summarize/route.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "allowedPaths": [
+        "src/lib/summarizeCheckpoint.ts",
+        "src/lib/__tests__/summarizeCheckpoint.test.ts",
+        "src/lib/summarize.ts",
+        "src/lib/summarizeWorker.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizeWorker.test.ts",
+        "src/app/api/__tests__/routes.integration.test.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "critical",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- src/lib/__tests__/summarizeCheckpoint.test.ts src/lib/__tests__/summarize.test.ts src/lib/__tests__/summarizeWorker.test.ts src/app/api/__tests__/routes.integration.test.ts",
+        "additionalCommands": [
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "PII가 든 교정 checkpoint와 실패 후 worker candidacy가 canonical pair publication·tombstone·lock order에 닿으므로 crash/mismatch/manual retry를 durable TDD로 먼저 고정한다."
+      },
+      "blockIf": [
+        "checkpoint를 data 밖, Git 경로, status.json public field 또는 generic log에 저장해야 하면 중단",
+        "checkpoint가 raw/glossary/provider/model/prompt/mode identity mismatch에도 재사용돼야 하면 중단",
+        "summary 실패가 성공한 correction을 다시 실행하거나 background worker가 실패 attempt를 자동 retry해야 하면 중단",
+        "canonical transcript.md/summary.json을 summarizePublisher 밖에서 쓰거나 summary-first로 발행해야 하면 중단",
+        "tombstone fence 또는 meeting operation→artifact lock order를 약화해야 하면 중단",
+        "manual retry가 existing checkpoint를 쓰기 위해 user-visible artifact를 삭제해야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "src/lib/summarizeCheckpoint.ts",
+        "src/lib/__tests__/summarizeCheckpoint.test.ts"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "isolated-structured-llm-invocation",
+      "file": "phase-3-isolated-structured-llm-invocation.md",
+      "requirements": [
+        "R4"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0002-claude-command-no-app-llm.md",
+        "docs/decisions/0009-async-resummarize-failure-visibility.md",
+        "docs/decisions/0010-isolated-claude-summarize-invocation.md",
+        "src/domain/summary.ts",
+        "src/domain/summarySchema.ts",
+        "src/lib/chatOrchestrator.ts",
+        "src/lib/summarize.ts",
+        "src/lib/summarizeCore.ts",
+        "src/lib/summarizePrompts.ts",
+        "src/lib/__tests__/chatOrchestrator.test.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizeCore.test.ts",
+        "src/lib/__tests__/summarizePrompts.test.ts",
+        "src/services/llm/types.ts",
+        "src/services/llm/exec.ts",
+        "src/services/llm/claudeCli.ts",
+        "src/services/llm/codexCli.ts",
+        "src/services/llm/ollama.ts",
+        "src/services/llm/fake.ts",
+        "src/services/llm/__tests__/claudeCli.test.ts",
+        "src/services/llm/__tests__/codexCli.test.ts",
+        "src/services/llm/__tests__/ollama.test.ts",
+        "src/services/llm/__tests__/fake.test.ts"
+      ],
+      "allowedPaths": [
+        "src/domain/generatedSummaryJsonSchema.ts",
+        "src/domain/__tests__/generatedSummaryJsonSchema.test.ts",
+        "src/lib/summarize.ts",
+        "src/lib/summarizeCore.ts",
+        "src/lib/summarizePrompts.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/lib/__tests__/summarizeCore.test.ts",
+        "src/lib/__tests__/summarizePrompts.test.ts",
+        "src/lib/chatOrchestrator.ts",
+        "src/lib/__tests__/chatOrchestrator.test.ts",
+        "src/services/llm/types.ts",
+        "src/services/llm/cliCapabilities.ts",
+        "src/services/llm/claudeCli.ts",
+        "src/services/llm/codexCli.ts",
+        "src/services/llm/ollama.ts",
+        "src/services/llm/fake.ts",
+        "src/services/llm/__tests__/cliCapabilities.test.ts",
+        "src/services/llm/__tests__/claudeCli.test.ts",
+        "src/services/llm/__tests__/codexCli.test.ts",
+        "src/services/llm/__tests__/ollama.test.ts",
+        "src/services/llm/__tests__/fake.test.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "critical",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- src/domain/__tests__/generatedSummaryJsonSchema.test.ts src/services/llm/__tests__/cliCapabilities.test.ts src/services/llm/__tests__/claudeCli.test.ts src/services/llm/__tests__/codexCli.test.ts src/services/llm/__tests__/ollama.test.ts src/services/llm/__tests__/fake.test.ts src/lib/__tests__/summarizeCore.test.ts src/lib/__tests__/summarizePrompts.test.ts src/lib/__tests__/summarize.test.ts src/lib/__tests__/chatOrchestrator.test.ts",
+        "additionalCommands": [
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "외부 CLI 인자·schema·temp output과 fallback 호출 수가 실제 provider work의 안정성·중복 실행·$0 불변식에 직접 영향을 주므로 injected process/fetch 테스트로 먼저 고정한다."
+      },
+      "blockIf": [
+        "Claude safe mode를 위해 OAuth/keychain을 끄는 --bare 또는 paid API credential이 필요하면 중단",
+        "Codex/Claude capability 확인 뒤에도 unsupported flag로 실제 generation을 한 번 실행하고 재시도해야 하면 중단",
+        "summary schema가 manual body, titleOverride 또는 status.review participants의 writer ownership을 바꿔야 하면 중단",
+        "structured output을 위해 tolerant parser/schema validator를 제거해야 하면 중단",
+        "40,000자 notice 제거 대신 실제 transcript를 조용히 truncate해야 하면 중단",
+        "prompt, transcript, raw provider output, schema/output temp file을 argv·public response·generic log에 넣어야 하면 중단",
+        "새 dependency 또는 allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "src/domain/generatedSummaryJsonSchema.ts",
+        "src/domain/__tests__/generatedSummaryJsonSchema.test.ts",
+        "src/services/llm/cliCapabilities.ts",
+        "src/services/llm/__tests__/cliCapabilities.test.ts"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "optional-fast-correction-and-benchmark",
+      "file": "phase-4-optional-fast-correction-and-benchmark.md",
+      "requirements": [
+        "R3",
+        "R5",
+        "R6"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "src/CLAUDE.md",
+        "whisper/CLAUDE.md",
+        "scripts/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PRD.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/0001-local-whisper-batch.md",
+        "docs/decisions/0006-lean-mvp-defer-v2.md",
+        "docs/decisions/0009-async-resummarize-failure-visibility.md",
+        "docs/decisions/0013-durable-summarize-pair-publication.md",
+        "docs/decisions/0014-durable-transcription-dispatch.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "package.json",
+        ".gitignore",
+        "scripts/bootstrap.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/meeting-summarize.mjs",
+        "scripts/__tests__/bootstrap.test.mjs",
+        "scripts/__tests__/meeting-summarize.test.mjs",
+        "src/lib/pipelineSettings.ts",
+        "src/lib/summarizeCheckpoint.ts",
+        "src/lib/summarize.ts",
+        "src/lib/summarizeCore.ts",
+        "src/lib/transcriptionArtifacts.ts",
+        "src/lib/__tests__/summarizeCheckpoint.test.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/services/llm/types.ts",
+        "src/components/PipelineSettingsForm.tsx",
+        "src/components/__tests__/PipelineSettingsForm.test.tsx",
+        "whisper/model_catalog.py",
+        "whisper/server.py",
+        "whisper/__tests__/server.contract.test.ts",
+        "e2e/installation-and-first-run.spec.ts"
+      ],
+      "allowedPaths": [
+        "package.json",
+        "scripts/meeting-pipeline-benchmark.mjs",
+        "scripts/__tests__/meeting-pipeline-benchmark.test.mjs",
+        "src/lib/pipelineSettings.ts",
+        "src/lib/__tests__/pipelineSettings.test.ts",
+        "src/lib/correctionChunks.ts",
+        "src/lib/correctionRunner.ts",
+        "src/lib/__tests__/correctionChunks.test.ts",
+        "src/lib/__tests__/correctionRunner.test.ts",
+        "src/lib/summarizeCheckpoint.ts",
+        "src/lib/__tests__/summarizeCheckpoint.test.ts",
+        "src/lib/summarize.ts",
+        "src/lib/__tests__/summarize.test.ts",
+        "src/components/PipelineSettingsForm.tsx",
+        "src/components/__tests__/PipelineSettingsForm.test.tsx",
+        "whisper/benchmark.py",
+        "whisper/__tests__/server.contract.test.ts",
+        "e2e/installation-and-first-run.spec.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "critical",
+      "verification": {
+        "testMode": "strict-tdd",
+        "testCommand": "npm test -- src/lib/__tests__/pipelineSettings.test.ts src/lib/__tests__/correctionChunks.test.ts src/lib/__tests__/correctionRunner.test.ts src/lib/__tests__/summarizeCheckpoint.test.ts src/lib/__tests__/summarize.test.ts src/components/__tests__/PipelineSettingsForm.test.tsx scripts/__tests__/meeting-pipeline-benchmark.test.mjs whisper/__tests__/server.contract.test.ts",
+        "additionalCommands": [
+          "npm run typecheck"
+        ],
+        "evidence": [],
+        "reason": "chunk coverage·bounded concurrency·resume와 real-data benchmark isolation은 누락/중복 교정, 과도한 provider call, 원본 오염 위험이 있어 synthetic segments와 fake subprocess로 결정적으로 먼저 검증한다."
+      },
+      "blockIf": [
+        "full mode 기본값을 바꾸거나 benchmark 전 fast를 품질 우선 권장으로 표시해야 하면 중단",
+        "chunk target의 누락·중복·재정렬을 검출하지 못하거나 read-only overlap을 merge output에 포함해야 하면 중단",
+        "CLI 동시성 2 또는 Ollama 동시성 1을 넘겨야 성능 목표를 맞출 수 있으면 중단",
+        "한 chunk 실패 뒤 남은 chunk나 full fallback을 자동 실행해야 하면 중단",
+        "benchmark가 exact meeting ID 없이 latest를 추측하거나 original data/status/library/canonical artifact를 수정해야 하면 중단",
+        "benchmark output을 Git, docs/media, terminal 본문 또는 public API에 남겨야 하면 중단",
+        "automated test/final gate에서 actual audio, user glossary, real provider, model download 또는 external network가 필요하면 중단",
+        "새 dependency, package-lock.json 또는 allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "scripts/meeting-pipeline-benchmark.mjs",
+        "scripts/__tests__/meeting-pipeline-benchmark.test.mjs",
+        "src/lib/correctionChunks.ts",
+        "src/lib/correctionRunner.ts",
+        "src/lib/__tests__/correctionChunks.test.ts",
+        "src/lib/__tests__/correctionRunner.test.ts",
+        "whisper/benchmark.py"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "runtime-diagnostics-and-canonical-docs",
+      "file": "phase-5-runtime-diagnostics-and-canonical-docs.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "README.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        "src/CLAUDE.md",
+        "whisper/CLAUDE.md",
+        "scripts/CLAUDE.md",
+        "docs/PRD.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/README.md",
+        "docs/decisions/0001-local-whisper-batch.md",
+        "docs/decisions/0009-async-resummarize-failure-visibility.md",
+        "docs/decisions/0010-isolated-claude-summarize-invocation.md",
+        "docs/decisions/0012-local-ingress-and-fixed-id-service-boundary.md",
+        "docs/decisions/0013-durable-summarize-pair-publication.md",
+        "docs/decisions/0014-durable-transcription-dispatch.md",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "docs/decisions/0023-installation-and-first-run-ux.md",
+        "scripts/bootstrap.mjs",
+        "scripts/__tests__/bootstrap.test.mjs",
+        "src/lib/pipelineSettings.ts",
+        "src/lib/summarizeCheckpoint.ts",
+        "src/lib/correctionRunner.ts",
+        "src/services/llm/exec.ts",
+        "whisper/model_catalog.py",
+        "whisper/server.py"
+      ],
+      "allowedPaths": [
+        "scripts/bootstrap.mjs",
+        "scripts/__tests__/bootstrap.test.mjs",
+        "AGENTS.md",
+        "README.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        "src/CLAUDE.md",
+        "whisper/CLAUDE.md",
+        "scripts/CLAUDE.md",
+        "docs/PRD.md",
+        "docs/ARCHITECTURE.md",
+        "docs/UI_GUIDE.md",
+        "docs/decisions/README.md",
+        "docs/decisions/0024-quality-first-meeting-pipeline.md"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "verification": {
+        "testMode": "regression",
+        "testCommand": "npm test -- scripts/__tests__/bootstrap.test.mjs",
+        "additionalCommands": [
+          "npm run check:links"
+        ],
+        "evidence": [],
+        "reason": "app:status의 127.0.0.1 Host 오진을 regression test로 고정하고, 검증된 최종 동작만 정본 문서와 신규 ADR에 반영한다."
+      },
+      "blockIf": [
+        "localhost probe 수정이 app/Whisper bind를 127.0.0.1 밖으로 넓혀야 하면 중단",
+        "runtime ownership 확인이 안 된 PID에 signal을 보내거나 fixed port process를 재사용해야 하면 중단",
+        "historical ADR을 삭제·재작성하거나 새 ADR이 기존 tombstone/publisher/fixed-ID 경계를 대체해야 하면 중단",
+        "actual benchmark가 아직 없는데 Turbo/fast를 권장·default로 문서화해야 하면 중단",
+        "문서가 auto resume, auto retry, stage progress UI, supervisor restart/autostart 또는 summary map-reduce를 구현됐다고 말해야 하면 중단",
+        "코드와 test가 확정하지 않은 behavior를 문서화해야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ],
+      "produces": [
+        "docs/decisions/0024-quality-first-meeting-pipeline.md"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "synthetic-pipeline-browser-verification",
+      "file": "phase-6-synthetic-pipeline-browser-verification.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R5",
+        "R7"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "package.json",
+        "playwright.config.ts",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "docs/decisions/0024-quality-first-meeting-pipeline.md",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "scripts/run-e2e.mjs",
+        "e2e/installation-and-first-run.spec.ts",
+        "e2e/support/synthetic-test.ts",
+        "e2e/support/evidence-reporter.ts",
+        "src/components/PipelineSettingsForm.tsx",
+        "src/components/MeetingDetailView.tsx"
+      ],
+      "allowedPaths": [],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "executionMode": "verify-only",
+      "requiresBrowser": true,
+      "dataPolicy": "synthetic-only",
+      "verification": {
+        "testMode": "exempt",
+        "additionalCommands": [
+          "npm run test:e2e"
+        ],
+        "evidence": [
+          "browser"
+        ],
+        "reason": "제품 수정 없이 committed synthetic pipeline scenario를 pinned Chromium의 세 viewport에서 실행해 설정·prepare·manual failure recovery와 evidence contract를 최종 확인한다."
+      },
+      "blockIf": [
+        "npm run test:e2e:doctor가 pinned package와 matching Chromium을 확인하지 못하면 중단",
+        "workspace data, glossary, .env, Git metadata 또는 .ai-note-runtime benchmark output을 snapshot에 포함해야 하면 중단",
+        "실제 Whisper, model download, Ollama, Claude/Codex CLI 또는 external network를 호출해야 하면 중단",
+        "desktop-1440, mobile-390, mobile-320 중 하나라도 실행할 수 없으면 중단",
+        "large-v3 default, Turbo option, save-no-download, explicit prepare state, full default, fast opt-in 또는 failure/manual retry assertion이 실패하면 중단",
+        "320px에서 horizontal overflow, 44px control target 또는 visible focus가 깨지면 중단",
+        "console error, page error, external request 또는 required artifact 누락이 있으면 중단",
+        "검증 전후 제품 tree가 달라지면 중단"
+      ],
+      "produces": []
+    }
+  ],
+  "finalGate": [
+    "npm test",
+    "npm run typecheck",
+    "npm run lint",
+    "npm run check:links",
+    "npm run build"
+  ]
+}
