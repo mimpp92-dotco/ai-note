@@ -258,7 +258,7 @@ test("installation first run, provider models, summary default, and transcriptio
     "내 정보가 없어도 녹음·전사·일반 검색을 사용할 수 있습니다.",
   )).toBeVisible();
   const pipelineSection = page.locator("section[aria-labelledby='pipeline-settings-heading']");
-  const whisperModel = pipelineSection.getByLabel("Whisper 모델");
+  const whisperModel = pipelineSection.getByLabel("Whisper 모델", { exact: true });
   const correctionMode = pipelineSection.getByLabel("교정 방식");
   await expect(whisperModel).toHaveValue("large-v3");
   await expect(correctionMode).toHaveValue("full");
