@@ -17,6 +17,10 @@ export interface WhisperHealthState {
   ready?: boolean;
   model?: string | null;
   message?: string | null;
+  modelPreparation?: Array<{
+    model: "large-v3" | "large-v3-turbo";
+    status: "idle" | "preparing" | "ready" | "error";
+  }>;
 }
 
 export type LlmHealthState =

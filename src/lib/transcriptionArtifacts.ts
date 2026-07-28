@@ -13,14 +13,55 @@ import { z } from "zod";
 
 import { meetingPaths } from "@/lib/paths";
 
-const claimSchema = z.object({
-  schemaVersion: z.literal(1),
+const claimFields = {
   meetingId: z.string(),
   dispatchId: z.string().uuid(),
   audioSha256: z.string().regex(/^[a-f0-9]{64}$/u),
   phase: z.enum(["accepted", "segments_published", "raw_published"]),
-  durability: z.enum(["pending", "durable", "best_effort"]),
+};
+const durabilitySchema = z.enum(["pending", "durable", "best_effort"]);
+
+const claimV1Schema = z.object({
+  schemaVersion: z.literal(1),
+  ...claimFields,
+  durability: durabilitySchema.default("best_effort"),
 }).strict();
+
+const catalogModelSnapshotSchema = z.union([
+  z.object({
+    source: z.literal("catalog"),
+    id: z.literal("large-v3"),
+    mlxRepo: z.literal("mlx-community/whisper-large-v3-mlx"),
+    fasterWhisperModel: z.literal("large-v3"),
+  }).strict(),
+  z.object({
+    source: z.literal("catalog"),
+    id: z.literal("large-v3-turbo"),
+    mlxRepo: z.literal("mlx-community/whisper-large-v3-turbo"),
+    fasterWhisperModel: z.literal("large-v3-turbo"),
+  }).strict(),
+]);
+const legacyModelIdentity = z.string().min(1).max(128).refine(
+  (value) => !/[\u0000\r\n]/u.test(value),
+);
+const legacyRepoIdentity = z.string().min(1).max(512).refine(
+  (value) => !/[\u0000\r\n]/u.test(value),
+);
+const legacyModelSnapshotSchema = z.object({
+  source: z.literal("legacy"),
+  id: legacyModelIdentity,
+  mlxRepo: legacyRepoIdentity,
+  fasterWhisperModel: legacyModelIdentity,
+}).strict().refine((value) => value.id === value.fasterWhisperModel);
+
+const claimV2Schema = z.object({
+  schemaVersion: z.literal(2),
+  ...claimFields,
+  model: z.union([catalogModelSnapshotSchema, legacyModelSnapshotSchema]),
+  durability: durabilitySchema,
+}).strict();
+
+const claimSchema = z.union([claimV1Schema, claimV2Schema]);
 
 export type TranscriptionPublication =
   | {

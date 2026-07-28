@@ -1,3 +1,4 @@
+import { PipelineSettingsForm } from "@/components/PipelineSettingsForm";
 import { SettingsForm } from "@/components/SettingsForm";
 import { UserProfileForm } from "@/components/UserProfileForm";
 
@@ -13,6 +14,7 @@ export default function SettingsPage() {
         </p>
       </div>
       <div className="min-w-0 space-y-10">
+        <PipelineSettingsForm />
         <SettingsForm embedded />
         <UserProfileForm />
       </div>

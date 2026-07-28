@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import {
   existsSync,
@@ -18,6 +19,20 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const SERVER = join(process.cwd(), "whisper", "server.py");
 const DISPATCH_A = "20000000-0000-4000-8000-000000000001";
 const DISPATCH_B = "20000000-0000-4000-8000-000000000002";
+const CATALOG = {
+  "large-v3": {
+    source: "catalog",
+    id: "large-v3",
+    mlxRepo: "mlx-community/whisper-large-v3-mlx",
+    fasterWhisperModel: "large-v3",
+  },
+  "large-v3-turbo": {
+    source: "catalog",
+    id: "large-v3-turbo",
+    mlxRepo: "mlx-community/whisper-large-v3-turbo",
+    fasterWhisperModel: "large-v3-turbo",
+  },
+} as const;
 
 let proc: ChildProcess;
 let base: string;
@@ -83,6 +98,51 @@ async function dispatch(meetingId: string, dispatchId: string, extra: Record<str
   });
 }
 
+async function prepareModel(
+  origin: string,
+  model: "large-v3" | "large-v3-turbo",
+  extra: Record<string, unknown> = {},
+) {
+  return serviceFetch(`${origin}/models/prepare`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, ...extra }),
+  });
+}
+
+async function pollPreparation(
+  origin: string,
+  model: "large-v3" | "large-v3-turbo",
+  want: "ready" | "error",
+) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const response = await serviceFetch(`${origin}/health`);
+    const body = await response.json() as {
+      ready: boolean;
+      modelPreparation: Array<{ model: string; status: string }>;
+    };
+    expect(body.ready).toBe(true);
+    const state = body.modelPreparation.find((item) => item.model === model);
+    if (state?.status === want) return body;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  throw new Error(`model ${model} did not reach ${want}`);
+}
+
+function writePipelineSettings(
+  root: string,
+  model: "large-v3" | "large-v3-turbo",
+  correction: "full" | "fast" = "full",
+) {
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "pipeline-settings.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    transcription: { model },
+    correction: { mode: correction },
+  })}\n`);
+}
+
 async function pollJob(meetingId: string, dispatchId: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -123,11 +183,61 @@ describe.sequential("whisper fixed-ID local service contract", () => {
     const ok = await serviceFetch(`${base}/health`);
     expect(ok.status).toBe(200);
     expect(ok.headers.get("access-control-allow-origin")).toBeNull();
-    await expect(ok.json()).resolves.toMatchObject({ ok: true, ready: true, model: "fake" });
+    await expect(ok.json()).resolves.toMatchObject({
+      ok: true,
+      ready: true,
+      model: "fake",
+      modelPreparation: [
+        { model: "large-v3", status: "idle" },
+        { model: "large-v3-turbo", status: "idle" },
+      ],
+    });
 
     const rejected = await rawGetWithHost("localhost.evil");
     expect(rejected.status).toBe(403);
     expect(rejected.body).toMatchObject({ error: { code: "invalid_host" } });
+  });
+
+  it("uses an exact fixed catalog for both MLX and faster-whisper identities", () => {
+    const probe = spawnSync("python3", ["-c", [
+      "import json, sys",
+      `sys.path.insert(0, ${JSON.stringify(join(process.cwd(), "whisper"))})`,
+      "import model_catalog",
+      "print(json.dumps(model_catalog.MODEL_CATALOG, sort_keys=True))",
+    ].join(";")], {
+      encoding: "utf8",
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    expect(probe.status, probe.stderr).toBe(0);
+    expect(JSON.parse(probe.stdout)).toEqual({
+      "large-v3": {
+        id: "large-v3",
+        mlxRepo: "mlx-community/whisper-large-v3-mlx",
+        fasterWhisperModel: "large-v3",
+        source: "catalog",
+      },
+      "large-v3-turbo": {
+        id: "large-v3-turbo",
+        mlxRepo: "mlx-community/whisper-large-v3-turbo",
+        fasterWhisperModel: "large-v3-turbo",
+        source: "catalog",
+      },
+    });
+  });
+
+  it("starts explicit preparation asynchronously without changing service readiness", async () => {
+    expect((await prepareModel(base, "large-v3", { repo: "arbitrary/repo" })).status).toBe(400);
+    const accepted = await prepareModel(base, "large-v3");
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toEqual({
+      model: "large-v3",
+      status: "preparing",
+    });
+    const health = await pollPreparation(base, "large-v3", "ready");
+    expect(health.modelPreparation).toContainEqual({
+      model: "large-v3",
+      status: "ready",
+    });
   });
 
   it("rejects browser headers, wrong content type, unknown fields, and unsafe IDs", async () => {
@@ -167,9 +277,10 @@ describe.sequential("whisper fixed-ID local service contract", () => {
     expect(existsSync(claimPath)).toBe(true);
     const claim = JSON.parse(readFileSync(claimPath, "utf8"));
     expect(claim).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       meetingId,
       dispatchId: DISPATCH_A,
+      model: CATALOG["large-v3"],
       phase: "raw_published",
     });
     expect(claim.audioSha256).toMatch(/^[a-f0-9]{64}$/);
@@ -238,6 +349,55 @@ describe.sequential("whisper fixed-ID local service contract", () => {
     expect(existsSync(join(dir, ".whisper-dispatch.json"))).toBe(false);
   });
 
+  it("continues to resume a strict schema-v1 accepted claim", async () => {
+    const meetingId = "meeting-schema-v1";
+    const audio = new Uint8Array([4, 5, 6]);
+    const dir = seedMeeting(meetingId, audio);
+    writeFileSync(join(dir, ".whisper-dispatch.json"), `${JSON.stringify({
+      schemaVersion: 1,
+      meetingId,
+      dispatchId: DISPATCH_A,
+      audioSha256: createHash("sha256").update(audio).digest("hex"),
+      phase: "accepted",
+      durability: "durable",
+    })}\n`);
+
+    expect((await dispatch(meetingId, DISPATCH_A)).status).toBe(202);
+    await pollJob(meetingId, DISPATCH_A, 15_000);
+    const claim = JSON.parse(readFileSync(join(dir, ".whisper-dispatch.json"), "utf8"));
+    expect(claim.schemaVersion).toBe(1);
+    expect(claim).not.toHaveProperty("model");
+    expect(claim.phase).toBe("raw_published");
+  });
+
+  it("fails closed on a contradictory legacy schema-v2 model snapshot", async () => {
+    const meetingId = "meeting-invalid-legacy-v2";
+    const audio = new Uint8Array([7, 8, 9]);
+    const dir = seedMeeting(meetingId, audio);
+    writeFileSync(join(dir, ".whisper-dispatch.json"), `${JSON.stringify({
+      schemaVersion: 2,
+      meetingId,
+      dispatchId: DISPATCH_A,
+      audioSha256: createHash("sha256").update(audio).digest("hex"),
+      model: {
+        source: "legacy",
+        id: "base",
+        mlxRepo: "legacy/model-repo",
+        fasterWhisperModel: "small",
+      },
+      phase: "accepted",
+      durability: "durable",
+    })}\n`);
+
+    const response = await dispatch(meetingId, DISPATCH_A);
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "invalid_service_state" },
+    });
+    expect(existsSync(join(dir, "segments.json"))).toBe(false);
+    expect(existsSync(join(dir, "raw.md"))).toBe(false);
+  });
+
   it("rejects symlink meeting records without following them", async () => {
     const outside = join(workDir, "outside");
     mkdirSync(outside);
@@ -246,6 +406,51 @@ describe.sequential("whisper fixed-ID local service contract", () => {
     const response = await dispatch("meeting-symlink", DISPATCH_A);
     expect(response.status).toBe(400);
     expect(existsSync(join(outside, "raw.md"))).toBe(false);
+  });
+});
+
+describe("whisper global model execution fence", () => {
+  it("serializes prepare and inference through the same bounded fence", () => {
+    const probe = spawnSync("python3", ["-c", `
+import json
+import os
+import sys
+import threading
+import time
+sys.path.insert(0, ${JSON.stringify(join(process.cwd(), "whisper"))})
+os.environ["FAKE_WHISPER"] = "1"
+import model_catalog
+import server
+active = 0
+maximum = 0
+guard = threading.Lock()
+def work(*_args):
+    global active, maximum
+    with guard:
+        active += 1
+        maximum = max(maximum, active)
+    time.sleep(0.1)
+    with guard:
+        active -= 1
+    return []
+server._prepare_model_unlocked = work
+server._transcribe_unlocked = work
+snapshot = model_catalog.snapshot_for_catalog_model("large-v3")
+threads = [
+    threading.Thread(target=server._prepare_model, args=(snapshot,)),
+    threading.Thread(target=server.transcribe, args=("fake.webm", snapshot)),
+]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+print(json.dumps({"maximum": maximum}))
+`], {
+      encoding: "utf8",
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    expect(probe.status, probe.stderr).toBe(0);
+    expect(JSON.parse(probe.stdout)).toEqual({ maximum: 1 });
   });
 });
 
@@ -349,6 +554,126 @@ describe.sequential("whisper claim durability and restart", () => {
       expect(readFileSync(join(dir, "raw.md"), "utf8")).toBe(rawBefore);
     } finally {
       restarted.process.kill("SIGKILL");
+    }
+  });
+
+  it("snapshots the stored catalog model per accepted dispatch and ignores later setting changes", async () => {
+    const isolatedRoot = join(workDir, "model-snapshot-data");
+    writePipelineSettings(isolatedRoot, "large-v3-turbo", "fast");
+    const firstId = "meeting-model-turbo";
+    const secondId = "meeting-model-quality";
+    const firstDir = join(isolatedRoot, "meetings", firstId);
+    const secondDir = join(isolatedRoot, "meetings", secondId);
+    mkdirSync(firstDir, { recursive: true });
+    mkdirSync(secondDir, { recursive: true });
+    writeFileSync(join(firstDir, "audio.webm"), "first");
+    writeFileSync(join(secondDir, "audio.webm"), "second");
+    const server = await bootIsolatedServer(isolatedRoot, {
+      LOCAL_STT_MODEL: "base",
+      LOCAL_STT_MLX_REPO: "legacy/private-repo",
+    });
+    try {
+      expect((await isolatedDispatch(server.origin, firstId, DISPATCH_A)).status).toBe(202);
+      await isolatedPoll(server.origin, firstId, DISPATCH_A);
+      expect(JSON.parse(readFileSync(
+        join(firstDir, ".whisper-dispatch.json"),
+        "utf8",
+      )).model).toEqual(CATALOG["large-v3-turbo"]);
+
+      writePipelineSettings(isolatedRoot, "large-v3");
+      expect((await isolatedDispatch(server.origin, firstId, DISPATCH_A)).status).toBe(200);
+      expect(JSON.parse(readFileSync(
+        join(firstDir, ".whisper-dispatch.json"),
+        "utf8",
+      )).model).toEqual(CATALOG["large-v3-turbo"]);
+
+      expect((await isolatedDispatch(server.origin, secondId, DISPATCH_B)).status).toBe(202);
+      await isolatedPoll(server.origin, secondId, DISPATCH_B);
+      expect(JSON.parse(readFileSync(
+        join(secondDir, ".whisper-dispatch.json"),
+        "utf8",
+      )).model).toEqual(CATALOG["large-v3"]);
+    } finally {
+      server.process.kill("SIGKILL");
+    }
+  });
+
+  it("uses legacy startup model and MLX repo only while pipeline settings are absent", async () => {
+    const isolatedRoot = join(workDir, "legacy-model-data");
+    const meetingId = "meeting-legacy-model";
+    const dir = join(isolatedRoot, "meetings", meetingId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "audio.webm"), "audio");
+    const server = await bootIsolatedServer(isolatedRoot, {
+      LOCAL_STT_MODEL: "base",
+      LOCAL_STT_MLX_REPO: "legacy/model-repo",
+    });
+    try {
+      expect((await isolatedDispatch(server.origin, meetingId, DISPATCH_A)).status).toBe(202);
+      await isolatedPoll(server.origin, meetingId, DISPATCH_A);
+      expect(JSON.parse(readFileSync(join(dir, ".whisper-dispatch.json"), "utf8")).model)
+        .toEqual({
+          source: "legacy",
+          id: "base",
+          mlxRepo: "legacy/model-repo",
+          fasterWhisperModel: "base",
+        });
+    } finally {
+      server.process.kill("SIGKILL");
+    }
+  });
+
+  it("does not advance a failed model claim and lets another model dispatch finish", async () => {
+    const isolatedRoot = join(workDir, "model-failure-data");
+    writePipelineSettings(isolatedRoot, "large-v3-turbo");
+    const failedId = "meeting-model-failed";
+    const healthyId = "meeting-model-healthy";
+    const failedDir = join(isolatedRoot, "meetings", failedId);
+    const healthyDir = join(isolatedRoot, "meetings", healthyId);
+    mkdirSync(failedDir, { recursive: true });
+    mkdirSync(healthyDir, { recursive: true });
+    writeFileSync(join(failedDir, "audio.webm"), "failed");
+    writeFileSync(join(healthyDir, "audio.webm"), "healthy");
+    const server = await bootIsolatedServer(isolatedRoot, {
+      WHISPER_TEST_FAIL_MODEL: "large-v3-turbo",
+    });
+    try {
+      expect((await isolatedDispatch(server.origin, failedId, DISPATCH_A)).status).toBe(202);
+      await expect(isolatedPoll(server.origin, failedId, DISPATCH_A)).rejects.toThrow(
+        "isolated job failed",
+      );
+      const failedClaim = JSON.parse(readFileSync(
+        join(failedDir, ".whisper-dispatch.json"),
+        "utf8",
+      ));
+      expect(failedClaim.phase).toBe("accepted");
+      expect(existsSync(join(failedDir, "segments.json"))).toBe(false);
+      expect(existsSync(join(failedDir, "raw.md"))).toBe(false);
+
+      writePipelineSettings(isolatedRoot, "large-v3");
+      expect((await isolatedDispatch(server.origin, healthyId, DISPATCH_B)).status).toBe(202);
+      await isolatedPoll(server.origin, healthyId, DISPATCH_B);
+      expect(existsSync(join(healthyDir, "raw.md"))).toBe(true);
+    } finally {
+      server.process.kill("SIGKILL");
+    }
+  });
+
+  it("reports prepare failures with a bounded status and no raw provider details", async () => {
+    const isolatedRoot = join(workDir, "prepare-failure-data");
+    mkdirSync(join(isolatedRoot, "meetings"), { recursive: true });
+    const server = await bootIsolatedServer(isolatedRoot, {
+      WHISPER_TEST_FAIL_PREPARE_MODEL: "large-v3-turbo",
+      WHISPER_TEST_PRIVATE_ERROR: "/Users/private/model-cache token@example.com",
+    });
+    try {
+      expect((await prepareModel(server.origin, "large-v3-turbo")).status).toBe(202);
+      const health = await pollPreparation(server.origin, "large-v3-turbo", "error");
+      const serialized = JSON.stringify(health);
+      expect(serialized).toContain('"status":"error"');
+      expect(serialized).not.toMatch(/Users|token@example|model-cache/u);
+    } finally {
+      server.process.kill("SIGKILL");
     }
   });
 });

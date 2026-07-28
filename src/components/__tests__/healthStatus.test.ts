@@ -23,6 +23,21 @@ describe("healthStatus", () => {
     });
   });
 
+  it("keeps service readiness green while a model is separately preparing", () => {
+    expect(formatWhisperStatus({
+      connected: true,
+      ready: true,
+      model: "large-v3",
+      modelPreparation: [
+        { model: "large-v3", status: "preparing" },
+        { model: "large-v3-turbo", status: "idle" },
+      ],
+    })).toMatchObject({
+      label: "Whisper large-v3 · 준비됨",
+      tone: "success",
+    });
+  });
+
   it("formats llm provider/model labels and readiness", () => {
     expect(providerLabel("claude-cli")).toBe("Claude CLI");
     expect(providerLabel("codex-cli")).toBe("Codex CLI");

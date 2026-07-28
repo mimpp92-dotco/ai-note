@@ -189,6 +189,22 @@ describe("safe errors and logging", () => {
     expect(JSON.stringify(body)).not.toContain("/Users/private");
   });
 
+  it("keeps pipeline settings corruption unavailable without leaking stored bytes", async () => {
+    const response = publicErrorResponse("pipeline_settings_unavailable", 503, {
+      path: "/Users/private/data/pipeline-settings.json",
+      providerOutput: "{malformed private value",
+    });
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body).toEqual({
+      error: {
+        code: "pipeline_settings_unavailable",
+        message: "전사·교정 설정을 안전하게 불러올 수 없습니다",
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/Users|malformed|providerOutput/u);
+  });
+
   it.each([
     ["chat_llm_unconfigured", 409],
     ["chat_llm_unavailable", 503],
