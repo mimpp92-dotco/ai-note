@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +13,10 @@ import {
   type FileOps,
 } from "@/lib/durableFileOps";
 import { readArtifactPair, type ArtifactPairRevision } from "@/lib/artifactPair";
+import {
+  correctionCheckpointPath,
+  createCorrectionCheckpointStore,
+} from "@/lib/summarizeCheckpoint";
 import { resetKnowledgeIndexRepositoryStateForTests } from "@/lib/knowledgeIndexRepository";
 import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
 import {
@@ -31,6 +35,7 @@ import {
   runSummaryRegenerate,
   runSummarize,
   runTranscriptRegenerate,
+  setSummarizeCorrectionCheckpointStoreForTests,
   setSummarizeKnowledgeIndexRepositoryForTests,
 } from "@/lib/summarize";
 import {
@@ -80,12 +85,14 @@ beforeEach(() => {
   savedFakeLlm = process.env.FAKE_LLM;
   savedFakeLlmFail = process.env.FAKE_LLM_FAIL;
   resetKnowledgeIndexRepositoryStateForTests();
+  setSummarizeCorrectionCheckpointStoreForTests(null);
   setSummarizeKnowledgeIndexRepositoryForTests(null);
 });
 
 afterEach(() => {
   delete globalThis.__aiNoteFakeLlmRunHook;
   vi.restoreAllMocks();
+  setSummarizeCorrectionCheckpointStoreForTests(null);
   setSummarizeKnowledgeIndexRepositoryForTests(null);
   resetKnowledgeIndexRepositoryStateForTests();
   resetStatusUpdaterStateForTests();
@@ -299,6 +306,153 @@ describe("runSummarize", () => {
       },
     });
     expect(pair.summaryOutdated).toBe(false);
+  });
+
+  it("retains a successful correction after summary failure and reuses it on manual retry", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-checkpoint-retry";
+    await seedTranscribed(id);
+    const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (_prompt, options) => {
+        if (!options?.json) return RAW;
+        throw new Error("summary unavailable");
+      },
+    );
+
+    await expect(runSummarize(id)).resolves.toMatchObject({
+      ok: false,
+      reason: "error",
+    });
+
+    expect(firstRun).toHaveBeenCalledTimes(2);
+    expect(firstRun.mock.calls[0][1]).toBeUndefined();
+    expect(firstRun.mock.calls[1][1]).toEqual({ json: true });
+    expect(existsSync(correctionCheckpointPath(id))).toBe(true);
+    expect((await readStatus(id))?.error?.action).toBe("retry_summary");
+    firstRun.mockRestore();
+
+    const retryRun = vi.spyOn(FakeAdapter.prototype, "run");
+    await expect(acceptSummarize(id)).resolves.toEqual({
+      accepted: true,
+      durability: "durable",
+    });
+    await waitForSummarize(id);
+
+    expect(retryRun).toHaveBeenCalledTimes(1);
+    expect(retryRun.mock.calls[0][1]).toEqual({ json: true });
+    expect((await readStatus(id))?.status).toBe("summarized");
+    expect((await readStatus(id))?.error).toBeNull();
+    expect(existsSync(correctionCheckpointPath(id))).toBe(false);
+  });
+
+  it("does not reuse a checkpoint after the configured model identity changes", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli", model: "sonnet" });
+    const id = "meeting-checkpoint-model-mismatch";
+    await seedTranscribed(id);
+    const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (_prompt, options) => {
+        if (!options?.json) return RAW;
+        throw new Error("summary unavailable");
+      },
+    );
+    await expect(runSummarize(id)).resolves.toMatchObject({ ok: false });
+    firstRun.mockRestore();
+
+    await writeSettings({ provider: "claude-cli", model: "opus" });
+    const retryRun = vi.spyOn(FakeAdapter.prototype, "run");
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect(retryRun).toHaveBeenCalledTimes(2);
+    expect(retryRun.mock.calls[0][1]).toBeUndefined();
+    expect(retryRun.mock.calls[1][1]).toEqual({ json: true });
+  });
+
+  it("does not start summary generation from a durability-pending checkpoint commit", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-checkpoint-pending";
+    await seedTranscribed(id);
+    const base = createNodeFileOps();
+    const fileOps: FileOps = {
+      ...base,
+      openDirectory: async (...args) => {
+        const handle = await base.openDirectory(...args);
+        return {
+          ...handle,
+          sync: async () => {
+            throw Object.assign(new Error("transient"), { code: "EIO" });
+          },
+        };
+      },
+    };
+    setSummarizeCorrectionCheckpointStoreForTests(createCorrectionCheckpointStore({
+      dataRoot: dataRoot(),
+      fileOps,
+      capability: createDirectorySyncCapability("supported"),
+    }));
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+
+    await expect(runSummarize(id)).resolves.toMatchObject({
+      ok: false,
+      reason: "error",
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0][1]).toBeUndefined();
+    expect(existsSync(correctionCheckpointPath(id))).toBe(true);
+    expect(existsSync(meetingPaths(id).summary)).toBe(false);
+  });
+
+  it("does not write or reuse a checkpoint after the durable attempt identity changes", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-checkpoint-attempt-mismatch";
+    await seedTranscribed(id);
+    let replaced = false;
+    globalThis.__aiNoteFakeLlmRunHook = async () => {
+      if (replaced) return;
+      replaced = true;
+      const status = await readStatus(id);
+      await writeStatus(id, {
+        ...status!,
+        summarizeAttempt: {
+          ...status!.summarizeAttempt!,
+          attemptId: randomUUID(),
+        },
+      });
+    };
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+
+    await expect(runSummarize(id)).resolves.toMatchObject({
+      ok: false,
+      reason: "error",
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(existsSync(correctionCheckpointPath(id))).toBe(false);
+    expect(existsSync(meetingPaths(id).summary)).toBe(false);
+  });
+
+  it("keeps an already-published pair successful when checkpoint cleanup fails", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-checkpoint-cleanup-failure";
+    await seedTranscribed(id);
+    const store = createCorrectionCheckpointStore({ dataRoot: dataRoot() });
+    setSummarizeCorrectionCheckpointStoreForTests({
+      ...store,
+      remove: async () => {
+        throw new Error("cleanup failed");
+      },
+    });
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect((await readStatus(id))?.status).toBe("summarized");
+    expect(existsSync(meetingPaths(id).summary)).toBe(true);
+    expect(existsSync(correctionCheckpointPath(id))).toBe(true);
   });
 
   it("creates a knowledge card and corpus map only after the summary pair is published", async () => {

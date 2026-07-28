@@ -24,14 +24,25 @@ import {
   createKnowledgeIndexRepository,
   type KnowledgeIndexRepository,
 } from "@/lib/knowledgeIndexRepository";
+import {
+  readPipelineSettings,
+  type CorrectionMode,
+} from "@/lib/pipelineSettings";
 import { dataRoot, meetingPaths } from "@/lib/paths";
 import { classifyLlmFailure, safeLog } from "@/lib/publicApi";
+import { readSettings } from "@/lib/settings";
 import { readStatus, updateStatus } from "@/lib/status";
 import {
   resolveTranscript,
-  summarizeCore,
   summarizeTranscript,
 } from "@/lib/summarizeCore";
+import {
+  buildCorrectionCheckpointKey,
+  correctionCheckpointMatches,
+  createCorrectionCheckpoint,
+  createCorrectionCheckpointStore,
+  type CorrectionCheckpointStore,
+} from "@/lib/summarizeCheckpoint";
 import {
   discardSummarizeAttempt,
   publishSummarizeAttempt,
@@ -40,10 +51,11 @@ import {
 } from "@/lib/summarizePublisher";
 import { buildCorrectionPrompt, buildSummaryPrompt } from "@/lib/summarizePrompts";
 import { inspectTranscriptionPublication } from "@/lib/transcriptionArtifacts";
-import { getConfiguredAdapter } from "@/services/llm";
-import type { LlmAdapter } from "@/services/llm/types";
-
-export const MAX_SUMMARIZE_ATTEMPTS = 3;
+import { getAdapter, getConfiguredAdapter } from "@/services/llm";
+import type {
+  LlmAdapter,
+  LlmSettings,
+} from "@/services/llm/types";
 
 export type GenerationIntent =
   | "initial"
@@ -56,6 +68,7 @@ type SummarizeKnowledgeIndexRepository = Pick<
 >;
 
 let knowledgeIndexRepositoryForTests: SummarizeKnowledgeIndexRepository | null = null;
+let correctionCheckpointStoreForTests: CorrectionCheckpointStore | null = null;
 
 export function setSummarizeKnowledgeIndexRepositoryForTests(
   repository: SummarizeKnowledgeIndexRepository | null,
@@ -63,9 +76,20 @@ export function setSummarizeKnowledgeIndexRepositoryForTests(
   knowledgeIndexRepositoryForTests = repository;
 }
 
+export function setSummarizeCorrectionCheckpointStoreForTests(
+  store: CorrectionCheckpointStore | null,
+): void {
+  correctionCheckpointStoreForTests = store;
+}
+
 function knowledgeIndexRepository(): SummarizeKnowledgeIndexRepository {
   return knowledgeIndexRepositoryForTests
     ?? createKnowledgeIndexRepository({ dataRoot: dataRoot() });
+}
+
+function correctionCheckpointStore(): CorrectionCheckpointStore {
+  return correctionCheckpointStoreForTests
+    ?? createCorrectionCheckpointStore({ dataRoot: dataRoot() });
 }
 
 export type SummarizeFailureReason =
@@ -105,6 +129,10 @@ interface PreparedGeneration {
   attempt: SummarizeAttempt;
   acceptanceDurability: "durable" | "best_effort";
   snapshot?: StablePairSnapshot;
+  initialContext?: {
+    settings: LlmSettings;
+    correctionMode: CorrectionMode;
+  };
 }
 
 export function isSummarizeInflight(id: string): boolean {
@@ -126,7 +154,7 @@ function copyContentRevision(revision: ContentRevision): ContentRevision {
   };
 }
 
-function hash(value: string): string {
+function hash(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -174,11 +202,21 @@ async function prepareInitial(
       return { ok: false, reason: "already_summarized" };
     }
 
-    const adapter = await getConfiguredAdapter();
-    if (!adapter) {
+    const settings = await readSettings();
+    if (!settings) {
       lease.release();
       return { ok: false, reason: "no_model" };
     }
+    const pipelineSettings = await readPipelineSettings();
+    if (pipelineSettings.state === "unavailable") {
+      lease.release();
+      return {
+        ok: false,
+        reason: "error",
+        message: "pipeline_settings_unavailable",
+      };
+    }
+    const adapter = getAdapter(settings);
     const attempt: SummarizeAttempt = {
       attemptId: randomUUID(),
       kind: "initial",
@@ -206,6 +244,10 @@ async function prepareInitial(
       adapter,
       attempt,
       acceptanceDurability: prepared.commit.durability,
+      initialContext: {
+        settings,
+        correctionMode: pipelineSettings.settings.correction.mode,
+      },
     };
   } catch (error) {
     lease.release();
@@ -397,6 +439,72 @@ async function generateSummary(
   return result;
 }
 
+async function requireCurrentAttempt(
+  id: string,
+  prepared: PreparedGeneration,
+): Promise<StatusJson> {
+  const status = await readStatus(id);
+  if (status?.summarizeAttempt?.attemptId !== prepared.attempt.attemptId) {
+    throw new Error("summarize_attempt_mismatch");
+  }
+  return status;
+}
+
+async function resolveInitialCorrection(
+  id: string,
+  prepared: PreparedGeneration,
+  store: CorrectionCheckpointStore,
+): Promise<string> {
+  const context = prepared.initialContext!;
+  await requireCurrentAttempt(id, prepared);
+  const rawBytes = await readFile(meetingPaths(id).raw);
+  const raw = new TextDecoder("utf-8", { fatal: true }).decode(rawBytes);
+  const glossary = await readGlossary();
+  const key = buildCorrectionCheckpointKey({
+    rawBytes,
+    glossary,
+    settings: context.settings,
+    correctionMode: context.correctionMode,
+  });
+  const observed = await store.read(id, prepared.lease.ownerToken);
+  await requireCurrentAttempt(id, prepared);
+  if (observed.state === "invalid") {
+    throw new Error("checkpoint_invalid");
+  }
+  if (
+    observed.state === "valid"
+    && correctionCheckpointMatches(observed.checkpoint, key)
+  ) {
+    return observed.checkpoint.correctedTranscript;
+  }
+
+  const correction = await prepared.adapter.run(
+    buildCorrectionPrompt(raw, glossary),
+  );
+  const correctedTranscript = resolveTranscript(raw, correction);
+  await requireCurrentAttempt(id, prepared);
+  const commit = await store.write(
+    id,
+    prepared.lease.ownerToken,
+    createCorrectionCheckpoint({
+      meetingId: id,
+      key,
+      correctedTranscript,
+    }),
+  );
+  if (
+    commit.state !== "committed_durable"
+    && commit.state !== "committed_best_effort"
+  ) {
+    throw new Error(
+      commit.state === "committed_durability_pending"
+        ? "checkpoint_durability_pending"
+        : "checkpoint_not_committed",
+    );
+  }
+  return correctedTranscript;
+}
+
 async function refreshKnowledgeIndex(id: string, ownerToken: string): Promise<void> {
   try {
     const indexing = await knowledgeIndexRepository().refreshAfterSummary({
@@ -504,44 +612,22 @@ async function executePreparedGeneration(
 ): Promise<SummarizeResult> {
   const { lease, adapter, intent } = prepared;
   const paths = meetingPaths(id);
+  const checkpointStore = intent === "initial"
+    ? correctionCheckpointStore()
+    : null;
   try {
     let transcript: string;
     let summary: string;
 
     if (intent === "initial") {
-      const status = await readStatus(id);
-      if (!status) return { ok: false, reason: "not_found" };
-      const raw = await readFile(paths.raw, "utf8");
-      const glossary = await readGlossary();
-      const correction = await adapter.run(buildCorrectionPrompt(raw, glossary));
-      const resolvedTranscript = resolveTranscript(raw, correction);
-      let summaryOutput = await adapter.run(
-        buildSummaryPrompt(resolvedTranscript, status.title),
-        { json: true },
+      const status = await requireCurrentAttempt(id, prepared);
+      transcript = await resolveInitialCorrection(
+        id,
+        prepared,
+        checkpointStore!,
       );
-      let result = await summarizeCore({
-        title: status.title,
-        raw,
-        correction,
-        summaryOutput,
-      });
-      if (result.usedFallback) {
-        try {
-          summaryOutput = await adapter.run(
-            buildSummaryPrompt(resolvedTranscript, status.title),
-            { json: true },
-          );
-          result = await summarizeCore({
-            title: status.title,
-            raw,
-            correction,
-            summaryOutput,
-          });
-        } catch {
-          // The first pass already produced a schema-valid fallback payload.
-        }
-      }
-      transcript = result.transcript;
+      await requireCurrentAttempt(id, prepared);
+      const result = await generateSummary(adapter, status.title, transcript);
       summary = `${JSON.stringify(result.summary, null, 2)}\n`;
     } else if (intent === "transcript_regenerate") {
       const snapshot = prepared.snapshot!;
@@ -585,6 +671,9 @@ async function executePreparedGeneration(
       transcript,
       summary,
     });
+    if (publication.state === "published" && checkpointStore) {
+      await checkpointStore.remove(id, lease.ownerToken).catch(() => {});
+    }
     if (publication.state === "published" && intent !== "transcript_regenerate") {
       await refreshKnowledgeIndex(id, lease.ownerToken);
     }
@@ -594,6 +683,9 @@ async function executePreparedGeneration(
       try {
         const reconciled = await reconcileSummarizeAttempt(id, lease.ownerToken);
         if (reconciled.state === "completed") {
+          if (checkpointStore) {
+            await checkpointStore.remove(id, lease.ownerToken).catch(() => {});
+          }
           if (intent !== "transcript_regenerate") {
             await refreshKnowledgeIndex(id, lease.ownerToken);
           }

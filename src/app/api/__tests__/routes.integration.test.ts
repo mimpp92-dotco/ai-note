@@ -37,6 +37,7 @@ import { pipelineSettingsPath } from "@/lib/pipelineSettings";
 import { settingsPath, writeSettings } from "@/lib/settings";
 import { initialStatus, writeStatus } from "@/lib/status";
 import { isSummarizeInflight } from "@/lib/summarize";
+import { correctionCheckpointPath } from "@/lib/summarizeCheckpoint";
 import { FakeAdapter } from "@/services/llm/fake";
 
 // Integration test for the app-api route handlers. Boots the whisper service with
@@ -1029,6 +1030,47 @@ describe("manual re-summarize (force)", () => {
       expect(existsSync(paths.summary)).toBe(true);
     } finally {
       run.mockRestore();
+      delete process.env.FAKE_LLM;
+    }
+  });
+
+  it("keeps a failed initial correction checkpoint for a manual route retry", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-initial-checkpoint-retry";
+    const paths = meetingPaths(id);
+    mkdirSync(paths.dir, { recursive: true });
+    await writeStatus(id, { ...initialStatus(id, INIT), status: "transcribed" });
+    writeFileSync(paths.raw, "수동 재시도에서 재사용할 최초 생성 원문\n");
+    const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (_prompt, options) => {
+        if (!options?.json) return "수동 재시도에서 재사용할 교정 전사\n";
+        throw new Error("summary unavailable");
+      },
+    );
+    try {
+      const first = await summarizePOST(summarizeReq(id), ctx(id));
+      expect(first.status).toBe(202);
+      await settleSummarize(id);
+      expect(firstRun).toHaveBeenCalledTimes(2);
+      expect(existsSync(correctionCheckpointPath(id))).toBe(true);
+      const failed = JSON.parse(readFileSync(paths.status, "utf8"));
+      expect(failed.error.action).toBe("retry_summary");
+    } finally {
+      firstRun.mockRestore();
+    }
+
+    const retryRun = vi.spyOn(FakeAdapter.prototype, "run");
+    try {
+      const retry = await summarizePOST(summarizeReq(id), ctx(id));
+      expect(retry.status).toBe(202);
+      await settleSummarize(id);
+      expect(retryRun).toHaveBeenCalledTimes(1);
+      expect(retryRun.mock.calls[0][1]).toEqual({ json: true });
+      expect(existsSync(paths.summary)).toBe(true);
+      expect(existsSync(correctionCheckpointPath(id))).toBe(false);
+    } finally {
+      retryRun.mockRestore();
       delete process.env.FAKE_LLM;
     }
   });

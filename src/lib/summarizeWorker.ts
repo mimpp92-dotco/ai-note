@@ -5,16 +5,16 @@ import { ensureSummarizeReconciled } from "@/lib/artifactPair";
 import { scanMeetingRecordObservations } from "@/lib/library";
 import { dataRoot, meetingPaths } from "@/lib/paths";
 import { readSettings } from "@/lib/settings";
-import { MAX_SUMMARIZE_ATTEMPTS, runSummarize } from "@/lib/summarize";
+import { runSummarize } from "@/lib/summarize";
 import { inspectTranscriptionPublication } from "@/lib/transcriptionArtifacts";
 
 // Background poller that summarizes transcribed meetings once an LLM is configured.
-// The app has no queue/DB — candidacy is derived purely from files on disk plus the
-// attempt counter, so a crash mid-summarize (leftover `summarizing`, no summary.json)
-// is simply retried.
+// The app has no queue/DB. A first untouched transcribed meeting is automatic;
+// a failed or reconciled attempt remains visible for an explicit manual retry.
 
 // A meeting is a candidate when it has been transcribed (raw.md), not yet summarized
-// (no summary.json), and hasn't exhausted its retries. No LLM configured ⇒ nothing to do.
+// (no summary.json), and has no manual-attention generation error.
+// No LLM configured ⇒ nothing to do.
 export async function findSummarizeCandidates(): Promise<string[]> {
   if ((await readSettings()) === null) return [];
 
@@ -44,13 +44,10 @@ export async function findSummarizeCandidates(): Promise<string[]> {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue;
     }
-    // A durable interruption is user-visible attention, not an invitation for
-    // the poller to immediately hide the error behind another automatic retry.
     if (
-      status.error?.code === "summary_interrupted"
-      || status.error?.code === "summarize_ambiguous"
+      status.error?.action === "retry_summary"
+      || status.error?.action === "retry_transcript_generation"
     ) continue;
-    if ((status.summarizeAttempts ?? 0) >= MAX_SUMMARIZE_ATTEMPTS) continue;
     candidates.push({ id, startedAt: status.startedAt });
   }
   return candidates
