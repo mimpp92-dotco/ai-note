@@ -608,21 +608,23 @@
         "src/components/PipelineSettingsForm.tsx",
         "src/components/MeetingDetailView.tsx"
       ],
-      "allowedPaths": [],
+      "allowedPaths": [
+        "e2e/installation-and-first-run.spec.ts"
+      ],
       "repairAllowedPaths": [],
       "riskLevel": "standard",
-      "executionMode": "verify-only",
       "requiresBrowser": true,
       "dataPolicy": "synthetic-only",
       "verification": {
-        "testMode": "exempt",
+        "testMode": "regression",
+        "testCommand": "npm run test:e2e -- e2e/installation-and-first-run.spec.ts",
         "additionalCommands": [
           "npm run test:e2e"
         ],
         "evidence": [
           "browser"
         ],
-        "reason": "제품 수정 없이 committed synthetic pipeline scenario를 pinned Chromium의 세 viewport에서 실행해 설정·prepare·manual failure recovery와 evidence contract를 최종 확인한다."
+        "reason": "Phase 1과 4가 추가한 synthetic pipeline scenario의 strict accessible-name locator 회귀를 test spec 안에서 수정하고 pinned Chromium의 세 viewport에서 설정·prepare·manual failure recovery와 evidence contract를 다시 확인한다."
       },
       "blockIf": [
         "npm run test:e2e:doctor가 pinned package와 matching Chromium을 확인하지 못하면 중단",
@@ -632,7 +634,7 @@
         "large-v3 default, Turbo option, save-no-download, explicit prepare state, full default, fast opt-in 또는 failure/manual retry assertion이 실패하면 중단",
         "320px에서 horizontal overflow, 44px control target 또는 visible focus가 깨지면 중단",
         "console error, page error, external request 또는 required artifact 누락이 있으면 중단",
-        "검증 전후 제품 tree가 달라지면 중단"
+        "locator 회귀 수정에 e2e/installation-and-first-run.spec.ts 밖 변경이 필요하면 중단"
       ],
       "produces": []
     }
