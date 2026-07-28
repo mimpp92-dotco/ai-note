@@ -68,6 +68,7 @@ Benchmark report만으로 품질을 자동 판정하지 않는다. 같은 실제
 | 4 | optional-fast-correction-and-benchmark | 선택형 chunk correction, chunk resume, 격리 실제 회의 benchmark |
 | 5 | runtime-diagnostics-and-canonical-docs | `app:status` 회귀 수정, 문서 정렬, ADR 0024 |
 | 6 | synthetic-pipeline-browser-verification | pinned Chromium 세 viewport 최종 검증 |
+| 7 | full-suite-contract-repair | 새 data route inventory와 structured-summary/checkpoint 광역 test 계약 보정 |
 
 ## 실행 방법
 
