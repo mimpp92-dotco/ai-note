@@ -30,6 +30,7 @@ import { POST as transcribePOST } from "@/app/api/transcribe/route";
 import { POST as globalSummarizePOST } from "@/app/api/summarize/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
 import { POST as prepareWhisperModelPOST } from "@/app/api/whisper/models/prepare/route";
+import { GENERATED_SUMMARY_JSON_SCHEMA } from "@/domain/generatedSummaryJsonSchema";
 import { meetingPaths } from "@/lib/paths";
 import { acquireArtifactWriteLease } from "@/lib/artifactLease";
 import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
@@ -981,7 +982,9 @@ describe("manual re-summarize (force)", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(run.mock.calls[0][0]).toContain("교정된 전사");
       expect(run.mock.calls[0][0]).not.toContain("[원문]");
-      expect(run.mock.calls[0][1]).toEqual({ json: true });
+      expect(run.mock.calls[0][1]).toEqual({
+        jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+      });
     } finally {
       run.mockRestore();
       delete process.env.FAKE_LLM;
@@ -1044,7 +1047,9 @@ describe("manual re-summarize (force)", () => {
     writeFileSync(paths.raw, "수동 재시도에서 재사용할 최초 생성 원문\n");
     const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
       async (_prompt, options) => {
-        if (!options?.json) return "수동 재시도에서 재사용할 교정 전사\n";
+        if (options?.jsonSchema === undefined) {
+          return "수동 재시도에서 재사용할 교정 전사\n";
+        }
         throw new Error("summary unavailable");
       },
     );
@@ -1053,6 +1058,10 @@ describe("manual re-summarize (force)", () => {
       expect(first.status).toBe(202);
       await settleSummarize(id);
       expect(firstRun).toHaveBeenCalledTimes(2);
+      expect(firstRun.mock.calls[0][1]).toBeUndefined();
+      expect(firstRun.mock.calls[1][1]).toEqual({
+        jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+      });
       expect(existsSync(correctionCheckpointPath(id))).toBe(true);
       const failed = JSON.parse(readFileSync(paths.status, "utf8"));
       expect(failed.error.action).toBe("retry_summary");
@@ -1066,7 +1075,9 @@ describe("manual re-summarize (force)", () => {
       expect(retry.status).toBe(202);
       await settleSummarize(id);
       expect(retryRun).toHaveBeenCalledTimes(1);
-      expect(retryRun.mock.calls[0][1]).toEqual({ json: true });
+      expect(retryRun.mock.calls[0][1]).toEqual({
+        jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+      });
       expect(existsSync(paths.summary)).toBe(true);
       expect(existsSync(correctionCheckpointPath(id))).toBe(false);
     } finally {
