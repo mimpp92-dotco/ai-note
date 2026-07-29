@@ -11,7 +11,7 @@ import {
   ChatOrchestratorError,
   runChat,
 } from "@/lib/chatOrchestrator";
-import type { LlmAdapter } from "@/services/llm/types";
+import type { LlmAdapter, LlmRunOptions } from "@/services/llm/types";
 
 const M1 = "meeting-1";
 const M2 = "meeting-2";
@@ -95,7 +95,10 @@ function executor(options: {
 
 function adapter(outputs: string[] | ((prompt: string, index: number) => string)): LlmAdapter & { run: ReturnType<typeof vi.fn> } {
   let index = 0;
-  const run = vi.fn(async (prompt: string) => {
+  const run = vi.fn<(
+    prompt: string,
+    options?: LlmRunOptions,
+  ) => Promise<string>>(async (prompt) => {
     const output = typeof outputs === "function" ? outputs(prompt, index) : outputs[index];
     index += 1;
     if (output === undefined) throw new Error("unexpected model turn");
@@ -138,6 +141,10 @@ describe("chat tool loop", () => {
     const result = await runChat(request, { adapter: llm, toolExecutor: tools });
 
     expect(llm.run).toHaveBeenCalledTimes(3);
+    for (const call of llm.run.mock.calls) {
+      expect(call[1]).toEqual({ json: true });
+      expect(call[1]).not.toHaveProperty("jsonSchema");
+    }
     expect(tools.execute).toHaveBeenCalledTimes(2);
     expect(result).toEqual({
       answerSegments: [{

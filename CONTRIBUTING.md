@@ -29,9 +29,12 @@ npm ci                 # exact dependencies (+ contributor hooks)
 npm run dev            # foreground Next.js + local Whisper service
 ```
 
-The first `npm run dev` downloads a Whisper model; set `LOCAL_STT_MODEL=base`
-for a faster first run. See [Configuration](README.md#configuration) for the
-full list of env knobs.
+The first real transcription lazily downloads the selected Whisper model.
+The app's fixed pipeline settings default to quality-first `large-v3`; saving
+`large-v3` or `large-v3-turbo` is separate from the explicit model-prepare
+action. `LOCAL_STT_MODEL`/`LOCAL_STT_MLX_REPO` remain a legacy startup path only
+when no stored pipeline settings exist. See
+[Configuration](README.md#configuration) for the full list of env knobs.
 
 `npm run dev` is intentionally long-lived and foreground-only. End users should
 use `node scripts/bootstrap.mjs --launch`; do not use its owned background
@@ -82,6 +85,15 @@ The scenario uses an allowlisted temporary snapshot, empty `data/`, synthetic
 `HOME`, disabled worker, disconnected Whisper, and no external browser traffic.
 Chrome DevTools MCP is optional qualitative inspection, not a gate or runtime
 dependency. See [ADR 0020](docs/decisions/0020-deterministic-synthetic-browser-verification.md).
+
+The real-data pipeline benchmark is never a unit, build, or Playwright gate.
+Run `npm run benchmark:pipeline -- --meeting-id <exact-id>` only after explicitly
+approving that meeting's audio/transcript/glossary and configured provider use.
+It keeps source artifacts read-only and writes only a private
+`.ai-note-runtime/benchmarks/` snapshot. Do not commit or paste its transcript,
+audio, corrected output, or provider output into test fixtures, screenshots,
+terminal logs, or review comments. See
+[ADR 0024](docs/decisions/0024-quality-first-meeting-pipeline.md).
 
 ## Commit style
 

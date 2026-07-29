@@ -9,11 +9,22 @@ import shutil
 import stat
 import tempfile
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from model_catalog import (
+    DEFAULT_MODEL,
+    MODEL_CATALOG,
+    ModelCatalogError,
+    effective_model_snapshot,
+    legacy_model_snapshot,
+    snapshot_for_catalog_model,
+    validate_model_snapshot,
+)
 
 
 def _load_env_local() -> None:
@@ -37,7 +48,11 @@ _load_env_local()
 
 HOST = os.environ.get("LOCAL_STT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("LOCAL_STT_PORT", "8123"))
-MODEL = os.environ.get("LOCAL_STT_MODEL", "large-v3")
+LEGACY_MODEL_CONFIGURED = (
+    "LOCAL_STT_MODEL" in os.environ or "LOCAL_STT_MLX_REPO" in os.environ
+)
+MODEL = os.environ.get("LOCAL_STT_MODEL", DEFAULT_MODEL)
+LEGACY_MLX_REPO = os.environ.get("LOCAL_STT_MLX_REPO")
 STT_LANG = os.environ.get("LOCAL_STT_LANG", "ko")
 STT_VAD = os.environ.get("LOCAL_STT_VAD", "1") != "0"
 FAKE = os.environ.get("FAKE_WHISPER") == "1"
@@ -76,6 +91,11 @@ _jobs: dict[tuple[str, str], dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
 _meeting_locks: dict[str, threading.Lock] = {}
 _meeting_locks_guard = threading.Lock()
+_model_execution_fence = threading.Lock()
+_model_preparation_lock = threading.Lock()
+_model_preparation: dict[str, str] = {
+    model: "idle" for model in MODEL_CATALOG
+}
 _directory_sync_capability = "unknown"
 _directory_sync_guard = threading.Lock()
 _test_pending_consumed = False
@@ -99,21 +119,47 @@ def ffmpeg_path() -> str | None:
 
 
 def health() -> dict[str, Any]:
+    with _model_preparation_lock:
+        preparation = [
+            {"model": model, "status": _model_preparation[model]}
+            for model in MODEL_CATALOG
+        ]
     if FAKE:
-        return {"ok": True, "model": "fake", "ready": True}
+        return {
+            "ok": True,
+            "model": "fake",
+            "ready": True,
+            "modelPreparation": preparation,
+        }
     ready = ffmpeg_path() is not None
-    payload: dict[str, Any] = {"ok": True, "model": MODEL, "ready": ready}
+    try:
+        current_model = effective_model_snapshot(
+            DATA_ROOT,
+            MODEL,
+            LEGACY_MLX_REPO,
+            LEGACY_MODEL_CONFIGURED,
+        )["id"]
+    except ModelCatalogError:
+        current_model = DEFAULT_MODEL
+    payload: dict[str, Any] = {
+        "ok": True,
+        "model": current_model,
+        "ready": ready,
+        "modelPreparation": preparation,
+    }
     if not ready:
         payload["message"] = "ffmpeg not found; install ffmpeg before transcribing"
     return payload
 
 
-def _transcribe_real(audio_path: str) -> list[dict[str, Any]]:
+def _transcribe_real(
+    audio_path: str, model_snapshot: dict[str, str]
+) -> list[dict[str, Any]]:
     lang = None if STT_LANG == "auto" else STT_LANG
     try:
         import mlx_whisper  # type: ignore
 
-        repo = os.environ.get("LOCAL_STT_MLX_REPO", f"mlx-community/whisper-{MODEL}-mlx")
+        repo = model_snapshot["mlxRepo"]
         mlx_opts: dict[str, Any] = {"path_or_hf_repo": repo, "language": lang}
         if STT_VAD:
             mlx_opts.update(condition_on_previous_text=False, no_speech_threshold=0.6)
@@ -132,7 +178,11 @@ def _transcribe_real(audio_path: str) -> list[dict[str, Any]]:
     except ImportError:
         from faster_whisper import WhisperModel  # type: ignore
 
-        model = WhisperModel(MODEL, device="cpu", compute_type="int8")
+        model = WhisperModel(
+            model_snapshot["fasterWhisperModel"],
+            device="cpu",
+            compute_type="int8",
+        )
         options: dict[str, Any] = {"language": lang}
         if STT_VAD:
             options.update(vad_filter=True, condition_on_previous_text=False)
@@ -147,10 +197,94 @@ def _transcribe_real(audio_path: str) -> list[dict[str, Any]]:
         ]
 
 
-def transcribe(audio_path: str) -> list[dict[str, Any]]:
+def _transcribe_unlocked(
+    audio_path: str, model_snapshot: dict[str, str]
+) -> list[dict[str, Any]]:
     if FAKE:
+        delay_ms = os.environ.get("WHISPER_TEST_MODEL_DELAY_MS")
+        if delay_ms and delay_ms.isdigit():
+            time.sleep(int(delay_ms) / 1000)
+        if os.environ.get("WHISPER_TEST_FAIL_MODEL") == model_snapshot["id"]:
+            raise RuntimeError(
+                os.environ.get("WHISPER_TEST_PRIVATE_ERROR", "fake model failure")
+            )
         return [dict(segment) for segment in FAKE_SEGMENTS]
-    return _transcribe_real(audio_path)
+    return _transcribe_real(audio_path, model_snapshot)
+
+
+def transcribe(
+    audio_path: str, model_snapshot: dict[str, str]
+) -> list[dict[str, Any]]:
+    with _model_execution_fence:
+        return _transcribe_unlocked(audio_path, model_snapshot)
+
+
+def _prepare_model_unlocked(model_snapshot: dict[str, str]) -> None:
+    if FAKE:
+        delay_ms = os.environ.get("WHISPER_TEST_MODEL_DELAY_MS")
+        if delay_ms and delay_ms.isdigit():
+            time.sleep(int(delay_ms) / 1000)
+        if (
+            os.environ.get("WHISPER_TEST_FAIL_PREPARE_MODEL")
+            == model_snapshot["id"]
+        ):
+            raise RuntimeError(
+                os.environ.get("WHISPER_TEST_PRIVATE_ERROR", "fake prepare failure")
+            )
+        return
+
+    try:
+        import mlx_whisper  # type: ignore  # noqa: F401
+    except ImportError:
+        from faster_whisper import WhisperModel  # type: ignore
+
+        WhisperModel(
+            model_snapshot["fasterWhisperModel"],
+            device="cpu",
+            compute_type="int8",
+        )
+        return
+
+    repo = model_snapshot["mlxRepo"]
+    if Path(repo).exists():
+        return
+    from huggingface_hub import snapshot_download  # type: ignore
+
+    snapshot_download(repo_id=repo)
+
+
+def _prepare_model(model_snapshot: dict[str, str]) -> None:
+    with _model_execution_fence:
+        _prepare_model_unlocked(model_snapshot)
+
+
+def _prepare_model_worker(model: str) -> None:
+    try:
+        _prepare_model(snapshot_for_catalog_model(model))
+    except Exception:
+        status = "error"
+    else:
+        status = "ready"
+    with _model_preparation_lock:
+        _model_preparation[model] = status
+
+
+def _start_model_prepare(model: str) -> str:
+    snapshot_for_catalog_model(model)
+    with _model_preparation_lock:
+        current = _model_preparation[model]
+        if current == "ready":
+            return "ready"
+        if current == "preparing":
+            return "preparing"
+        _model_preparation[model] = "preparing"
+    thread = threading.Thread(
+        target=_prepare_model_worker,
+        args=(model,),
+        daemon=True,
+    )
+    thread.start()
+    return "preparing"
 
 
 def _meeting_lock(meeting_id: str) -> threading.Lock:
@@ -362,7 +496,10 @@ def _claim_bytes(claim: dict[str, Any]) -> bytes:
 
 
 def _validate_claim(value: object, expected_meeting_id: str) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) not in ({
+    if not isinstance(value, dict):
+        raise ProtocolError("invalid_service_state", 409)
+    schema_version = value.get("schemaVersion")
+    v1_shapes = ({
         "schemaVersion",
         "meetingId",
         "dispatchId",
@@ -377,13 +514,26 @@ def _validate_claim(value: object, expected_meeting_id: str) -> dict[str, Any]:
         "dispatchId",
         "audioSha256",
         "phase",
-    }):
+    })
+    v2_shape = {
+        "schemaVersion",
+        "meetingId",
+        "dispatchId",
+        "audioSha256",
+        "model",
+        "phase",
+        "durability",
+    }
+    if (
+        (schema_version == 1 and set(value) not in v1_shapes)
+        or (schema_version == 2 and set(value) != v2_shape)
+        or schema_version not in {1, 2}
+    ):
         raise ProtocolError("invalid_service_state", 409)
     if "durability" not in value:
         value = {**value, "durability": "best_effort"}
     if (
-        value.get("schemaVersion") != 1
-        or value.get("meetingId") != expected_meeting_id
+        value.get("meetingId") != expected_meeting_id
         or not _is_uuid(value.get("dispatchId"))
         or not isinstance(value.get("audioSha256"), str)
         or re.fullmatch(r"[a-f0-9]{64}", value["audioSha256"]) is None
@@ -391,6 +541,12 @@ def _validate_claim(value: object, expected_meeting_id: str) -> dict[str, Any]:
         or value.get("durability") not in CLAIM_DURABILITIES
     ):
         raise ProtocolError("invalid_service_state", 409)
+    if schema_version == 2:
+        try:
+            model = validate_model_snapshot(value.get("model"))
+        except ModelCatalogError:
+            raise ProtocolError("invalid_service_state", 409) from None
+        value = {**value, "model": model}
     return value
 
 
@@ -483,6 +639,14 @@ def _resume_job(meeting_id: str, dispatch_id: str) -> None:
         raise ProtocolError("audio_identity_mismatch", 409)
 
     claim = _resume_claim_durability(paths["claim"], claim)
+    try:
+        model_snapshot = (
+            claim["model"]
+            if claim["schemaVersion"] == 2
+            else legacy_model_snapshot(MODEL, LEGACY_MLX_REPO)
+        )
+    except ModelCatalogError:
+        raise ProtocolError("invalid_service_state", 409) from None
 
     if _pending(_sync_directory(paths["directory"])):
         raise ProtocolError("durability_pending", 503)
@@ -492,7 +656,7 @@ def _resume_job(meeting_id: str, dispatch_id: str) -> None:
         _safe_regular_file(paths["segments"])
         segments = _parse_segments(paths["segments"])
     else:
-        segments = transcribe(str(paths["audio"]))
+        segments = transcribe(str(paths["audio"]), model_snapshot)
         encoded_segments = (
             json.dumps(segments, ensure_ascii=False, indent=2) + "\n"
         ).encode("utf-8")
@@ -621,7 +785,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._validate_ingress():
             return
-        if self.path != "/transcribe":
+        parsed = urlsplit(self.path)
+        if (
+            parsed.query
+            or parsed.fragment
+            or parsed.path not in {"/transcribe", "/models/prepare"}
+        ):
             self._send_error(404, "not_found")
             return
         if self.headers.get("Transfer-Encoding") is not None:
@@ -647,6 +816,23 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self._send_error(400, "invalid_json")
             return
+
+        if parsed.path == "/models/prepare":
+            if not isinstance(body, dict) or set(body) != {"model"}:
+                self._send_error(400, "invalid_protocol")
+                return
+            model = body.get("model")
+            try:
+                status = _start_model_prepare(model)
+            except ModelCatalogError:
+                self._send_error(400, "invalid_protocol")
+                return
+            self._send_json(
+                200 if status == "ready" else 202,
+                {"model": model, "status": status},
+            )
+            return
+
         if not isinstance(body, dict) or set(body) != {"meetingId", "dispatchId"}:
             self._send_error(400, "invalid_protocol")
             return
@@ -678,11 +864,21 @@ class Handler(BaseHTTPRequestHandler):
 
                 audio_sha256 = _sha256_file(paths["audio"])
                 if claim is None:
+                    try:
+                        model_snapshot = effective_model_snapshot(
+                            DATA_ROOT,
+                            MODEL,
+                            LEGACY_MLX_REPO,
+                            LEGACY_MODEL_CONFIGURED,
+                        )
+                    except ModelCatalogError:
+                        raise ProtocolError("invalid_service_state", 409) from None
                     claim = {
-                        "schemaVersion": 1,
+                        "schemaVersion": 2,
                         "meetingId": meeting_id,
                         "dispatchId": proposed_dispatch_id,
                         "audioSha256": audio_sha256,
+                        "model": model_snapshot,
                         "phase": "accepted",
                         "durability": "pending",
                     }

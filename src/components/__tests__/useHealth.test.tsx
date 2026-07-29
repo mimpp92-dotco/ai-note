@@ -67,4 +67,41 @@ describe("useHealth — in-flight dedup", () => {
     });
     expect(llmCalls).toBe(2);
   });
+
+  it("keeps bounded model preparation state separate from Whisper readiness", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(
+        url === "/api/whisper/health"
+          ? {
+              connected: true,
+              ok: true,
+              ready: true,
+              model: "large-v3",
+              modelPreparation: [
+                { model: "large-v3", status: "preparing" },
+                { model: "large-v3-turbo", status: "idle" },
+              ],
+            }
+          : { configured: false },
+      ), { headers: { "content-type": "application/json" } }))),
+    );
+
+    const { useHealth } = await import("@/components/useHealth");
+    const { result } = renderHook(() => useHealth());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.whisper).toEqual({
+      connected: true,
+      ok: true,
+      ready: true,
+      model: "large-v3",
+      modelPreparation: [
+        { model: "large-v3", status: "preparing" },
+        { model: "large-v3-turbo", status: "idle" },
+      ],
+    });
+  });
 });

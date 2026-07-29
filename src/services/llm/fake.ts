@@ -1,9 +1,15 @@
-import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services/llm/types";
+import type {
+  LlmAdapter,
+  LlmHealth,
+  LlmProvider,
+  LlmRunOptions,
+  LlmSettings,
+} from "@/services/llm/types";
 
 // Deterministic offline backend for FAKE_LLM=1 (tests / AC smokes). No process,
 // no network. Two behaviors keyed off the prompt:
-//   - summary step (opts.json or the "JSON 스키마" marker) → a canned schema-valid
-//     summary JSON string.
+//   - summary step (generic JSON, explicit schema, or the "JSON 스키마" marker)
+//     → a canned schema-valid summary JSON string.
 //   - correction step → passthrough of the raw transcript after the "[원문]"
 //     marker (identical length ⇒ clears summarizeCore's 30% over-edit guard).
 // FAKE_LLM_FAIL=1 makes run() throw instead — a test seam for the failure path
@@ -36,10 +42,12 @@ export class FakeAdapter implements LlmAdapter {
     this.provider = settings?.provider ?? "claude-cli";
   }
 
-  async run(prompt: string, opts?: { json?: boolean }): Promise<string> {
+  async run(prompt: string, opts?: LlmRunOptions): Promise<string> {
     await globalThis.__aiNoteFakeLlmRunHook?.();
     if (process.env.FAKE_LLM_FAIL === "1") throw new Error("FAKE_LLM_FAIL");
-    if (opts?.json || prompt.includes("JSON 스키마")) return CANNED_SUMMARY;
+    if (opts?.json || opts?.jsonSchema || prompt.includes("JSON 스키마")) {
+      return CANNED_SUMMARY;
+    }
     const idx = prompt.indexOf(RAW_MARKER);
     if (idx !== -1) return prompt.slice(idx + RAW_MARKER.length).trim();
     return prompt;

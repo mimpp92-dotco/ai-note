@@ -25,10 +25,17 @@ afterEach(() => {
 });
 
 async function seedNewProtocol(id: string, options: {
+  schemaVersion?: 1 | 2;
   phase?: "accepted" | "segments_published" | "raw_published";
   durability?: "pending" | "durable" | "best_effort";
   raw?: boolean;
   segments?: boolean;
+  model?: {
+    source: "catalog" | "legacy";
+    id: string;
+    mlxRepo: string;
+    fasterWhisperModel: string;
+  };
 } = {}) {
   const paths = meetingPaths(id);
   await mkdir(paths.dir, { recursive: true });
@@ -38,10 +45,20 @@ async function seedNewProtocol(id: string, options: {
   if (options.raw ?? true) await writeFile(paths.raw, "transcript\n");
   const dispatchId = randomUUID();
   await writeFile(join(paths.dir, ".whisper-dispatch.json"), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: options.schemaVersion ?? 1,
     meetingId: id,
     dispatchId,
     audioSha256: createHash("sha256").update(audio).digest("hex"),
+    ...(options.schemaVersion === 2
+      ? {
+          model: options.model ?? {
+            source: "catalog",
+            id: "large-v3",
+            mlxRepo: "mlx-community/whisper-large-v3-mlx",
+            fasterWhisperModel: "large-v3",
+          },
+        }
+      : {}),
     phase: options.phase ?? "raw_published",
     durability: options.durability ?? "durable",
   })}\n`);
@@ -58,6 +75,70 @@ describe("Whisper raw completion marker", () => {
       dispatchId,
       durability: "durable",
     });
+  });
+
+  it("reads strict schema-v2 model snapshots without exposing model metadata", async () => {
+    const id = "meeting-complete-v2";
+    const dispatchId = await seedNewProtocol(id, {
+      schemaVersion: 2,
+      model: {
+        source: "catalog",
+        id: "large-v3-turbo",
+        mlxRepo: "mlx-community/whisper-large-v3-turbo",
+        fasterWhisperModel: "large-v3-turbo",
+      },
+    });
+    const publication = inspectTranscriptionPublication(id, dispatchId);
+    expect(publication).toEqual({
+      state: "complete",
+      legacy: false,
+      dispatchId,
+      durability: "durable",
+    });
+    expect(JSON.stringify(publication)).not.toMatch(/model|mlx|turbo/u);
+  });
+
+  it("fails closed on malformed schema-v2 model metadata", async () => {
+    const id = "meeting-invalid-v2";
+    const dispatchId = await seedNewProtocol(id, {
+      schemaVersion: 2,
+      model: {
+        source: "catalog",
+        id: "large-v3",
+        mlxRepo: "arbitrary/repo",
+        fasterWhisperModel: "large-v3",
+      },
+    });
+    expect(inspectTranscriptionPublication(id, dispatchId).state).toBe("ambiguous");
+  });
+
+  it("rejects a contradictory legacy schema-v2 model snapshot", async () => {
+    const id = "meeting-invalid-legacy-v2";
+    const dispatchId = await seedNewProtocol(id, {
+      schemaVersion: 2,
+      model: {
+        source: "legacy",
+        id: "base",
+        mlxRepo: "legacy/model-repo",
+        fasterWhisperModel: "small",
+      },
+    });
+    expect(inspectTranscriptionPublication(id, dispatchId).state).toBe("ambiguous");
+  });
+
+  it("rejects an oversized legacy schema-v2 logical model identity", async () => {
+    const id = "meeting-oversized-legacy-v2";
+    const oversizedModel = "m".repeat(129);
+    const dispatchId = await seedNewProtocol(id, {
+      schemaVersion: 2,
+      model: {
+        source: "legacy",
+        id: oversizedModel,
+        mlxRepo: "legacy/model-repo",
+        fasterWhisperModel: oversizedModel,
+      },
+    });
+    expect(inspectTranscriptionPublication(id, dispatchId).state).toBe("ambiguous");
   });
 
   it.each([

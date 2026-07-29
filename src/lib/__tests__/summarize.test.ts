@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,12 +7,21 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { GENERATED_SUMMARY_JSON_SCHEMA } from "@/domain/generatedSummaryJsonSchema";
 import {
   createDirectorySyncCapability,
   createNodeFileOps,
   type FileOps,
 } from "@/lib/durableFileOps";
+import {
+  CORRECTION_CHUNK_TARGET_CHARS,
+  createCorrectionChunkPlan,
+} from "@/lib/correctionChunks";
 import { readArtifactPair, type ArtifactPairRevision } from "@/lib/artifactPair";
+import {
+  correctionCheckpointPath,
+  createCorrectionCheckpointStore,
+} from "@/lib/summarizeCheckpoint";
 import { resetKnowledgeIndexRepositoryStateForTests } from "@/lib/knowledgeIndexRepository";
 import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
 import {
@@ -21,6 +30,7 @@ import {
   knowledgeCardPath,
   meetingPaths,
 } from "@/lib/paths";
+import { writePipelineSettings } from "@/lib/pipelineSettings";
 import { writeSettings } from "@/lib/settings";
 import { initialStatus, readStatus, writeStatus } from "@/lib/status";
 import {
@@ -31,6 +41,7 @@ import {
   runSummaryRegenerate,
   runSummarize,
   runTranscriptRegenerate,
+  setSummarizeCorrectionCheckpointStoreForTests,
   setSummarizeKnowledgeIndexRepositoryForTests,
 } from "@/lib/summarize";
 import {
@@ -49,6 +60,18 @@ const RAW = [
   "지난주 스프린트에서 딜러십 재고 견적 기능을 마무리했습니다.",
   "이번 주는 RIDE 온보딩 플로우를 개선할 예정입니다.",
 ].join("\n");
+
+function fastRaw(count = 3): string {
+  return Array.from({ length: count }, (_, index) => (
+    `${String.fromCharCode(65 + index)}${"가".repeat(
+      Math.floor(CORRECTION_CHUNK_TARGET_CHARS * 0.58),
+    )}\n`
+  )).join("");
+}
+
+function correctionTarget(prompt: string): string {
+  return prompt.slice(prompt.lastIndexOf("[원문]") + "[원문]".length).trim();
+}
 
 const BASE_SUMMARY = {
   title: "기존 회의 요약",
@@ -80,12 +103,14 @@ beforeEach(() => {
   savedFakeLlm = process.env.FAKE_LLM;
   savedFakeLlmFail = process.env.FAKE_LLM_FAIL;
   resetKnowledgeIndexRepositoryStateForTests();
+  setSummarizeCorrectionCheckpointStoreForTests(null);
   setSummarizeKnowledgeIndexRepositoryForTests(null);
 });
 
 afterEach(() => {
   delete globalThis.__aiNoteFakeLlmRunHook;
   vi.restoreAllMocks();
+  setSummarizeCorrectionCheckpointStoreForTests(null);
   setSummarizeKnowledgeIndexRepositoryForTests(null);
   resetKnowledgeIndexRepositoryStateForTests();
   resetStatusUpdaterStateForTests();
@@ -287,7 +312,9 @@ describe("runSummarize", () => {
     expect(run.mock.calls[0][0]).toContain("[원문]");
     expect(run.mock.calls[0][1]).toBeUndefined();
     expect(run.mock.calls[1][0]).toContain("JSON 스키마");
-    expect(run.mock.calls[1][1]).toEqual({ json: true });
+    expect(run.mock.calls[1][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
     const pair = await readArtifactPair(id);
     expect(pair.state).toBe("stable");
     expect(pair.contentRevision).toMatchObject({
@@ -299,6 +326,283 @@ describe("runSummarize", () => {
       },
     });
     expect(pair.summaryOutdated).toBe(false);
+  });
+
+  it("runs explicit fast correction in deterministic chunks and summarizes the merged transcript once", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    await writePipelineSettings({
+      transcription: { model: "large-v3" },
+      correction: { mode: "fast" },
+    });
+    const id = "meeting-fast-correction";
+    await seedTranscribed(id);
+    const raw = fastRaw(4);
+    await writeFile(meetingPaths(id).raw, raw);
+    await writeFile(meetingPaths(id).segments, `${JSON.stringify(
+      raw.trimEnd().split("\n").map((text, index) => ({
+        start: index,
+        end: index + 1,
+        text,
+      })),
+    )}\n`);
+    const plan = createCorrectionChunkPlan(raw);
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    const correctionCalls = run.mock.calls.filter(([, options]) => options === undefined);
+    const summaryCalls = run.mock.calls.filter(([, options]) => options?.jsonSchema);
+    expect(correctionCalls).toHaveLength(plan.chunks.length);
+    expect(correctionCalls.every(([prompt]) => (
+      prompt.includes("[읽기 전용 앞 문맥]")
+      && prompt.includes("[읽기 전용 뒤 문맥]")
+    ))).toBe(true);
+    expect(summaryCalls).toHaveLength(1);
+    expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(raw);
+  });
+
+  it("preserves completed fast chunks after failure and resumes only unfinished chunks", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    await writePipelineSettings({
+      transcription: { model: "large-v3" },
+      correction: { mode: "fast" },
+    });
+    const id = "meeting-fast-resume";
+    await seedTranscribed(id);
+    const raw = fastRaw(3);
+    await writeFile(meetingPaths(id).raw, raw);
+    await writeFile(meetingPaths(id).segments, `${JSON.stringify(
+      raw.trimEnd().split("\n").map((text, index) => ({
+        start: index,
+        end: index + 1,
+        text,
+      })),
+    )}\n`);
+    const plan = createCorrectionChunkPlan(raw);
+    expect(plan.chunks).toHaveLength(3);
+    const firstTargets: string[] = [];
+    const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (prompt, options) => {
+        if (options?.jsonSchema) throw new Error("summary must not start");
+        const target = correctionTarget(prompt);
+        firstTargets.push(target[0]!);
+        if (target.startsWith("B")) {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          throw new Error("private chunk failure");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 8));
+        return target;
+      },
+    );
+
+    await expect(runSummarize(id)).resolves.toMatchObject({
+      ok: false,
+      reason: "error",
+    });
+
+    expect(firstTargets.sort()).toEqual(["A", "B"]);
+    const partial = JSON.parse(
+      await readFile(correctionCheckpointPath(id), "utf8"),
+    );
+    expect(partial.correctedTranscript).toBe("");
+    expect(partial.correctionPromptVersion).toBe("correction-fast-v1");
+    expect(partial.completedChunks.map((chunk: { index: number }) => chunk.index))
+      .toEqual([0]);
+    expect((await readStatus(id))?.error?.action).toBe("retry_summary");
+    firstRun.mockRestore();
+
+    const retryTargets: string[] = [];
+    const retryRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (prompt, options) => {
+        if (options?.jsonSchema) return JSON.stringify(BASE_SUMMARY);
+        const target = correctionTarget(prompt);
+        retryTargets.push(target[0]!);
+        return target;
+      },
+    );
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect(retryTargets.sort()).toEqual(["B", "C"]);
+    expect(retryRun.mock.calls.filter(([, options]) => options?.jsonSchema))
+      .toHaveLength(1);
+    expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(raw);
+    expect(existsSync(correctionCheckpointPath(id))).toBe(false);
+  });
+
+  it("keeps full mode on the single full-context correction path", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    await writePipelineSettings({
+      transcription: { model: "large-v3" },
+      correction: { mode: "full" },
+    });
+    const id = "meeting-full-correction-default";
+    await seedTranscribed(id);
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]?.[0]).not.toContain("[읽기 전용 앞 문맥]");
+    expect(run.mock.calls[1]?.[1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
+  });
+
+  it("retains a successful correction after summary failure and reuses it on manual retry", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-checkpoint-retry";
+    await seedTranscribed(id);
+    const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (_prompt, options) => {
+        if (!options?.jsonSchema) return RAW;
+        throw new Error("summary unavailable");
+      },
+    );
+
+    await expect(runSummarize(id)).resolves.toMatchObject({
+      ok: false,
+      reason: "error",
+    });
+
+    expect(firstRun).toHaveBeenCalledTimes(2);
+    expect(firstRun.mock.calls[0][1]).toBeUndefined();
+    expect(firstRun.mock.calls[1][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
+    expect(existsSync(correctionCheckpointPath(id))).toBe(true);
+    expect((await readStatus(id))?.error?.action).toBe("retry_summary");
+    firstRun.mockRestore();
+
+    const retryRun = vi.spyOn(FakeAdapter.prototype, "run");
+    await expect(acceptSummarize(id)).resolves.toEqual({
+      accepted: true,
+      durability: "durable",
+    });
+    await waitForSummarize(id);
+
+    expect(retryRun).toHaveBeenCalledTimes(1);
+    expect(retryRun.mock.calls[0][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
+    expect((await readStatus(id))?.status).toBe("summarized");
+    expect((await readStatus(id))?.error).toBeNull();
+    expect(existsSync(correctionCheckpointPath(id))).toBe(false);
+  });
+
+  it("does not reuse a checkpoint after the configured model identity changes", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli", model: "sonnet" });
+    const id = "meeting-checkpoint-model-mismatch";
+    await seedTranscribed(id);
+    const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (_prompt, options) => {
+        if (!options?.jsonSchema) return RAW;
+        throw new Error("summary unavailable");
+      },
+    );
+    await expect(runSummarize(id)).resolves.toMatchObject({ ok: false });
+    firstRun.mockRestore();
+
+    await writeSettings({ provider: "claude-cli", model: "opus" });
+    const retryRun = vi.spyOn(FakeAdapter.prototype, "run");
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect(retryRun).toHaveBeenCalledTimes(2);
+    expect(retryRun.mock.calls[0][1]).toBeUndefined();
+    expect(retryRun.mock.calls[1][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
+  });
+
+  it("does not start summary generation from a durability-pending checkpoint commit", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-checkpoint-pending";
+    await seedTranscribed(id);
+    const base = createNodeFileOps();
+    const fileOps: FileOps = {
+      ...base,
+      openDirectory: async (...args) => {
+        const handle = await base.openDirectory(...args);
+        return {
+          ...handle,
+          sync: async () => {
+            throw Object.assign(new Error("transient"), { code: "EIO" });
+          },
+        };
+      },
+    };
+    setSummarizeCorrectionCheckpointStoreForTests(createCorrectionCheckpointStore({
+      dataRoot: dataRoot(),
+      fileOps,
+      capability: createDirectorySyncCapability("supported"),
+    }));
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+
+    await expect(runSummarize(id)).resolves.toMatchObject({
+      ok: false,
+      reason: "error",
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0][1]).toBeUndefined();
+    expect(existsSync(correctionCheckpointPath(id))).toBe(true);
+    expect(existsSync(meetingPaths(id).summary)).toBe(false);
+  });
+
+  it("does not write or reuse a checkpoint after the durable attempt identity changes", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-checkpoint-attempt-mismatch";
+    await seedTranscribed(id);
+    let replaced = false;
+    globalThis.__aiNoteFakeLlmRunHook = async () => {
+      if (replaced) return;
+      replaced = true;
+      const status = await readStatus(id);
+      await writeStatus(id, {
+        ...status!,
+        summarizeAttempt: {
+          ...status!.summarizeAttempt!,
+          attemptId: randomUUID(),
+        },
+      });
+    };
+    const run = vi.spyOn(FakeAdapter.prototype, "run");
+
+    await expect(runSummarize(id)).resolves.toMatchObject({
+      ok: false,
+      reason: "error",
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(existsSync(correctionCheckpointPath(id))).toBe(false);
+    expect(existsSync(meetingPaths(id).summary)).toBe(false);
+  });
+
+  it("keeps an already-published pair successful when checkpoint cleanup fails", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-checkpoint-cleanup-failure";
+    await seedTranscribed(id);
+    const store = createCorrectionCheckpointStore({ dataRoot: dataRoot() });
+    setSummarizeCorrectionCheckpointStoreForTests({
+      ...store,
+      remove: async () => {
+        throw new Error("cleanup failed");
+      },
+    });
+
+    await expect(runSummarize(id)).resolves.toEqual({ ok: true });
+
+    expect((await readStatus(id))?.status).toBe("summarized");
+    expect(existsSync(meetingPaths(id).summary)).toBe(true);
+    expect(existsSync(correctionCheckpointPath(id))).toBe(true);
   });
 
   it("creates a knowledge card and corpus map only after the summary pair is published", async () => {
@@ -422,7 +726,9 @@ describe("runSummarize", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run.mock.calls[0][0]).toContain("직접 수정한 현재 전체 스크립트");
     expect(run.mock.calls[0][0]).not.toContain("RAW_SENTINEL_SHOULD_NOT_BE_READ");
-    expect(run.mock.calls[0][1]).toEqual({ json: true });
+    expect(run.mock.calls[0][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
     expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(seeded.transcript);
     expect((await readStatus(id))?.contentRevision?.transcript.source).toBe("manual");
   });
@@ -623,7 +929,9 @@ describe("independent transcript and summary generation", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run.mock.calls[0][0]).toContain("사용자가 직접 수정한 전체 스크립트");
     expect(run.mock.calls[0][0]).not.toContain("[원문]");
-    expect(run.mock.calls[0][1]).toEqual({ json: true });
+    expect(run.mock.calls[0][1]).toEqual({
+      jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+    });
     expect(await readFile(meetingPaths(id).transcript, "utf8")).toBe(seeded.transcript);
     const pair = await readArtifactPair(id);
     expect(pair.contentRevision?.transcript.source).toBe("manual");

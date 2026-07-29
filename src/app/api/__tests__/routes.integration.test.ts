@@ -22,15 +22,23 @@ import { GET as listMeetings } from "@/app/api/meetings/route";
 import { GET as llmHealthGET } from "@/app/api/settings/llm/health/route";
 import { POST as llmModelsPOST } from "@/app/api/settings/llm/models/route";
 import { POST as llmSettingsPOST } from "@/app/api/settings/llm/route";
+import {
+  GET as pipelineSettingsGET,
+  POST as pipelineSettingsPOST,
+} from "@/app/api/settings/pipeline/route";
 import { POST as transcribePOST } from "@/app/api/transcribe/route";
 import { POST as globalSummarizePOST } from "@/app/api/summarize/route";
 import { GET as whisperHealth } from "@/app/api/whisper/health/route";
+import { POST as prepareWhisperModelPOST } from "@/app/api/whisper/models/prepare/route";
+import { GENERATED_SUMMARY_JSON_SCHEMA } from "@/domain/generatedSummaryJsonSchema";
 import { meetingPaths } from "@/lib/paths";
 import { acquireArtifactWriteLease } from "@/lib/artifactLease";
 import { acquireMeetingOperation } from "@/lib/meetingLifecycle";
+import { pipelineSettingsPath } from "@/lib/pipelineSettings";
 import { settingsPath, writeSettings } from "@/lib/settings";
 import { initialStatus, writeStatus } from "@/lib/status";
 import { isSummarizeInflight } from "@/lib/summarize";
+import { correctionCheckpointPath } from "@/lib/summarizeCheckpoint";
 import { FakeAdapter } from "@/services/llm/fake";
 
 // Integration test for the app-api route handlers. Boots the whisper service with
@@ -161,6 +169,113 @@ describe("app-api routes", () => {
     const body = await res.json();
     expect(body.connected).toBe(true);
     expect(body.ready).toBe(true);
+  });
+
+  it("GET/POST /api/settings/pipeline defaults to quality-first and saves without preparing", async () => {
+    rmSync(pipelineSettingsPath(), { force: true });
+    const initial = await pipelineSettingsGET(appRequest("/api/settings/pipeline"));
+    expect(initial.status).toBe(200);
+    await expect(initial.json()).resolves.toEqual({
+      source: "default",
+      settings: {
+        transcription: { model: "large-v3" },
+        correction: { mode: "full" },
+      },
+    });
+
+    const saved = await pipelineSettingsPOST(appRequest("/api/settings/pipeline", {
+      method: "POST",
+      body: JSON.stringify({
+        transcription: { model: "large-v3-turbo" },
+        correction: { mode: "fast" },
+      }),
+    }));
+    expect(saved.status).toBe(200);
+    await expect(saved.json()).resolves.toMatchObject({
+      settings: {
+        transcription: { model: "large-v3-turbo" },
+        correction: { mode: "fast" },
+      },
+      durability: expect.stringMatching(/^(durable|best_effort|pending)$/u),
+    });
+
+    const health = await whisperHealth(appRequest("/api/whisper/health"));
+    const body = await health.json();
+    expect(body.ready).toBe(true);
+    expect(body.modelPreparation).toContainEqual({
+      model: "large-v3-turbo",
+      status: "idle",
+    });
+  });
+
+  it("rejects corrupt pipeline settings instead of silently resetting them", async () => {
+    mkdirSync(join(workDir, "data"), { recursive: true });
+    writeFileSync(pipelineSettingsPath(), "{private malformed");
+    try {
+      const response = await pipelineSettingsGET(appRequest("/api/settings/pipeline"));
+      expect(response.status).toBe(503);
+      const text = await response.text();
+      expect(text).toContain("pipeline_settings_unavailable");
+      expect(text).not.toContain("private malformed");
+    } finally {
+      rmSync(pipelineSettingsPath(), { force: true });
+    }
+  });
+
+  it("POST /api/whisper/models/prepare is guarded, strict, and explicitly asynchronous", async () => {
+    let bodyObserved = false;
+    const unsafe = new Request("http://evil.test/api/whisper/models/prepare", {
+      method: "POST",
+      headers: {
+        host: "evil.test",
+        origin: "http://evil.test",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ model: "large-v3" }),
+    });
+    const guarded = new Proxy(unsafe, {
+      get(target, property) {
+        if (property === "body") {
+          bodyObserved = true;
+          throw new Error("body must not be read");
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    expect((await prepareWhisperModelPOST(guarded)).status).toBe(403);
+    expect(bodyObserved).toBe(false);
+
+    for (const body of [
+      { model: "small" },
+      { model: "large-v3", repo: "arbitrary/repo" },
+    ]) {
+      const rejected = await prepareWhisperModelPOST(appRequest("/api/whisper/models/prepare", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }));
+      expect(rejected.status).toBe(400);
+    }
+
+    const accepted = await prepareWhisperModelPOST(appRequest("/api/whisper/models/prepare", {
+      method: "POST",
+      body: JSON.stringify({ model: "large-v3-turbo" }),
+    }));
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toEqual({
+      model: "large-v3-turbo",
+      status: "preparing",
+    });
+
+    await vi.waitFor(async () => {
+      const response = await whisperHealth(appRequest("/api/whisper/health"));
+      const health = await response.json();
+      expect(health.ready).toBe(true);
+      expect(health.modelPreparation).toContainEqual({
+        model: "large-v3-turbo",
+        status: "ready",
+      });
+    });
   });
 
   it("POST /api/settings/llm rejects Ollama without a model", async () => {
@@ -867,7 +982,9 @@ describe("manual re-summarize (force)", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(run.mock.calls[0][0]).toContain("교정된 전사");
       expect(run.mock.calls[0][0]).not.toContain("[원문]");
-      expect(run.mock.calls[0][1]).toEqual({ json: true });
+      expect(run.mock.calls[0][1]).toEqual({
+        jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+      });
     } finally {
       run.mockRestore();
       delete process.env.FAKE_LLM;
@@ -916,6 +1033,55 @@ describe("manual re-summarize (force)", () => {
       expect(existsSync(paths.summary)).toBe(true);
     } finally {
       run.mockRestore();
+      delete process.env.FAKE_LLM;
+    }
+  });
+
+  it("keeps a failed initial correction checkpoint for a manual route retry", async () => {
+    process.env.FAKE_LLM = "1";
+    await writeSettings({ provider: "claude-cli" });
+    const id = "m-initial-checkpoint-retry";
+    const paths = meetingPaths(id);
+    mkdirSync(paths.dir, { recursive: true });
+    await writeStatus(id, { ...initialStatus(id, INIT), status: "transcribed" });
+    writeFileSync(paths.raw, "수동 재시도에서 재사용할 최초 생성 원문\n");
+    const firstRun = vi.spyOn(FakeAdapter.prototype, "run").mockImplementation(
+      async (_prompt, options) => {
+        if (options?.jsonSchema === undefined) {
+          return "수동 재시도에서 재사용할 교정 전사\n";
+        }
+        throw new Error("summary unavailable");
+      },
+    );
+    try {
+      const first = await summarizePOST(summarizeReq(id), ctx(id));
+      expect(first.status).toBe(202);
+      await settleSummarize(id);
+      expect(firstRun).toHaveBeenCalledTimes(2);
+      expect(firstRun.mock.calls[0][1]).toBeUndefined();
+      expect(firstRun.mock.calls[1][1]).toEqual({
+        jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+      });
+      expect(existsSync(correctionCheckpointPath(id))).toBe(true);
+      const failed = JSON.parse(readFileSync(paths.status, "utf8"));
+      expect(failed.error.action).toBe("retry_summary");
+    } finally {
+      firstRun.mockRestore();
+    }
+
+    const retryRun = vi.spyOn(FakeAdapter.prototype, "run");
+    try {
+      const retry = await summarizePOST(summarizeReq(id), ctx(id));
+      expect(retry.status).toBe(202);
+      await settleSummarize(id);
+      expect(retryRun).toHaveBeenCalledTimes(1);
+      expect(retryRun.mock.calls[0][1]).toEqual({
+        jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+      });
+      expect(existsSync(paths.summary)).toBe(true);
+      expect(existsSync(correctionCheckpointPath(id))).toBe(false);
+    } finally {
+      retryRun.mockRestore();
       delete process.env.FAKE_LLM;
     }
   });

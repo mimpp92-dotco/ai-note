@@ -19,6 +19,7 @@ import {
   repositoryRootFromScriptUrl,
   resolveRuntimePaths,
   runLaunchFlow,
+  runStatus,
   startOnAvailablePort,
   stopOwnedRuntime,
   waitForHealth,
@@ -401,6 +402,7 @@ describe("launch orchestration", () => {
   it("runs install/build/start/health/browser in order and prints one canonical URL", async () => {
     const repositoryRoot = resolve("/tmp", "ai-note");
     const events = [];
+    const healthUrls = [];
     const output = [];
     const commandPlan = buildBootstrapCommandPlan({
       repositoryRoot,
@@ -418,8 +420,9 @@ describe("launch orchestration", () => {
         events.push("start-runtime");
         return { appPort: 3003, whisperPort: 8126 };
       },
-      waitForEndpoint: async ({ name }) => {
+      waitForEndpoint: async ({ name, url }) => {
         events.push(name);
+        healthUrls.push(url);
       },
       openBrowser: async ({ url }) => {
         events.push("browser");
@@ -438,7 +441,52 @@ describe("launch orchestration", () => {
       "whisper",
       "browser",
     ]);
+    expect(healthUrls).toEqual([
+      "http://localhost:3003/",
+      "http://localhost:3003/api/whisper/health",
+    ]);
     expect(output).toEqual(["AI_NOTE_URL=http://localhost:3003"]);
     expect(result.url).toBe(canonicalAppUrl(3003));
+  });
+});
+
+describe("owned runtime status", () => {
+  it("probes the app and proxied Whisper health through the canonical localhost authority", async () => {
+    const repositoryRoot = resolve("/tmp", "ai-note");
+    const paths = resolveRuntimePaths(repositoryRoot);
+    const state = {
+      schemaVersion: 1,
+      repositoryRoot,
+      supervisorPid: 4242,
+      token: "a".repeat(64),
+      appPort: 3006,
+      whisperPort: 8129,
+      appPid: 5001,
+      whisperPid: 5002,
+      startedAt: 9_000,
+    };
+    const probed = [];
+    const output = [];
+
+    await runStatus({
+      repositoryRoot,
+      paths,
+      readOwnership: async () => ({ kind: "owned", state }),
+      probeEndpoint: async (url, options) => {
+        probed.push([url, options]);
+        return options?.json
+          ? { connected: true, ok: true, ready: true }
+          : { ready: true };
+      },
+      writeLine: (line) => output.push(line),
+    });
+
+    expect(probed).toEqual([
+      ["http://localhost:3006/", undefined],
+      ["http://localhost:3006/api/whisper/health", { json: true }],
+    ]);
+    expect(output).toContain("AI_NOTE_URL=http://localhost:3006");
+    expect(output).toContain(`app=ready log=${paths.appLog}`);
+    expect(output).toContain(`whisper=ready log=${paths.whisperLog}`);
   });
 });

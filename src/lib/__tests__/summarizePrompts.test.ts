@@ -44,6 +44,21 @@ describe("buildSummaryPrompt", () => {
     expect(p).not.toContain("도메인 용어");
     expect(p).toContain("[전사]");
   });
+
+  it("includes all 40,001 transcript characters without a truncation notice", () => {
+    const transcript = `${"가".repeat(40_000)}끝`;
+    const prompt = buildSummaryPrompt(transcript, "긴 회의");
+
+    expect(prompt).toContain(`[전사]\n${transcript}`);
+    expect(prompt.endsWith(transcript)).toBe(true);
+    expect(prompt).not.toContain("앞부분만 반영");
+  });
+
+  it("keeps generated participants empty because review state owns attendees", () => {
+    expect(buildSummaryPrompt("전사", "회의")).toContain(
+      "participants는 반드시 빈 배열",
+    );
+  });
 });
 
 // Drift guard: summarizePrompts.ts is canonical and ARCHITECTURE mirrors it.

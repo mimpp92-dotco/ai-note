@@ -165,6 +165,31 @@ describe("summarizeCore", () => {
     expect(result.summary.participants).toEqual(["기존 내부 참석자"]);
     expect(Object.keys(result)).not.toContain("transcript");
   });
+
+  it("does not invent truncation metadata or a false followup for a 40,001-character transcript", async () => {
+    const transcript = `${"가".repeat(40_000)}끝`;
+    const result = await summarizeTranscript({
+      title: "긴 회의",
+      transcript,
+      summaryOutput: JSON.stringify({
+        title: "긴 회의",
+        topicSlug: "long-meeting",
+        oneLine: "전체 전사를 요약했습니다.",
+        purpose: "긴 회의 검증",
+        participants: [],
+        highlights: [],
+        discussion: [],
+        decisions: [],
+        actionItems: [],
+        risks: [],
+        followups: ["기존 후속 확인"],
+      }),
+    });
+
+    expect(result).not.toHaveProperty("truncated");
+    expect(result.summary.followups).toEqual(["기존 후속 확인"]);
+    expect(JSON.stringify(result.summary)).not.toContain("앞부분만 반영");
+  });
 });
 
 // The tolerant extractor is shared with the chatbot envelope parser (phase 1):

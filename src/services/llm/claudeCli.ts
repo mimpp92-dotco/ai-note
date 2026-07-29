@@ -1,9 +1,16 @@
 import { tmpdir } from "node:os";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 
+import { detectCliCapabilities } from "@/services/llm/cliCapabilities";
 import { LLM_GENERATION_TIMEOUT_MS, runProcess } from "@/services/llm/exec";
-import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services/llm/types";
+import type {
+  LlmAdapter,
+  LlmHealth,
+  LlmProvider,
+  LlmRunOptions,
+  LlmSettings,
+} from "@/services/llm/types";
 
 // Claude Code CLI backend. `claude -p` runs non-interactively and reads the
 // prompt from STDIN when piped. Summary tasks are self-contained (no tools,
@@ -23,16 +30,23 @@ const PAID_BILLING_ENV_VARS = [
   "OPENAI_API_KEY",
 ] as const;
 
+const CLAUDE_OPTIONAL_FLAGS = [
+  "--safe-mode",
+  "--no-session-persistence",
+  "--tools",
+  "--no-chrome",
+  "--json-schema",
+] as const;
+
 export class ClaudeCliAdapter implements LlmAdapter {
   readonly provider: LlmProvider = "claude-cli";
 
   constructor(private readonly settings: LlmSettings) {}
 
-  // `opts.json` requests structured output: `claude -p --output-format json` wraps
-  // the answer in a result envelope ({"type":"result","result":"<text>",...}) that
-  // we unwrap back to the raw text. This makes the chatbot's JSON envelope parseable
-  // even when a free-form `claude -p` prepends CLI chatter; the caller's tolerant
-  // extractor stays the final safety net. Plain (correction) calls keep text output.
+  // JSON options use `claude -p --output-format json`; explicit summary schemas
+  // additionally use help-proven `--json-schema`. We unwrap structured_output or
+  // the result text so the caller's tolerant extractor remains the final safety
+  // net. Plain correction calls keep text output.
   //
   // Isolated + self-contained (aligned with codexCli's `-C tmpdir()` pattern):
   // run in a temp cwd, never the project directory, so no workspace CLAUDE.md /
@@ -42,10 +56,29 @@ export class ClaudeCliAdapter implements LlmAdapter {
   // never silently metered to a paid API ($0 invariant); HOME/PATH stay so OAuth
   // keychain access and binary lookup still work. The transcript goes via stdin
   // only (never argv: `ps` exposure + ARG_MAX).
-  async run(prompt: string, opts?: { json?: boolean }): Promise<string> {
+  async run(prompt: string, opts?: LlmRunOptions): Promise<string> {
+    const capabilities = await detectCliCapabilities({
+      file: "claude",
+      args: ["--help"],
+      optionalFlags: CLAUDE_OPTIONAL_FLAGS,
+    });
+    const wantsJson = opts?.json === true || opts?.jsonSchema !== undefined;
+    let jsonSchemaArgument: string | null = null;
+    if (opts?.jsonSchema !== undefined && capabilities.has("--json-schema")) {
+      jsonSchemaArgument = JSON.stringify(opts.jsonSchema) ?? null;
+    }
     const args = [
       "-p",
-      ...(opts?.json ? ["--output-format", "json"] : []),
+      ...(wantsJson ? ["--output-format", "json"] : []),
+      ...(capabilities.has("--safe-mode") ? ["--safe-mode"] : []),
+      ...(capabilities.has("--no-session-persistence")
+        ? ["--no-session-persistence"]
+        : []),
+      ...(capabilities.has("--tools") ? ["--tools", ""] : []),
+      ...(capabilities.has("--no-chrome") ? ["--no-chrome"] : []),
+      ...(jsonSchemaArgument === null
+        ? []
+        : ["--json-schema", jsonSchemaArgument]),
       "--strict-mcp-config",
       "--mcp-config",
       '{"mcpServers":{}}',
@@ -56,13 +89,16 @@ export class ClaudeCliAdapter implements LlmAdapter {
     for (const key of PAID_BILLING_ENV_VARS) delete env[key];
     const cwd = await mkdtemp(join(tmpdir(), "ai-note-claude-"));
     try {
+      await chmod(cwd, 0o700);
       const { stdout } = await runProcess("claude", args, {
         stdin: prompt,
         timeoutMs: LLM_GENERATION_TIMEOUT_MS,
         cwd,
         env,
       });
-      return opts?.json ? unwrapResultEnvelope(stdout) : stdout.trim();
+      return wantsJson
+        ? unwrapResultEnvelope(stdout, jsonSchemaArgument !== null)
+        : stdout.trim();
     } finally {
       // Cleanup is deliberately best-effort: a generated result remains valid
       // even when antivirus/indexer timing prevents immediate temp removal.
@@ -97,15 +133,29 @@ export class ClaudeCliAdapter implements LlmAdapter {
   }
 }
 
-// Unwrap the `--output-format json` result envelope to its `result` text. Falls
-// back to the untouched stdout when the envelope is absent or unparseable, so the
-// caller's tolerant extractor still gets a chance at whatever the CLI produced.
-function unwrapResultEnvelope(stdout: string): string {
+// Unwrap the schema-validated object or generic result text. Fall back to the
+// untouched stdout when the envelope is absent or unparseable so the caller's
+// tolerant extractor still gets a chance at whatever the CLI produced.
+function unwrapResultEnvelope(
+  stdout: string,
+  preferStructuredOutput = false,
+): string {
   const trimmed = stdout.trim();
   try {
     const parsed: unknown = JSON.parse(trimmed);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const result = (parsed as Record<string, unknown>).result;
+      const envelope = parsed as Record<string, unknown>;
+      const structuredOutput = envelope.structured_output;
+      if (
+        preferStructuredOutput
+        && structuredOutput
+        && typeof structuredOutput === "object"
+        && !Array.isArray(structuredOutput)
+      ) {
+        const structuredJson = JSON.stringify(structuredOutput);
+        if (structuredJson !== undefined) return structuredJson;
+      }
+      const result = envelope.result;
       if (typeof result === "string") return result.trim();
     }
   } catch {

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Quality-first transcription and correction settings**: Settings now stores
+  the fixed `large-v3` (default) / `large-v3-turbo` Whisper choice together with
+  full (default) / experimental fast correction. Saving never downloads a
+  model; a separate prepare action shares one global execution fence with
+  inference, while each new Whisper dispatch snapshots its effective model.
+- **Durable correction resume**: a hidden local checkpoint preserves a
+  validated full correction or each completed fast chunk. Summary failure or
+  interruption keeps that work for an exact-key manual retry; successful
+  canonical pair publication removes it best-effort.
+- **Explicit isolated pipeline benchmark**: the exact-ID-only
+  `npm run benchmark:pipeline -- --meeting-id <id>` command compares
+  large-v3/Turbo and full/fast in a private read-only source snapshot. Reports
+  calculate speed thresholds but stay undecided until important names, numbers,
+  and decisions receive human review.
 - **One-command installation and owned background runtime**: a dependency-free
   `node scripts/bootstrap.mjs --launch` flow now runs the prerequisite doctor,
   installs exact npm dependencies with hooks disabled, builds, chooses bounded
@@ -77,6 +91,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Structured and isolated LLM generation**: generated summaries pass a strict
+  summary-only JSON Schema through supported Claude/Codex CLI capabilities and
+  Ollama's schema format while retaining tolerant JSON salvage and final schema
+  validation. Optional CLI flags are help-probed once per process; a generation
+  is never replayed after an unsupported-flag failure. Generation timeout is
+  now 30 minutes per call, and full correction sends the complete transcript
+  without the former false 40,000-character truncation notice.
+- **Manual-only failure recovery**: initial transcription and summary dispatch
+  remain automatic, but an explicit failure is not restarted by the worker,
+  network recovery, or app restart. Existing artifacts and safe errors remain
+  visible until the user submits the corresponding retry.
 - End-user installation now uses the dynamic URL printed by the background
   bootstrap instead of assuming `localhost:3000`; foreground `npm run dev` is
   documented as a contributor command. First-transcription copy now explains
@@ -111,7 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server state after accepted/already-running races, preserves safe error copy,
   and returns focus to the retry control.
 - **Re-summarize reliability** (ADR 0009):
-  - **Timeout**: LLM correction/summary calls now use a fixed 10-minute timeout
+  - **Timeout**: LLM correction/summary calls now use a fixed 30-minute timeout
     (`LLM_GENERATION_TIMEOUT_MS`) instead of the 120s subprocess default — a long
     meeting's correction step re-emits the whole transcript and was being SIGKILLed.
   - **Async**: "다시 요약" no longer blocks the request for minutes. The route
@@ -147,6 +172,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`/`VERTEX`) — are scrubbed from
     the child environment so a subscription-OAuth CLI is never silently metered to
     a paid API; `HOME`/`PATH` (OAuth keychain + binary lookup) are kept.
+- **Owned runtime health authority**: bootstrap launch and `app:status` now probe
+  the app and same-origin Whisper proxy through the canonical
+  `http://localhost:<actual-port>` authority accepted by the local request
+  guard, while child binds and direct service egress remain `127.0.0.1`.
 
 ## [0.1.0] - 2026-07-08
 

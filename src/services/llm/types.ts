@@ -24,14 +24,28 @@ export interface LlmHealth {
   detail: string;
 }
 
+export type LlmJsonSchema = Readonly<Record<string, unknown>>;
+
+export type LlmRunOptions =
+  | {
+      /** Generic JSON hint used by the chat protocol. */
+      json: true;
+      jsonSchema?: never;
+    }
+  | {
+      /** Explicit provider-facing schema used only for generated summaries. */
+      jsonSchema: LlmJsonSchema;
+      json?: never;
+    };
+
 export interface LlmAdapter {
   provider: LlmProvider;
   /**
-   * Run one prompt, return the model's text output. `json: true` hints the
-   * backend to emit JSON where supported (summarizeCore tolerates prose/fences
-   * regardless, so this is best-effort).
+   * Run one prompt and return the model's text output. Generic chat JSON and an
+   * explicit generated-summary schema are distinct options; tolerant parsing
+   * remains the final defense for older providers.
    */
-  run(prompt: string, opts?: { json?: boolean }): Promise<string>;
+  run(prompt: string, opts?: LlmRunOptions): Promise<string>;
   /** Cheap reachability/auth check for the settings "test connection" button. */
   health(): Promise<LlmHealth>;
 }

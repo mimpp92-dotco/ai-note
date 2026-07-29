@@ -1,18 +1,31 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { meetingPaths } from "@/lib/paths";
+import { resetArtifactLeaseStateForTests } from "@/lib/artifactLease";
+import {
+  acquireMeetingOperation,
+  resetMeetingLifecycleForTests,
+} from "@/lib/meetingLifecycle";
+import { resetMeetingTombstoneStateForTests } from "@/lib/meetingTombstone";
+import { dataRoot, meetingPaths } from "@/lib/paths";
 import { writeSettings } from "@/lib/settings";
-import { initialStatus, writeStatus } from "@/lib/status";
+import { initialStatus, readStatus, writeStatus } from "@/lib/status";
+import {
+  CORRECTION_CHECKPOINT_SCHEMA_VERSION,
+  correctionCheckpointPath,
+  createCorrectionCheckpointStore,
+} from "@/lib/summarizeCheckpoint";
 import { findSummarizeCandidates } from "@/lib/summarizeWorker";
 
-// Candidacy is derived purely from files on disk + the attempt counter, so cwd
-// isolation (meetingsRoot()/settingsPath() are cwd-relative) is all the setup needed.
+// Candidacy is derived from safe files on disk and persisted manual-attention
+// state, so cwd isolation (meetingsRoot()/settingsPath() are cwd-relative) is
+// all the setup needed.
 
 let workDir: string;
 let originalCwd: string;
@@ -21,9 +34,15 @@ beforeEach(() => {
   originalCwd = process.cwd();
   workDir = mkdtempSync(join(tmpdir(), "summarize-worker-"));
   process.chdir(workDir);
+  resetArtifactLeaseStateForTests();
+  resetMeetingLifecycleForTests();
+  resetMeetingTombstoneStateForTests();
 });
 
 afterEach(() => {
+  resetArtifactLeaseStateForTests();
+  resetMeetingLifecycleForTests();
+  resetMeetingTombstoneStateForTests();
   process.chdir(originalCwd);
   rmSync(workDir, { recursive: true, force: true });
 });
@@ -80,15 +99,80 @@ describe("findSummarizeCandidates", () => {
     expect(await findSummarizeCandidates()).toEqual([]);
   });
 
-  it("includes a transcribed meeting with raw.md, no summary, and attempts < 3", async () => {
+  it("includes a first transcribed meeting with raw.md, no summary, and no error", async () => {
     await writeSettings({ provider: "claude-cli" });
     await seed("meeting-ready");
     expect(await findSummarizeCandidates()).toEqual(["meeting-ready"]);
   });
 
-  it("excludes a meeting that exhausted its retries (attempts = 3)", async () => {
+  it("does not use a legacy attempt count as an automatic retry budget", async () => {
     await writeSettings({ provider: "claude-cli" });
     await seed("meeting-exhausted", { attempts: 3 });
+    expect(await findSummarizeCandidates()).toEqual(["meeting-exhausted"]);
+  });
+
+  it("leaves a failed initial summary for manual retry instead of selecting it again", async () => {
+    await writeSettings({ provider: "claude-cli" });
+    await seed("meeting-manual-retry", {
+      attempts: 1,
+      errorAction: "retry_summary",
+    });
+    expect(await findSummarizeCandidates()).toEqual([]);
+  });
+
+  it("reconciles an interrupted live attempt once, preserves its checkpoint, and never auto-retries it", async () => {
+    await writeSettings({ provider: "claude-cli" });
+    const id = "meeting-interrupted-checkpoint";
+    await seed(id);
+    const attemptId = randomUUID();
+    const status = await readStatus(id);
+    await writeStatus(id, {
+      ...status!,
+      status: "summarizing",
+      summarizeAttempt: {
+        attemptId,
+        kind: "initial",
+        startedAt: "2026-07-28T07:00:00.000Z",
+      },
+    });
+    const hash = (value: string) =>
+      createHash("sha256").update(value).digest("hex");
+    const transcript = "중단 전에 완료된 안전한 교정 전사\n";
+    const operation = await acquireMeetingOperation(id, "summarize");
+    try {
+      await createCorrectionCheckpointStore({ dataRoot: dataRoot() }).write(
+        id,
+        operation.ownerToken,
+        {
+          schemaVersion: CORRECTION_CHECKPOINT_SCHEMA_VERSION,
+          meetingId: id,
+          rawSha256: hash("회의 원문\n"),
+          glossarySha256: hash('{"terms":[],"corrections":[]}'),
+          provider: "claude-cli",
+          model: "",
+          providerEndpointIdentitySha256: hash("local-cli:claude-cli"),
+          correctionPromptVersion: "correction-v1",
+          correctionMode: "full",
+          chunkPlanSha256: hash("full-context-plan"),
+          correctedTranscript: transcript,
+          completedChunks: [{
+            index: 0,
+            inputSha256: hash("회의 원문\n"),
+            outputSha256: hash(transcript),
+          }],
+          committedAt: "2026-07-28T07:01:00.000Z",
+        },
+      );
+    } finally {
+      operation.release();
+    }
+
+    expect(await findSummarizeCandidates()).toEqual([]);
+    expect((await readStatus(id))?.error).toMatchObject({
+      code: "summary_interrupted",
+      action: "retry_summary",
+    });
+    expect(existsSync(correctionCheckpointPath(id))).toBe(true);
     expect(await findSummarizeCandidates()).toEqual([]);
   });
 

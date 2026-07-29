@@ -206,8 +206,10 @@ describe("data-surface inventory", () => {
       "/api/glossary",
       "/api/settings/llm",
       "/api/settings/llm/health",
+      "/api/settings/pipeline",
       "/api/settings/profile",
       "/api/whisper/health",
+      "/api/whisper/models/prepare",
       "/meetings/[id]",
     ]));
     expect(new Set(DATA_SURFACE_INVENTORY).size).toBe(DATA_SURFACE_INVENTORY.length);

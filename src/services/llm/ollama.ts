@@ -1,5 +1,11 @@
 import { LLM_GENERATION_TIMEOUT_MS } from "@/services/llm/exec";
-import type { LlmAdapter, LlmHealth, LlmProvider, LlmSettings } from "@/services/llm/types";
+import type {
+  LlmAdapter,
+  LlmHealth,
+  LlmProvider,
+  LlmRunOptions,
+  LlmSettings,
+} from "@/services/llm/types";
 import { normalizeLoopbackHttpBaseUrl } from "@/lib/localEndpoint";
 
 // Ollama backend — a local model daemon on 127.0.0.1. The daemon is frequently
@@ -127,9 +133,10 @@ export class OllamaAdapter implements LlmAdapter {
     this.baseUrl = normalizeLoopbackHttpBaseUrl(settings.baseUrl || DEFAULT_BASE_URL);
   }
 
-  async run(prompt: string, opts?: { json?: boolean }): Promise<string> {
+  async run(prompt: string, opts?: LlmRunOptions): Promise<string> {
     const model = this.settings.model?.trim();
     if (!model) throw new Error("Ollama model not set");
+    const format = opts?.jsonSchema ?? (opts?.json ? "json" : undefined);
 
     // Bound the call so a stuck daemon can't wedge the worker (CLI adapters get
     // this from exec.ts; fetch needs an explicit AbortController).
@@ -143,13 +150,15 @@ export class OllamaAdapter implements LlmAdapter {
           model,
           prompt,
           stream: false,
-          ...(opts?.json ? { format: "json" } : {}),
+          ...(format === undefined ? {} : { format }),
         }),
         signal: controller.signal,
         redirect: "error",
         cache: "no-store",
       });
-      if (!res.ok) throw new Error(`Ollama request failed: ${res.status} ${res.statusText}`);
+      if (!res.ok || res.redirected) {
+        throw new Error(`Ollama request failed: ${res.status} ${res.statusText}`);
+      }
 
       const data = (await res.json()) as { response?: string };
       return data.response ?? "";

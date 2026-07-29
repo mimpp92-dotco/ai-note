@@ -500,7 +500,7 @@ export async function runLaunchFlow({
     await runCommand(spec);
   }
   const runtime = await startRuntime();
-  const loopbackBaseUrl = `http://127.0.0.1:${runtime.appPort}`;
+  const loopbackBaseUrl = canonicalAppUrl(runtime.appPort);
   await waitForEndpoint({
     name: "app",
     url: `${loopbackBaseUrl}/`,
@@ -1112,12 +1112,19 @@ async function waitForRuntimeStateRemoval(paths, timeoutMs = 15_000) {
   throw new Error("owned supervisor가 종료되었지만 runtime state 정리를 확인하지 못했습니다.");
 }
 
-async function runStatus({ repositoryRoot, paths }) {
-  const ownership = await readRuntimeOwnership({
-    paths,
-    repositoryRoot,
-    isProcessAlive: realIsProcessAlive,
-  });
+export async function runStatus({
+  repositoryRoot,
+  paths,
+  readOwnership = () =>
+    readRuntimeOwnership({
+      paths,
+      repositoryRoot,
+      isProcessAlive: realIsProcessAlive,
+    }),
+  probeEndpoint = fetchEndpoint,
+  writeLine = (line) => console.log(line),
+}) {
+  const ownership = await readOwnership();
   if (ownership.kind !== "owned") {
     throw new Error(
       `AI NOTE runtime 상태를 안전하게 확인할 수 없습니다(${ownership.reason ?? ownership.kind}).`,
@@ -1125,18 +1132,18 @@ async function runStatus({ repositoryRoot, paths }) {
   }
   const { state } = ownership;
   const appUrl = canonicalAppUrl(state.appPort);
-  const app = await fetchEndpoint(`http://127.0.0.1:${state.appPort}/`);
-  const whisper = await fetchEndpoint(
-    `http://127.0.0.1:${state.appPort}/api/whisper/health`,
+  const app = await probeEndpoint(`${appUrl}/`);
+  const whisper = await probeEndpoint(
+    `${appUrl}/api/whisper/health`,
     { json: true },
   );
-  console.log(`AI_NOTE_URL=${appUrl}`);
-  console.log(`supervisor=owned pid=${state.supervisorPid}`);
-  console.log(`app=${app?.ready === true ? "ready" : "not_ready"} log=${paths.appLog}`);
-  console.log(
+  writeLine(`AI_NOTE_URL=${appUrl}`);
+  writeLine(`supervisor=owned pid=${state.supervisorPid}`);
+  writeLine(`app=${app?.ready === true ? "ready" : "not_ready"} log=${paths.appLog}`);
+  writeLine(
     `whisper=${isWhisperHealthReady(whisper) ? "ready" : "not_ready"} log=${paths.whisperLog}`,
   );
-  console.log(`supervisor_log=${paths.supervisorLog}`);
+  writeLine(`supervisor_log=${paths.supervisorLog}`);
 }
 
 async function runStop({ repositoryRoot, paths }) {

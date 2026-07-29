@@ -147,6 +147,7 @@
 - 빈 상태: "아직 회의록이 없습니다 — 첫 회의를 녹음해보세요" + 큰 녹음 버튼 + 3단계 안내(녹음 → 전사 → 요약 확인). Default All은 heading·border surface를 한 번만 렌더하고 onboarding을 같은 surface에 통합하며, folder/unfiled는 해당 scope copy만 한 번 표시한다.
 - **상태 표시**: 색만으로 전달하지 않는다. whisper는 `Whisper {model} · 준비됨/준비 중/연결 안 됨`, 요약 모델은 `{Provider} {model?} · 연결됨/감지됨/미설정/실패`처럼 dot + 텍스트를 함께 표시한다. CLI provider(claude·codex)는 바이너리 감지라 “감지됨”, Ollama는 검증된 “연결됨”으로 라벨을 구분한다. 긴 모델명/오류는 truncate하고 full detail은 `title` 또는 설정 화면에서 확인한다. `baseUrl`은 사이드바에 노출하지 않는다.
 - **전사 실패 row**: `retry_transcription`은 일반 `전사 중` label로 덮지 않고 error tone+text `전사 실패`를 지속 표시한다. Row detail href는 같은 meeting을 가리키며 상세에서도 persisted failure와 recovery action이 보여야 한다.
+- **수동-only failure recovery**: 최초 전사·교정·요약 시작은 자동이지만 한번 `전사 실패`/`요약 실패`/fast chunk 실패가 되면 network 복귀·app restart·polling만으로 처리 중 copy로 돌아가지 않는다. 기존 error와 immutable/canonical artifact를 계속 보여 주고 사용자가 명시적 retry를 접수할 때만 busy state로 전환한다. Auto retry countdown, reconnect badge, stage progress, supervisor restart 안내는 만들지 않는다.
 - **행 액션(케밥 ⋯ 메뉴)**: 각 회의 행 우측의 44px kebab 버튼(카드 링크 바깥 형제) → ready library에서는 **이동**, 요약 완료 회의는 **이름 수정**, 모든 회의는 **삭제**. Mobile row는 title/date/breadcrumb와 status를 세로로 reflow하고 content owner는 `w-full min-w-0`을 가진다. 이름 수정은 320px에서 full-width input + action row로 stack하고(Enter=저장, Esc=취소, Korean IME 조합 Enter 무시), 실패 시 값·입력 focus를 유지한다. 삭제 확인도 copy 아래 action row로 stack하며 취소에 initial focus를 둔다. 삭제 버튼은 파괴적 색뿐 아니라 `영구 삭제` text를 유지하고 저장/삭제 완료·실패는 `aria-live="polite"`로 공지한다.
 - **Scoped list**: Workspace All row는 effective folder breadcrumb를 표시하고, 미분류/folder는 direct meeting만 표시한다. 이전/다음 cursor page를 제공하고 client는 current±2/max 5 pages만 유지한다. Empty copy는 All/미분류/folder를 구분한다.
 - **Organization pending**: default workspace All의 별도 경고 section에 actual 위치 없는 pending/unavailable row, safe requested hint, detail-probe action을 표시한다. Canonical folder counts/list에 섞지 않고 모든 scope에서 persistent count link로 접근한다.
@@ -168,6 +169,7 @@
 - **Tabs keyboard/ARIA**: 공유 horizontal controlled Tabs가 stable `tab`/`tabpanel` id, `aria-controls`/`aria-labelledby`, selected-only `tabIndex=0`과 panel 렌더를 소유한다. Left/Right는 wrap하며 automatic activation, Home/End는 first/last로 이동한다. Click도 선택+focus를 맞추고 Tab key는 가로 탐색 handler가 가로막지 않는다.
 - **기본 tab**: URL에 explicit `contentTab=script|summary`가 있으면 그대로 연다. Query가 없고 usable summary가 있는 완료 회의는 **회의록 요약**, summary가 없으면 **전체 스크립트**를 기본으로 연다.
 - **전사 실패 recovery**: `retry_transcription` detail은 safe failure copy와 **전사 다시 시도**를 보여 준다. 요청 중에는 **전사 요청 중…**으로 disable하고 accepted/already-running 뒤 최신 상태를 다시 확인한다. 실패 copy는 원본 보존과 다음 행동만 말하고 path/dispatch/provider output을 노출하지 않는다. Polite status를 알리고 완료 뒤 trigger로 focus를 돌린다. Polling은 single in-flight이며 timeout 자체를 실패로 표시하지 않는다.
+- **요약 실패 recovery**: 교정 뒤 summary가 실패해도 기존 canonical pair와 safe error를 유지하고 **요약 다시 시도**를 사용자가 누를 때만 새 attempt를 접수한다. Exact checkpoint가 있으면 완료 교정 또는 fast chunk를 재사용하지만 UI는 hidden checkpoint path/content를 노출하지 않는다. Retry 접수 전에는 자동 재시도·남은 chunk 시작·full fallback을 암시하지 않는다.
 - **Tab-local action bar**: 각 selected tabpanel은 `tablist → tab-local action/status → 요약 갱신 경고(해당할 때) → 읽기 본문 또는 editor` 순서다. 전체 스크립트는 **전체 스크립트 복사 / 전체 스크립트 수정 / 원문에서 스크립트 다시 만들기**, 회의록 요약은 **요약 복사 / JSON 다운로드 / 회의록 요약 수정 / 현재 스크립트로 요약 다시 만들기** 순서를 고정한다. 최초 교정 전 fallback은 `교정 전 원문 · 자동 전사`로 표시해 빈 탭을 만들지 않는다. 제목과 참석자는 summary editor에서 바꾸지 않고 각각 기존 제목 수정과 `회의 정보` 참석자 입력을 사용한다.
 - **본문 교체형 editor**: 수정 중에는 저장된 읽기 본문을 아래나 옆에 남기지 않고 같은 content region을 editor로 교체한다. 전체 스크립트는 하나의 multiline textarea로 현재 교정본을 lossless하게 편집한다. CRLF만 LF로 정규화하고 비어 있거나 UTF-8 1 MiB 초과면 입력에 focus한 채 저장을 막는다. Helper는 “교정된 스크립트만 바뀌며 녹음 원본과 자동 전사 원문은 유지됩니다”를 명시한다.
 - **회의록 요약 editor**: visible `회의록 요약 본문` label과 helper, resizable multiline textarea 하나만 제공한다. Generated structured summary는 읽기 순서와 같은 `요약`(oneLine 뒤 highlight bullet) → `목적` → `논의 내용` → `결정 사항` → `액션 아이템` → `리스크` → `후속 확인` plain text로 시작하며 빈 section은 생략한다. Block 사이는 LF 두 개이고 trailing LF가 없다. Existing manual body는 그대로 시작한다. Heading·bullet은 모두 삭제 가능한 일반 text이고 item 내부 개행도 parse·trim·재구성하지 않는다. 표시 제목·topicSlug·participants는 textarea에 넣지 않는다.
@@ -197,11 +199,20 @@
 
 ### 설정 화면 · 내 정보
 
-- Settings page는 `<main>`과 `h1 "설정"`을 하나씩만 가진다. `요약 모델`을 먼저, `내 정보`를 다음 sibling section으로 둔다. 각 section의 loading/load error/dirty/saving/saved/pending/save error는 다른 section의 편집과 상태를 가리거나 막지 않는다.
+- Settings page는 `<main>`과 `h1 "설정"`을 하나씩만 가진다. DOM 순서는 `전사·교정` → `요약 모델` → `내 정보`인 독립 sibling section이다. 각 section의 loading/load error/dirty/saving/saved/pending/save error는 다른 section의 편집과 상태를 가리거나 막지 않는다.
 - `내 정보`는 선택 설정이다. 제목 바로 아래에서 ‘내 할 일’·상대 날짜 개인화를 보완하지만 일반 검색/질문의 필수 조건은 아님을 설명한다. 표시 이름과 쉼표/줄바꿈 별칭은 첫 group에 보이고, timezone/주 시작 요일은 기본이 닫힌 native `날짜 기준` disclosure에 둔다. 사용자가 열었거나 검증 오류가 있는 disclosure를 저장/상태 갱신 때문에 임의로 닫지 않는다.
 - First-use에서는 **내 정보가 없어도 녹음·전사·일반 검색을 사용할 수 있습니다**를 명시한다. Dormant 질문 기능을 현재 활성 pipeline처럼 소개하지 않는다.
 - Missing profile의 timezone은 local runtime default 또는 판정 불가 시 `UTC`로 제안하되 `아직 저장되지 않음`을 함께 표시한다. IANA 값을 직접 입력할 수 있고 native datalist가 가능한 환경에서는 bounded suggestion만 제공한다. Pending durability는 실패/재저장 CTA가 아니라 `저장됨 · 디스크 동기화 확인 대기` committed warning으로 표시한다.
-- 320px에서는 두 section 모두 field와 action/status를 한 열로 reflow하고 timezone·별칭·CJK 장문이 action과 폭을 경쟁하거나 horizontal overflow를 만들지 않는다.
+- 320px에서는 세 section 모두 field와 action/status를 한 열로 reflow하고 timezone·별칭·CJK 장문이 action과 폭을 경쟁하거나 horizontal overflow를 만들지 않는다.
+
+### 전사·교정 설정
+
+- Section heading은 **전사·교정**이고 native select 두 개를 같은 atomic settings form에 둔다. **Whisper 모델**은 `large-v3 — 품질 우선(기본)` / `large-v3-turbo — 더 빠른 후보`, **교정 방식**은 `전체 교정 — 품질 우선(기본)` / `빠른 교정 — 실험적·검증 필요`만 제공한다. 임의 repository/path/model input이나 benchmark 전 추천 badge는 없다.
+- Missing settings는 `large-v3`+`full`을 선택한 ready default로 표시한다. Stored load error를 default로 가장하거나 replace-save하지 않고 retry를 제공한다. 한 **설정 저장** action이 두 값을 함께 전송해 model과 correction mode가 서로를 clobber하지 않는다.
+- 저장은 download/load를 시작하지 않는다. Save success status와 별개로 **선택 모델 미리 준비** button을 두며 현재 selected model만 explicit prepare한다. `idle`은 neutral helper, `preparing`은 **{model} 모델 준비 중**, `ready`는 **{model} 모델 준비 완료**, `error`는 safe failure와 retry를 표시한다. Percent/progress bar, auto retry, model cache path/raw error는 표시하지 않는다.
+- 준비하지 않은 model도 첫 실제 전사에서 lazy download될 수 있음을 설명한다. Setting 변경은 이미 처리 중인 dispatch에 적용되지 않고 다음 새 dispatch부터 적용된다. Turbo/fast는 같은 실제 회의의 2×/30% threshold와 중요 이름·숫자·결정 human review를 통과하기 전까지 후보/실험 상태다.
+- Fast helper는 target chunk만 교정하고 Claude/Codex 최대 2·Ollama 1의 제한 병렬을 쓰며, 실패 시 자동 full fallback이나 남은 새 chunk 실행 없이 manual retry로 완료 chunk를 재사용한다고 설명한다. 내부 plan hash/checkpoint path는 노출하지 않는다.
+- 320px에서는 두 select, save, prepare와 status를 한 열로 쌓고 모든 독립 control은 44px target과 visible focus를 유지한다. Save와 prepare는 서로 다른 busy state라 save가 prepare로 보이거나 prepare가 settings persistence로 보이지 않아야 한다.
 
 ### 요약 모델 설정
 - Initial GET은 `loading|ready|load_error`를 구분한다. `{provider:null}`만 명시적 미설정 ready이며, read 실패를 기본 Claude 설정으로 가장하지 않고 editor/save를 잠근 뒤 재시도를 제공한다.
@@ -217,11 +228,18 @@
 | Surface | 상태 | 필수 UX |
 |---|---|---|
 | Home readiness | health loading / ready / unconfigured / unavailable | loading·ready면 card 없음, 나머지는 비차단 설정+recorder focus, recorder enabled |
+| Pipeline settings | default / stored / load error / dirty / saving / saved | fixed 두 model·두 correction mode, full/large-v3 기본, atomic save, load error overwrite 차단 |
+| Whisper prepare | idle / preparing / ready / error | save와 분리, explicit action, selected model identity, no invented percentage/auto retry |
 | Model selector | known / unknown custom / provider switch / Ollama loading·empty·error | exact draft 보존, native select, 44px refresh, no auto download |
 | Persisted health | saving / checking / CLI detected / Ollama connected / unavailable | save snapshot 보존, 정직한 provider별 문구, success recorder action |
 | Transcription recovery | list failure / detail failure / requesting / accepted / safe error | persistent `전사 실패`, one request, disabled busy label, status+focus return |
 
 Readiness card, selector/refresh, retry action, recorder CTA는 320px에서 한 열 또는 wrap으로 reflow하고 horizontal overflow를 만들지 않는다. 독립 control은 최소 44px target과 visible focus를 유지한다.
+
+#### Pipeline settings browser 검증 기준
+
+- ADR 0020의 repository-owned synthetic Playwright는 `desktop-1440`, `mobile-390`, `mobile-320`에서 default `large-v3`+`full`, fixed 두 Whisper option, save-no-download, explicit prepare의 preparing/ready/error 상태, fast opt-in과 persisted failure/manual retry를 synthetic route로 검증한다.
+- Runner-owned empty data/synthetic settings만 사용하고 실제 meeting/glossary/Whisper/Ollama/Claude/Codex, model download, benchmark와 external network를 호출하지 않는다. Screenshot/assertion/console evidence는 `test-results/` 또는 execute journal에만 두며 문서가 실제 결과 전 pass를 선언하지 않는다.
 
 ## 접근성
 - 상태 변화는 `aria-live="polite"`로 안내("기록 중"·"전사 완료"). `prefers-reduced-motion` 존중. 소형 텍스트에 `#9A8F84` 금지(대비).

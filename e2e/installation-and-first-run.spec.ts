@@ -12,6 +12,11 @@ type SettingsState = {
   model?: string;
   baseUrl?: string;
 } | null;
+type WhisperModel = "large-v3" | "large-v3-turbo";
+type PipelineSettingsState = {
+  transcription: { model: WhisperModel };
+  correction: { mode: "full" | "fast" };
+};
 
 const importRuntimeModule = new Function(
   "specifier",
@@ -72,7 +77,18 @@ test("installation first run, provider models, summary default, and transcriptio
   const completedMeeting = manualEditingMeetingForProject(testInfo.project.name);
 
   let settingsState: SettingsState = null;
+  let pipelineSettings: PipelineSettingsState = {
+    transcription: { model: "large-v3" },
+    correction: { mode: "full" },
+  };
+  let pipelineSource: "default" | "stored" = "default";
   const savePayloads: Array<Record<string, unknown>> = [];
+  const pipelineSavePayloads: PipelineSettingsState[] = [];
+  const preparePayloads: Array<{ model: WhisperModel }> = [];
+  const preparation: Record<WhisperModel, "idle" | "preparing" | "ready" | "error"> = {
+    "large-v3": "idle",
+    "large-v3-turbo": "idle",
+  };
   const discoveryPayloads: Array<Record<string, unknown>> = [];
   const healthProviders: Array<Provider | "unconfigured"> = [];
   const transcribePayloads: Array<Record<string, unknown>> = [];
@@ -101,7 +117,42 @@ test("installation first run, provider models, summary default, and transcriptio
   await page.route("**/api/whisper/health", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await new Promise((resolve) => setTimeout(resolve, 1_000));
-    return fulfillJson(route, { connected: false });
+    return fulfillJson(route, {
+      connected: true,
+      ok: true,
+      ready: true,
+      model: pipelineSettings.transcription.model,
+      modelPreparation: (["large-v3", "large-v3-turbo"] as const).map((model) => ({
+        model,
+        status: preparation[model],
+      })),
+    });
+  });
+  await page.route("**/api/settings/pipeline", async (route) => {
+    if (route.request().method() === "GET") {
+      return fulfillJson(route, {
+        source: pipelineSource,
+        settings: pipelineSettings,
+      });
+    }
+    if (route.request().method() !== "POST") return route.fallback();
+    pipelineSettings = route.request().postDataJSON() as PipelineSettingsState;
+    pipelineSource = "stored";
+    pipelineSavePayloads.push(pipelineSettings);
+    return fulfillJson(route, {
+      settings: pipelineSettings,
+      durability: "durable",
+    });
+  });
+  await page.route("**/api/whisper/models/prepare", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const body = route.request().postDataJSON() as { model: WhisperModel };
+    preparePayloads.push(body);
+    preparation[body.model] = "preparing";
+    setTimeout(() => {
+      preparation[body.model] = "ready";
+    }, 100);
+    return fulfillJson(route, { model: body.model, status: "preparing" }, 202);
   });
   await page.route("**/api/settings/llm/models", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
@@ -190,8 +241,10 @@ test("installation first run, provider models, summary default, and transcriptio
 
   settingsState = { provider: "claude-cli", model: "claude-legacy-exact" };
   await page.goto("/settings");
+  const pipelineHeading = page.getByRole("heading", { level: 2, name: "전사·교정" });
   const modelHeading = page.getByRole("heading", { level: 2, name: "요약 모델" });
   const profileHeading = page.getByRole("heading", { level: 2, name: "내 정보" });
+  await expect(pipelineHeading).toBeVisible();
   await expect(modelHeading).toBeVisible();
   await expect(profileHeading).toBeVisible();
   expect(await modelHeading.evaluate((model) => {
@@ -204,6 +257,36 @@ test("installation first run, provider models, summary default, and transcriptio
   await expect(page.getByText(
     "내 정보가 없어도 녹음·전사·일반 검색을 사용할 수 있습니다.",
   )).toBeVisible();
+  const pipelineSection = page.locator("section[aria-labelledby='pipeline-settings-heading']");
+  const whisperModel = pipelineSection.getByLabel("Whisper 모델", { exact: true });
+  const correctionMode = pipelineSection.getByLabel("교정 방식");
+  await expect(whisperModel).toHaveValue("large-v3");
+  await expect(correctionMode).toHaveValue("full");
+  expect(await whisperModel.locator("option").allTextContents()).toEqual([
+    "large-v3 — 품질 우선(기본)",
+    "large-v3-turbo — 더 빠른 후보",
+  ]);
+  expect(await correctionMode.locator("option").allTextContents()).toEqual([
+    "전체 교정 — 품질 우선(기본)",
+    "빠른 교정 — 실험적·검증 필요",
+  ]);
+  await whisperModel.selectOption("large-v3-turbo");
+  await correctionMode.selectOption("fast");
+  await pipelineSection.getByRole("button", { name: "설정 저장" }).click();
+  await expect(pipelineSection.getByRole("status", { name: "전사·교정 설정 상태" }))
+    .toContainText("저장됨");
+  expect(pipelineSavePayloads).toEqual([{
+    transcription: { model: "large-v3-turbo" },
+    correction: { mode: "fast" },
+  }]);
+  expect(preparePayloads).toEqual([]);
+
+  const prepare = pipelineSection.getByRole("button", { name: "선택 모델 미리 준비" });
+  await prepare.click();
+  await expect(pipelineSection.getByRole("status", { name: "Whisper 모델 준비 상태" }))
+    .toContainText(/large-v3-turbo 모델 준비 (?:중|완료)/u);
+  expect(preparePayloads).toEqual([{ model: "large-v3-turbo" }]);
+  await expectMinimumTarget(prepare);
   const modelSettings = page.locator("section[aria-labelledby='llm-settings-heading']");
 
   const modelSelect = page.getByLabel("모델", { exact: true });

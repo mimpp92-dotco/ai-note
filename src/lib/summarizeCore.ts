@@ -15,12 +15,6 @@ import type { ActionItem, Summary } from "@/domain/summary";
 // - transcript over-edit guard: a correction shorter than 30% of the raw transcript
 //   is discarded in favor of the original.
 
-// Single-pass cap (MVP-0: no map-reduce chunking). Our own value — do NOT copy the
-// reference's CLAUDE_MAX_INPUT=48000.
-const MAX_TRANSCRIPT_CHARS = 40_000;
-const TRUNCATION_NOTICE =
-  "⚠️ 전사가 길어 요약은 앞부분만 반영되었습니다 — 전체 스크립트 탭을 확인하세요.";
-
 export interface SummarizeInput {
   title: string;
   /** Original raw.md transcript (immutable) — baseline for the over-edit guard and fallback source. */
@@ -35,7 +29,6 @@ export interface SummarizeResult {
   transcript: string;
   summary: Summary;
   usedFallback: boolean;
-  truncated: boolean;
 }
 
 export interface SummarizeTranscriptInput {
@@ -50,7 +43,6 @@ export interface SummarizeTranscriptInput {
 export interface SummarizeTranscriptResult {
   summary: Summary;
   usedFallback: boolean;
-  truncated: boolean;
 }
 
 export async function summarizeCore(
@@ -65,27 +57,23 @@ export async function summarizeCore(
   return { transcript, ...summarized };
 }
 
-// Summary-only generation shares parsing, normalization, fallback, and the
-// 40,000-character notice with initial generation. It intentionally has no raw
-// or correction input, so callers cannot accidentally re-run transcript work.
+// Summary-only generation shares parsing, normalization, and fallback with
+// initial generation. It intentionally has no raw or correction input, so
+// callers cannot accidentally re-run transcript work.
 export async function summarizeTranscript(
   input: SummarizeTranscriptInput,
 ): Promise<SummarizeTranscriptResult> {
-  const truncated = input.transcript.length > MAX_TRANSCRIPT_CHARS;
   const parsed = parseSummary(input.summaryOutput, input.title);
   const usedFallback = parsed === null;
   const base = parsed ?? fallbackSummary(input.title, input.transcript);
   const participants = input.preservedParticipants ?? [];
-  const followups = truncated && !base.followups.includes(TRUNCATION_NOTICE)
-    ? [...base.followups, TRUNCATION_NOTICE]
-    : [...base.followups];
   const summary = {
     ...base,
     participants: [...participants],
-    followups,
+    followups: [...base.followups],
   };
 
-  return { summary, usedFallback, truncated };
+  return { summary, usedFallback };
 }
 
 // --- transcript correction --------------------------------------------------

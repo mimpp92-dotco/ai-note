@@ -7,6 +7,7 @@ import type {
   StatusJson,
   SummarizeAttempt,
 } from "@/domain/meeting";
+import { GENERATED_SUMMARY_JSON_SCHEMA } from "@/domain/generatedSummaryJsonSchema";
 import { summarySchema } from "@/domain/summarySchema";
 import {
   readArtifactPair,
@@ -24,14 +25,35 @@ import {
   createKnowledgeIndexRepository,
   type KnowledgeIndexRepository,
 } from "@/lib/knowledgeIndexRepository";
+import {
+  readPipelineSettings,
+  type CorrectionMode,
+} from "@/lib/pipelineSettings";
 import { dataRoot, meetingPaths } from "@/lib/paths";
 import { classifyLlmFailure, safeLog } from "@/lib/publicApi";
+import { readSettings } from "@/lib/settings";
 import { readStatus, updateStatus } from "@/lib/status";
 import {
+  createCorrectionChunkPlan,
+  type CorrectionSourceSegment,
+} from "@/lib/correctionChunks";
+import {
+  FAST_CORRECTION_PROMPT_VERSION,
+  runCorrectionChunks,
+  type CompletedCorrectionChunk,
+} from "@/lib/correctionRunner";
+import {
   resolveTranscript,
-  summarizeCore,
   summarizeTranscript,
 } from "@/lib/summarizeCore";
+import {
+  buildCorrectionCheckpointKey,
+  correctionCheckpointMatches,
+  createCorrectionCheckpoint,
+  createCorrectionCheckpointStore,
+  createFastCorrectionCheckpoint,
+  type CorrectionCheckpointStore,
+} from "@/lib/summarizeCheckpoint";
 import {
   discardSummarizeAttempt,
   publishSummarizeAttempt,
@@ -40,10 +62,11 @@ import {
 } from "@/lib/summarizePublisher";
 import { buildCorrectionPrompt, buildSummaryPrompt } from "@/lib/summarizePrompts";
 import { inspectTranscriptionPublication } from "@/lib/transcriptionArtifacts";
-import { getConfiguredAdapter } from "@/services/llm";
-import type { LlmAdapter } from "@/services/llm/types";
-
-export const MAX_SUMMARIZE_ATTEMPTS = 3;
+import { getAdapter, getConfiguredAdapter } from "@/services/llm";
+import type {
+  LlmAdapter,
+  LlmSettings,
+} from "@/services/llm/types";
 
 export type GenerationIntent =
   | "initial"
@@ -56,6 +79,7 @@ type SummarizeKnowledgeIndexRepository = Pick<
 >;
 
 let knowledgeIndexRepositoryForTests: SummarizeKnowledgeIndexRepository | null = null;
+let correctionCheckpointStoreForTests: CorrectionCheckpointStore | null = null;
 
 export function setSummarizeKnowledgeIndexRepositoryForTests(
   repository: SummarizeKnowledgeIndexRepository | null,
@@ -63,9 +87,20 @@ export function setSummarizeKnowledgeIndexRepositoryForTests(
   knowledgeIndexRepositoryForTests = repository;
 }
 
+export function setSummarizeCorrectionCheckpointStoreForTests(
+  store: CorrectionCheckpointStore | null,
+): void {
+  correctionCheckpointStoreForTests = store;
+}
+
 function knowledgeIndexRepository(): SummarizeKnowledgeIndexRepository {
   return knowledgeIndexRepositoryForTests
     ?? createKnowledgeIndexRepository({ dataRoot: dataRoot() });
+}
+
+function correctionCheckpointStore(): CorrectionCheckpointStore {
+  return correctionCheckpointStoreForTests
+    ?? createCorrectionCheckpointStore({ dataRoot: dataRoot() });
 }
 
 export type SummarizeFailureReason =
@@ -105,6 +140,10 @@ interface PreparedGeneration {
   attempt: SummarizeAttempt;
   acceptanceDurability: "durable" | "best_effort";
   snapshot?: StablePairSnapshot;
+  initialContext?: {
+    settings: LlmSettings;
+    correctionMode: CorrectionMode;
+  };
 }
 
 export function isSummarizeInflight(id: string): boolean {
@@ -126,7 +165,7 @@ function copyContentRevision(revision: ContentRevision): ContentRevision {
   };
 }
 
-function hash(value: string): string {
+function hash(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -174,11 +213,21 @@ async function prepareInitial(
       return { ok: false, reason: "already_summarized" };
     }
 
-    const adapter = await getConfiguredAdapter();
-    if (!adapter) {
+    const settings = await readSettings();
+    if (!settings) {
       lease.release();
       return { ok: false, reason: "no_model" };
     }
+    const pipelineSettings = await readPipelineSettings();
+    if (pipelineSettings.state === "unavailable") {
+      lease.release();
+      return {
+        ok: false,
+        reason: "error",
+        message: "pipeline_settings_unavailable",
+      };
+    }
+    const adapter = getAdapter(settings);
     const attempt: SummarizeAttempt = {
       attemptId: randomUUID(),
       kind: "initial",
@@ -206,6 +255,10 @@ async function prepareInitial(
       adapter,
       attempt,
       acceptanceDurability: prepared.commit.durability,
+      initialContext: {
+        settings,
+        correctionMode: pipelineSettings.settings.correction.mode,
+      },
     };
   } catch (error) {
     lease.release();
@@ -374,7 +427,9 @@ async function generateSummary(
   transcript: string,
   preservedParticipants: readonly string[] = [],
 ) {
-  let summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), { json: true });
+  let summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), {
+    jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+  });
   let result = await summarizeTranscript({
     title,
     transcript,
@@ -383,7 +438,9 @@ async function generateSummary(
   });
   if (result.usedFallback) {
     try {
-      summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), { json: true });
+      summaryOutput = await adapter.run(buildSummaryPrompt(transcript, title), {
+        jsonSchema: GENERATED_SUMMARY_JSON_SCHEMA,
+      });
       result = await summarizeTranscript({
         title,
         transcript,
@@ -395,6 +452,181 @@ async function generateSummary(
     }
   }
   return result;
+}
+
+async function requireCurrentAttempt(
+  id: string,
+  prepared: PreparedGeneration,
+): Promise<StatusJson> {
+  const status = await readStatus(id);
+  if (status?.summarizeAttempt?.attemptId !== prepared.attempt.attemptId) {
+    throw new Error("summarize_attempt_mismatch");
+  }
+  return status;
+}
+
+async function resolveInitialCorrection(
+  id: string,
+  prepared: PreparedGeneration,
+  store: CorrectionCheckpointStore,
+): Promise<string> {
+  const context = prepared.initialContext!;
+  await requireCurrentAttempt(id, prepared);
+  const rawBytes = await readFile(meetingPaths(id).raw);
+  const raw = new TextDecoder("utf-8", { fatal: true }).decode(rawBytes);
+  const glossary = await readGlossary();
+  let plan: ReturnType<typeof createCorrectionChunkPlan> | undefined;
+  if (context.correctionMode === "fast") {
+    let segments: CorrectionSourceSegment[] = [];
+    try {
+      const parsed: unknown = JSON.parse(
+        await readFile(meetingPaths(id).segments, "utf8"),
+      );
+      if (!Array.isArray(parsed) || !parsed.every((segment) => (
+        typeof segment === "object"
+        && segment !== null
+        && !Array.isArray(segment)
+        && typeof (segment as { start?: unknown }).start === "number"
+        && typeof (segment as { end?: unknown }).end === "number"
+        && typeof (segment as { text?: unknown }).text === "string"
+      ))) {
+        throw new Error("segments_invalid");
+      }
+      segments = parsed as CorrectionSourceSegment[];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    plan = createCorrectionChunkPlan(raw, segments);
+  }
+  const key = buildCorrectionCheckpointKey({
+    rawBytes,
+    glossary,
+    settings: context.settings,
+    correctionMode: context.correctionMode,
+    ...(plan ? { chunkPlanSha256: plan.planSha256 } : {}),
+    ...(context.correctionMode === "fast"
+      ? { promptVersion: FAST_CORRECTION_PROMPT_VERSION }
+      : {}),
+  });
+  const observed = await store.read(id, prepared.lease.ownerToken);
+  await requireCurrentAttempt(id, prepared);
+  if (observed.state === "invalid") {
+    throw new Error("checkpoint_invalid");
+  }
+  if (
+    observed.state === "valid"
+    && correctionCheckpointMatches(observed.checkpoint, key)
+    && context.correctionMode === "full"
+  ) {
+    return observed.checkpoint.correctedTranscript;
+  }
+
+  if (context.correctionMode === "full") {
+    const correction = await prepared.adapter.run(
+      buildCorrectionPrompt(raw, glossary),
+    );
+    const correctedTranscript = resolveTranscript(raw, correction);
+    await requireCurrentAttempt(id, prepared);
+    const commit = await store.write(
+      id,
+      prepared.lease.ownerToken,
+      createCorrectionCheckpoint({
+        meetingId: id,
+        key,
+        correctedTranscript,
+      }),
+    );
+    if (
+      commit.state !== "committed_durable"
+      && commit.state !== "committed_best_effort"
+    ) {
+      throw new Error(
+        commit.state === "committed_durability_pending"
+          ? "checkpoint_durability_pending"
+          : "checkpoint_not_committed",
+      );
+    }
+    return correctedTranscript;
+  }
+
+  const completedChunks: CompletedCorrectionChunk[] = (
+    observed.state === "valid"
+    && correctionCheckpointMatches(observed.checkpoint, key)
+  )
+    ? observed.checkpoint.completedChunks.flatMap((chunk) => (
+        chunk.chunkId !== undefined && chunk.correctedText !== undefined
+          ? [{
+              index: chunk.index,
+              chunkId: chunk.chunkId,
+              inputSha256: chunk.inputSha256,
+              outputSha256: chunk.outputSha256,
+              correctedText: chunk.correctedText,
+            }]
+          : []
+      ))
+    : [];
+  const result = await runCorrectionChunks({
+    plan: plan!,
+    provider: context.settings.provider,
+    glossary,
+    completedChunks,
+    runChunk: async (prompt) => {
+      await requireCurrentAttempt(id, prepared);
+      return prepared.adapter.run(prompt);
+    },
+    onChunkCompleted: async (_chunk, completed) => {
+      await requireCurrentAttempt(id, prepared);
+      const commit = await store.write(
+        id,
+        prepared.lease.ownerToken,
+        createFastCorrectionCheckpoint({
+          meetingId: id,
+          key,
+          correctedTranscript: "",
+          completedChunks: completed,
+        }),
+      );
+      if (
+        commit.state !== "committed_durable"
+        && commit.state !== "committed_best_effort"
+      ) {
+        throw new Error(
+          commit.state === "committed_durability_pending"
+            ? "checkpoint_durability_pending"
+            : "checkpoint_not_committed",
+        );
+      }
+    },
+  });
+  if (
+    observed.state === "valid"
+    && correctionCheckpointMatches(observed.checkpoint, key)
+    && observed.checkpoint.correctedTranscript === result.transcript
+  ) {
+    return result.transcript;
+  }
+  await requireCurrentAttempt(id, prepared);
+  const commit = await store.write(
+    id,
+    prepared.lease.ownerToken,
+    createFastCorrectionCheckpoint({
+      meetingId: id,
+      key,
+      correctedTranscript: result.transcript,
+      completedChunks: result.chunks,
+    }),
+  );
+  if (
+    commit.state !== "committed_durable"
+    && commit.state !== "committed_best_effort"
+  ) {
+    throw new Error(
+      commit.state === "committed_durability_pending"
+        ? "checkpoint_durability_pending"
+        : "checkpoint_not_committed",
+    );
+  }
+  return result.transcript;
 }
 
 async function refreshKnowledgeIndex(id: string, ownerToken: string): Promise<void> {
@@ -503,45 +735,22 @@ async function executePreparedGeneration(
   prepared: PreparedGeneration,
 ): Promise<SummarizeResult> {
   const { lease, adapter, intent } = prepared;
-  const paths = meetingPaths(id);
+  const checkpointStore = intent === "initial"
+    ? correctionCheckpointStore()
+    : null;
   try {
     let transcript: string;
     let summary: string;
 
     if (intent === "initial") {
-      const status = await readStatus(id);
-      if (!status) return { ok: false, reason: "not_found" };
-      const raw = await readFile(paths.raw, "utf8");
-      const glossary = await readGlossary();
-      const correction = await adapter.run(buildCorrectionPrompt(raw, glossary));
-      const resolvedTranscript = resolveTranscript(raw, correction);
-      let summaryOutput = await adapter.run(
-        buildSummaryPrompt(resolvedTranscript, status.title),
-        { json: true },
+      const status = await requireCurrentAttempt(id, prepared);
+      transcript = await resolveInitialCorrection(
+        id,
+        prepared,
+        checkpointStore!,
       );
-      let result = await summarizeCore({
-        title: status.title,
-        raw,
-        correction,
-        summaryOutput,
-      });
-      if (result.usedFallback) {
-        try {
-          summaryOutput = await adapter.run(
-            buildSummaryPrompt(resolvedTranscript, status.title),
-            { json: true },
-          );
-          result = await summarizeCore({
-            title: status.title,
-            raw,
-            correction,
-            summaryOutput,
-          });
-        } catch {
-          // The first pass already produced a schema-valid fallback payload.
-        }
-      }
-      transcript = result.transcript;
+      await requireCurrentAttempt(id, prepared);
+      const result = await generateSummary(adapter, status.title, transcript);
       summary = `${JSON.stringify(result.summary, null, 2)}\n`;
     } else if (intent === "transcript_regenerate") {
       const snapshot = prepared.snapshot!;
@@ -585,6 +794,9 @@ async function executePreparedGeneration(
       transcript,
       summary,
     });
+    if (publication.state === "published" && checkpointStore) {
+      await checkpointStore.remove(id, lease.ownerToken).catch(() => {});
+    }
     if (publication.state === "published" && intent !== "transcript_regenerate") {
       await refreshKnowledgeIndex(id, lease.ownerToken);
     }
@@ -594,6 +806,9 @@ async function executePreparedGeneration(
       try {
         const reconciled = await reconcileSummarizeAttempt(id, lease.ownerToken);
         if (reconciled.state === "completed") {
+          if (checkpointStore) {
+            await checkpointStore.remove(id, lease.ownerToken).catch(() => {});
+          }
           if (intent !== "transcript_regenerate") {
             await refreshKnowledgeIndex(id, lease.ownerToken);
           }

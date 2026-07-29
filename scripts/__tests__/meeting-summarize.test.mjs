@@ -70,7 +70,7 @@ describe("meeting-summarize API-only client", () => {
 });
 
 describe("final artifact producer inventory", () => {
-  it("keeps the command API-only and the app publisher as the sole production summarizeCore caller", () => {
+  it("keeps the command API-only and the app summarize path as the sole production parser caller", () => {
     const command = readFileSync(join(process.cwd(), ".claude/commands/meeting-summarize.md"), "utf8");
     for (const forbidden of ["data/meetings", "summarizeCore", "transcriptPath", "summaryPath", ".correction.txt"] ) {
       expect(command).not.toContain(forbidden);
@@ -78,12 +78,14 @@ describe("final artifact producer inventory", () => {
     expect(command).toContain("scripts/meeting-summarize.mjs");
 
     const sourceRoot = join(process.cwd(), "src");
-    const callers = (readdirSync(sourceRoot, { recursive: true, encoding: "utf8" }))
-      .filter((file) => file.endsWith(".ts") || file.endsWith(".tsx"))
-      .filter((file) => !file.includes("__tests__"))
-      .filter((file) => file !== "lib/summarizeCore.ts")
-      .filter((file) => readFileSync(join(sourceRoot, file), "utf8").includes("summarizeCore("));
-    expect(callers).toEqual(["lib/summarize.ts"]);
+    const productionFiles = (readdirSync(sourceRoot, { recursive: true, encoding: "utf8" }))
+      .filter((file) => (file.endsWith(".ts") || file.endsWith(".tsx")) && !file.includes("__tests__"))
+      .filter((file) => file !== "lib/summarizeCore.ts");
+    for (const helper of ["resolveTranscript", "summarizeTranscript"]) {
+      const callers = productionFiles
+        .filter((file) => readFileSync(join(sourceRoot, file), "utf8").includes(`${helper}(`));
+      expect(callers, helper).toEqual(["lib/summarize.ts"]);
+    }
   });
 
   it("keeps canonical publication and pair consumption behind their lease-owning boundaries", () => {

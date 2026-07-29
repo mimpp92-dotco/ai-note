@@ -46,6 +46,7 @@ export type PublicErrorCode =
   | "summary_failed"
   | "transcript_generation_failed"
   | "transcription_failed"
+  | "pipeline_settings_unavailable"
   | "local_service_unavailable"
   | "internal_error";
 
@@ -87,6 +88,7 @@ const PUBLIC_ERROR_MESSAGES: Record<PublicErrorCode, string> = {
   summary_failed: "요약을 완료하지 못했습니다. 설정을 확인한 뒤 다시 시도해 주세요",
   transcript_generation_failed: "전체 스크립트를 다시 만들지 못했습니다. 설정을 확인한 뒤 다시 시도해 주세요",
   transcription_failed: "전사를 완료하지 못했습니다. 로컬 전사 서비스를 확인해 주세요",
+  pipeline_settings_unavailable: "전사·교정 설정을 안전하게 불러올 수 없습니다",
   local_service_unavailable: "로컬 서비스를 사용할 수 없습니다",
   internal_error: "요청을 처리하지 못했습니다",
 };
