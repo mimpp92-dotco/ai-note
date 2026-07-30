@@ -7,9 +7,15 @@
 
 저장소 URL만 받은 agent는 사용자가 target을 지정하지 않으면 현재 directory 자체에 설치하지 않는다. 다른 Git repository 안에서는 그 root의 sibling `ai-note`, 그 밖에서는 cwd 아래 새 `ai-note`를 기본으로 삼고, 충돌하면 기존 내용을 재사용·덮어쓰기·pull하지 않고 첫 free deterministic suffix(`ai-note-2`, `ai-note-3`, …)를 선택한다. 명시 target이 non-empty이거나 다른 origin이면 exact absolute path를 보고하고 중단한다. Clone/install은 target 안에서만 변경하며 ancestor `.git`·`.claude`·`.harness`, global Git config, 다른 project/package/process를 건드리지 않는다. 새 OS 권한이나 provider login에만 승인을 요청하고 handoff에는 absolute path, branch/revision, actual URL을 포함한다. 이 계약은 agent가 repository의 공개 문서를 읽은 뒤부터 적용되며 pre-clone host policy까지 repository가 보장하지 않는다.
 
-Clone 뒤 end-user 정본은 `node scripts/bootstrap.mjs --launch`다. Dependency-free doctor → `HUSKY=0 npm ci` → secret 없는 build → repository-owned background supervisor 순서로 실행한다. App은 `127.0.0.1:3000`, Whisper는 `127.0.0.1:8123`부터 bounded 후보를 선택하고 bind race면 다음 후보로 이동한다. 기존 listener에 연결하거나 종료하지 않으며 선택 port는 child env에만 넣고 `.env.local`을 쓰지 않는다. App과 same-origin Whisper health가 모두 ready인 뒤 `http://localhost:<actual-port>` 하나를 출력하고 OS opener에 argv로 전달한다. Headless/opener failure는 server 성공을 유지하며 exact URL과 agent browser fallback을 안내한다.
+Clone 뒤 end-user 정본은 `node scripts/bootstrap.mjs --launch`다. Install/build mutation보다 repository-local runtime ownership을 먼저 판정한다. Runtime이 absent일 때만 dependency-free doctor → `HUSKY=0 npm ci` → secret 없는 build → repository-owned background supervisor 순서로 실행한다. Owned이면 자동 stop/restart/install/build하지 않고 현재 runtime을 검증·개방하며 이번 install/update가 적용되지 않았음을 알린다. 변경 적용은 사용자가 진행 중 녹음이 없는지 확인한 뒤 `npm run app:stop`과 같은 `--launch`를 명시적으로 다시 실행하는 절차다. Stale·invalid·unsafe·unverifiable state는 process signal과 build mutation 없이 fail-closed한다.
+
+App은 `127.0.0.1:3000`, Whisper는 `127.0.0.1:8123`부터 bounded 후보를 선택하고 bind race면 다음 후보로 이동한다. 기존 listener에 연결하거나 종료하지 않으며 선택 port는 child env에만 넣고 `.env.local`을 쓰지 않는다. 새 runtime과 reused owned runtime은 app health, same-origin Whisper health, AI NOTE로 식별되는 bounded root HTML, existing `/api/library` public response를 모두 확인한다. Library mode `ready|degraded_last_good|degraded_fallback`만 지원하며 corrupt/unsupported/I/O를 bootstrap이 repair·overwrite하거나 data를 직접 쓰지 않는다. 네 surface가 ready인 뒤에만 `http://localhost:<actual-port>` 하나를 출력하고 OS opener에 argv로 전달한다. Headless/opener failure는 server 성공을 유지하며 exact URL과 agent browser fallback을 안내한다.
 
 Runtime ownership은 gitignored `.ai-note-runtime/`의 restricted state/heartbeat/log로 증명한다. Metadata에는 root/token/PID/port/time만 두고 environment나 credential을 기록하지 않는다. `app:status`와 `app:stop`은 root, token, fresh heartbeat, live supervisor가 모두 일치할 때만 동작하며 stale/unverifiable PID에 signal하지 않는다. `npm run dev`는 contributor foreground lifecycle로 남긴다. Playwright/Chrome extension/MCP는 product runtime dependency가 아니다.
+
+Windows에서는 Node child spawn과 doctor resolver가 `Path`/`PATH`·`PATHEXT`를 case-insensitive effective environment 하나로 해석한다. Inherited duplicate는 deterministic precedence로 하나만 남기고 explicit override가 우선하며 값을 합치지 않는다. 같은 resolver가 찾은 exact `uv.exe`를 argv와 `shell:false`로 실행해 공백 경로를 보존하고 absolute path를 runtime state에 저장하지 않는다. Whisper의 명확한 current ffmpeg-missing health는 generic timeout 전에 static 설치 조치와 `--launch` 재실행을 안내한다. Ready 전 interrupt/error는 이번 supervisor가 확보한 child handle만 idempotent cleanup하며 global PID/port scan이나 ownership 불명 signal을 하지 않는다.
+
+Codex는 optional summarizer다. 첫 PATH 후보가 명확한 `%ProgramFiles%\WindowsApps\OpenAI.Codex_*` package일 때만 desktop package 혼동 warning을 내며 alternate executable을 자동 탐색·실행하지 않는다. Windows `EACCES|EPERM|ENOENT`는 독립 Codex CLI/PATH 확인 또는 설치, 새 PowerShell, 녹음 확인 뒤 owned runtime stop/relaunch를 안내한다. Warning·미설정·health failure는 bootstrap·녹음·전사를 막지 않고 `codex --version` success는 binary 감지일 뿐 인증·실제 요약 성공 보장이 아니다.
 
 First-use는 요약 모델 준비를 recorder 앞에서 비차단으로 안내한다. **AI 요약 설정**과 같은 화면의 **요약 없이 회의 녹음** focus action을 제공하며 녹음·로컬 전사를 막지 않는다. Settings는 요약 모델을 optional profile보다 먼저 둔다. Claude는 CLI default/`sonnet|opus|haiku`/custom, Codex는 CLI default/custom, Ollama는 loopback `/api/tags`의 installed model/refresh/custom을 제공한다. Unknown stored string과 provider별 draft를 보존하고 auto pull/remote catalog/API key를 추가하지 않는다. 저장 직후 persisted health를 자동 검사하되 CLI success는 binary 감지일 뿐 인증·생성 성공 보장이 아니고 Ollama success는 선택 model의 loopback 연결 확인이다.
 
@@ -19,6 +25,10 @@ First-use는 요약 모델 준비를 recorder 앞에서 비차단으로 안내�
 
 기존 안내는 foreground `npm run dev`, fixed `localhost:3000`, 수동 `npm install`을 end-user 성공 경로로 섞었다. 이 방식은 port collision에서 다른 process와 구분하기 어렵고, agent가 어느 directory를 수정했는지와 long-lived process ownership을 handoff하기 어렵다. Repository-owned bootstrap과 target policy를 함께 두면 clone 경계, dependency/build, 실제 URL, health와 shutdown을 한 흐름으로 검증하면서 기존 project와 global state를 보호할 수 있다.
 
+이미 owned runtime이 있을 때 자동 restart하면 진행 중 녹음을 bootstrap이 안전하게 판정할 수 없고 현재 build를 install mutation으로 먼저 바꿀 수 있다. 그래서 현재 runtime 검증과 update 적용을 분리하고, 녹음 여부를 아는 사용자의 명시적 stop/relaunch만 허용한다. HTTP 응답 하나만으로 first-use shell을 ready로 보지 않는 이유도 같다. Root identity와 library public mode까지 bounded 확인하되 모든 Next asset을 crawl하거나 library corruption을 설치 script가 복구하지 않는다.
+
+Windows merge job은 Node 22 install/build와 setup/bootstrap/Codex 주입식 regression, pinned Chromium doctor, 기존 synthetic first-use smoke만 세 viewport에서 수행한다. 공백을 포함한 temp snapshot path를 쓰지만 mic, user data, `uv`/`ffmpeg`, Whisper model/service, Codex login, local provider, external browser network는 쓰지 않는다. 이는 실제 bootstrap end-to-end 보장이 아니라 lifecycle injection과 browser hydration을 분리한 회귀다.
+
 첫 실행에서는 요약 model을 준비하지 않아 background summary가 실패하기 쉽지만 이를 recording gate로 만들면 local transcription이라는 독립 가치도 잃는다. Provider별로 실제 지원 범위만 보여 주고 persisted health의 의미를 좁히면 hard-coded catalog와 false-green 인증 문구 없이 준비를 돕는다. 전사 retry도 finalize probe가 아니라 이미 durable identity/recovery를 소유한 transcribe route를 재사용해야 실제 실패를 복구할 수 있다.
 
 ## 버린 대안
@@ -27,6 +37,7 @@ First-use는 요약 모델 준비를 recorder 앞에서 비차단으로 안내�
 - Fixed `localhost:3000`/`8123` 또는 기존 listener 재사용 — port collision과 service identity를 구분하지 못해 기각.
 - Bootstrap이 package manager, `sudo`, provider login, `ollama pull`을 자동 수행 — 권한·비용·network 선택을 숨겨 기각.
 - `.env.local` 또는 global PID registry에 selected ports/runtime을 기록 — 사용자 설정을 덮거나 repository ownership을 흐려 기각.
+- Owned runtime을 bootstrap이 자동 stop/restart — 녹음 진행 여부를 추측하고 현재 build를 먼저 mutate할 수 있어 기각.
 - `npm run dev`를 detached end-user runtime으로 재사용 — foreground contributor lifecycle과 safe status/stop ownership을 제공하지 못해 기각.
 - Claude/Codex model catalog를 remote/experimental command로 discovery — version drift와 새 provider surface를 만들어 기각.
 - 요약 모델을 recording prerequisite로 강제하는 onboarding route/modal — 녹음·로컬 전사를 불필요하게 막아 기각.

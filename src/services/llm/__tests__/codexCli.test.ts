@@ -18,7 +18,10 @@ vi.mock("@/services/llm/cliCapabilities", () => ({
 
 import { GENERATED_SUMMARY_JSON_SCHEMA } from "@/domain/generatedSummaryJsonSchema";
 import { detectCliCapabilities } from "@/services/llm/cliCapabilities";
-import { CodexCliAdapter } from "@/services/llm/codexCli";
+import {
+  CodexCliAdapter,
+  codexHealthFailureDetail,
+} from "@/services/llm/codexCli";
 import { LLM_GENERATION_TIMEOUT_MS, runProcess } from "@/services/llm/exec";
 
 const runProcessMock = vi.mocked(runProcess);
@@ -121,8 +124,10 @@ describe("CodexCliAdapter.run — structured JSONL salvage", () => {
     ]));
     expect(args).not.toContain("민감한 프롬프트");
     expect(runProcessMock.mock.calls[0]?.[2]?.stdin).toBe("민감한 프롬프트");
-    expect(cwdMode).toBe(0o700);
-    expect(schemaMode).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(cwdMode).toBe(0o700);
+      expect(schemaMode).toBe(0o600);
+    }
     expect(out).toBe(lastMessage);
     await expect(access(cwd)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -225,12 +230,55 @@ describe("CodexCliAdapter.health — binary detection only", () => {
   });
 
   it("returns an actionable static message for a missing binary", async () => {
-    runProcessMock.mockRejectedValueOnce(
-      Object.assign(new Error("private spawn output"), { code: "ENOENT" }),
-    );
+    const error = Object.assign(new Error("private spawn output"), { code: "ENOENT" });
+    runProcessMock.mockRejectedValueOnce(error);
     await expect(new CodexCliAdapter({ provider: "codex-cli" }).health()).resolves.toEqual({
       ok: false,
-      detail: "Codex CLI를 찾을 수 없습니다. 설치 후 PATH를 확인하세요.",
+      detail: codexHealthFailureDetail(error),
     });
+  });
+
+  it.each(["EACCES", "EPERM"])(
+    "gives Windows permission remediation for %s without alternate execution",
+    (code) => {
+      const detail = codexHealthFailureDetail(
+        Object.assign(new Error("private provider output"), { code }),
+        "win32",
+      );
+
+      expect(detail).toMatch(/권한/);
+      expect(detail).toMatch(/독립 Codex CLI/);
+      expect(detail).toMatch(/PATH/);
+      expect(detail).toMatch(/새 PowerShell/);
+      expect(detail).toContain("npm run app:stop");
+      expect(detail).toContain("node scripts/bootstrap.mjs --launch");
+      expect(detail).not.toContain("private provider output");
+    },
+  );
+
+  it("tells Windows ENOENT users to install the independent CLI and restart shell/runtime", () => {
+    const detail = codexHealthFailureDetail(
+      Object.assign(new Error("private spawn output"), { code: "ENOENT" }),
+      "win32",
+    );
+
+    expect(detail).toMatch(/독립 Codex CLI.*설치/);
+    expect(detail).toMatch(/PATH/);
+    expect(detail).toMatch(/새 PowerShell/);
+    expect(detail).toContain("npm run app:stop");
+    expect(detail).toContain("node scripts/bootstrap.mjs --launch");
+    expect(detail).not.toContain("private spawn output");
+  });
+
+  it("preserves the existing non-Windows health wording", () => {
+    expect(
+      codexHealthFailureDetail(
+        Object.assign(new Error("missing"), { code: "ENOENT" }),
+        "linux",
+      ),
+    ).toBe("Codex CLI를 찾을 수 없습니다. 설치 후 PATH를 확인하세요.");
+    expect(codexHealthFailureDetail(new Error("denied"), "darwin")).toBe(
+      "Codex CLI 상태를 확인할 수 없습니다. 설치와 PATH를 확인하세요.",
+    );
   });
 });

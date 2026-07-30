@@ -1,0 +1,3 @@
+# Vitest imports these executable modules; keep their shebang parser-safe on Windows.
+scripts/setup.mjs text eol=lf
+scripts/bootstrap.mjs text eol=lf

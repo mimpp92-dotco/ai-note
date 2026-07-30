@@ -26,7 +26,7 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
 const nodeModules = await resolveE2eNodeModules(process.cwd(), packageJson.devDependencies?.["@playwright/test"]);
 const cli = join(nodeModules, "@playwright", "test", "cli.js");
 const port = await allocateLoopbackPort();
-const snapshotRoot = await mkdtemp(join(tmpdir(), "ai-note-e2e-"));
+const snapshotRoot = await mkdtemp(join(tmpdir(), "ai-note-e2e-snapshot with spaces-"));
 const child = spawn(process.execPath, [cli, "test", ...process.argv.slice(2)], {
   cwd: process.cwd(),
   stdio: "inherit",
