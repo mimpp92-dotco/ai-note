@@ -44,3 +44,24 @@ jobs:
         run: npm run test:e2e:doctor
       - name: Synthetic browser regression
         run: npm run test:e2e
+
+  windows-install-build-synthetic-smoke:
+    name: Windows install/build + synthetic first-use smoke
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Setup/bootstrap/Codex regression tests
+        run: npm test -- scripts/__tests__/setup.test.mjs scripts/__tests__/bootstrap.test.mjs src/services/llm/__tests__/codexCli.test.ts
+      - name: Build (build-green — no secrets, DB, or env)
+        run: npm run build
+      - name: Install pinned Playwright Chromium
+        run: npm run test:e2e:install
+      - name: Verify Playwright environment
+        run: npm run test:e2e:doctor
+      - name: Existing synthetic first-use smoke only
+        run: npm run test:e2e -- e2e/smoke.spec.ts
