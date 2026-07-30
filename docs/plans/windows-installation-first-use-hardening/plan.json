@@ -1,0 +1,372 @@
+{
+  "schemaVersion": 2,
+  "profile": "balanced-autonomous-v1",
+  "slug": "windows-installation-first-use-hardening",
+  "sourceRequest": "macOS에서는 저장소 URL만 전달한 설치가 첫 사용까지 성공했지만 Windows에서는 로컬 웹이 열려도 내용이 보이지 않고 uv, ffmpeg, PATH, 기존 runtime, Codex CLI 감지 문제가 발생했다. 팀원이 별도로 추가한 전사 진행률 UX는 제외하고, clone 뒤 canonical bootstrap부터 실제 AI NOTE 콘텐츠가 보이는 첫 사용까지의 Windows 설치 경계만 최소 범위로 보강한다.",
+  "publishStrategy": "single-pr",
+  "base": {
+    "ref": "main",
+    "sha": "1a7e658982834743a1a9fcc9ad2e7e692eb130fd"
+  },
+  "workspace": {
+    "mode": "task-worktree-v1",
+    "branch": "execute/windows-installation-first-use-hardening"
+  },
+  "executionPrerequisites": {
+    "noSelfMutationOfRunningProcess": true,
+    "realModelCallsInTests": false,
+    "networkCallsInTests": false
+  },
+  "executionState": {
+    "summaryLedger": "local",
+    "journal": "git-dir",
+    "statusCommits": "none"
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Canonical --launch가 실행 중인 owned runtime의 build를 먼저 변경하지 않고 설치 mutation과 runtime 재사용을 안전하게 분리한다.",
+      "source": "observed-bug",
+      "acceptance": [
+        "npm ci, npm run build, node_modules 또는 .next mutation 전에 repository-local runtime ownership을 판정한다.",
+        "runtime이 absent일 때만 doctor, install, build, background start 순서를 수행한다.",
+        "runtime이 owned이면 자동 stop/restart/install/build를 하지 않고 현재 runtime을 검증해 실제 URL을 열며 이번 install/update가 적용되지 않았음을 별도 결과로 알린다.",
+        "변경 적용 조치는 진행 중 녹음이 없는지 확인한 사용자가 npm run app:stop 뒤 같은 --launch를 다시 실행하는 명시적 절차다.",
+        "stale, invalid, unsafe, unverifiable runtime은 process signal과 build mutation 없이 fail-closed한다.",
+        "runtime build fingerprint나 state schema를 추가하지 않는다."
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "Bootstrap과 status가 HTTP 응답을 넘어 실제 AI NOTE 첫 사용 표면의 최소 readiness를 확인한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "새 runtime과 기존 owned runtime 모두 app health, Whisper health, AI NOTE로 식별 가능한 root HTML과 existing /api/library public response를 bounded probe한다.",
+        "/api/library의 ready, degraded_last_good, degraded_fallback mode는 지원 상태로 인정하고 corrupt, unsupported version 또는 I/O failure를 bootstrap이 복구·덮어쓰기하지 않는다.",
+        "AI_NOTE_URL은 네 probe가 성공한 뒤에만 출력하고 app:status도 content surface 결과를 구분한다.",
+        "probe 실패는 raw HTML/JSON, file path, PID/token, provider output 없이 안전한 고정 오류를 반환한다.",
+        "새 health API, UI loading/error 변경 또는 모든 Next.js asset 다운로드·파싱을 추가하지 않는다.",
+        "library data write가 필요하면 기존 /api/library app-api owner만 수행하고 bootstrap script가 data 파일을 직접 쓰지 않는다."
+      ]
+    },
+    {
+      "id": "R3",
+      "text": "Windows doctor와 child process가 동일한 case-insensitive 환경과 실행 파일을 사용하고 terminal startup failure를 빠르고 안전하게 종료한다.",
+      "source": "observed-bug",
+      "acceptance": [
+        "Windows의 Path/PATH와 PATHEXT 키를 case-insensitive하게 해석하고 실제 child environment와 which resolver가 동일한 effective value를 사용한다.",
+        "Inherited duplicate는 Node Windows child environment와 호환되는 deterministic precedence로 하나만 남기며 PATH 값을 합치지 않고 explicit child override가 case-insensitive하게 우선한다.",
+        "Doctor와 supervisor는 동일 resolver 규칙으로 찾은 exact uv.exe 경로를 사용하되 runtime state나 새 설정 파일에 absolute path를 저장하지 않는다.",
+        "공백이 든 repository, temp, executable 경로를 argv 배열과 shell false로 처리한다.",
+        "Whisper public health가 current ffmpeg-missing condition을 명확히 반환하면 일반 startup timeout을 기다리지 않고 정적 설치 조치와 --launch 재실행을 안내한다.",
+        "Ready 전 interrupt/error는 이번 supervisor가 확보한 child handle만 정리하고 global PID/port scan 또는 소유권 불명 signal을 수행하지 않는다."
+      ]
+    },
+    {
+      "id": "R4",
+      "text": "Codex 데스크톱 앱 package와 독립 Codex CLI 혼동을 보수적으로 진단하면서 optional summarizer 경계를 지킨다.",
+      "source": "observed-bug",
+      "acceptance": [
+        "첫 PATH 후보가 명확한 %ProgramFiles%\\WindowsApps\\OpenAI.Codex_* package 경로일 때만 doctor가 desktop package 선택 가능성을 warning으로 표시한다.",
+        "Codex warning, 미설정 또는 health failure는 bootstrap과 녹음·전사의 blocker가 아니다.",
+        "Windows EACCES 또는 EPERM은 권한 차단, 독립 CLI/PATH 확인, 새 PowerShell과 owned AI NOTE runtime 재시작이라는 safe action을 제공한다.",
+        "Windows ENOENT도 독립 CLI 설치 뒤 shell/runtime restart가 필요함을 안내한다.",
+        "Non-Windows health 문구와 codex --version 수준의 binary detection 의미는 유지한다.",
+        "alternate executable 자동 검색·실행, absolute Codex path 저장, login/auth command, model selector 또는 generation path를 변경하지 않는다."
+      ]
+    },
+    {
+      "id": "R5",
+      "text": "Windows에서 install/build와 실제 first-use browser shell을 synthetic data로 최소 회귀한다.",
+      "source": "user-approved",
+      "acceptance": [
+        "windows-latest job은 pinned Node, npm ci, setup/bootstrap/Codex 대상 테스트, secret 없는 build, Chromium 설치와 doctor를 실행한다.",
+        "Windows browser 단계는 existing e2e/smoke.spec.ts만 desktop-1440, mobile-390, mobile-320에서 실행한다.",
+        "E2E source snapshot 경로는 의도적으로 공백을 포함하며 existing smoke가 /api/library success, AI NOTE title, main content, 설명과 회의 목록 heading을 확인한다.",
+        "Windows job은 실제 mic, user data, Whisper model/service, uv, ffmpeg, Codex login, local provider 또는 external network를 사용하지 않는다.",
+        "전체 Windows E2E suite, 새 browser spec, 새 dependency 또는 Playwright version 변경을 추가하지 않는다.",
+        "Bootstrap lifecycle은 주입식 regression, browser hydration은 existing synthetic smoke로 분리하고 Windows CI가 실제 bootstrap end-to-end를 수행했다고 표현하지 않는다."
+      ]
+    },
+    {
+      "id": "R6",
+      "text": "Windows 설치·재시작·첫 사용 판정 계약을 기존 정본 문서와 ADR 0023에 일치시킨다.",
+      "source": "repository-contract",
+      "acceptance": [
+        "README, CONTRIBUTING, AGENTS, ARCHITECTURE, scripts/CLAUDE, Claude setup command가 pre-mutation ownership fence와 four-surface readiness를 같은 의미로 설명한다.",
+        "Windows Path/PATH, uv, ffmpeg와 standalone Codex CLI 설치 뒤 새 shell 및 owned runtime restart 조치를 기록한다.",
+        "기존 ADR 0023에 Windows에서 드러난 후속 제약과 자동 restart를 하지 않는 이유를 추가한다.",
+        "새 ADR, PRD, UI guide 또는 changelog를 수정하지 않는다.",
+        "문서는 blank-content 원인을 하나로 단정하거나 bootstrap이 Codex 인증과 실제 요약 생성을 보장한다고 표현하지 않는다."
+      ]
+    }
+  ],
+  "globalConstraints": {
+    "noUnplannedWork": true,
+    "noOpportunisticRefactor": true,
+    "noRealUserData": true
+  },
+  "forbiddenPaths": [
+    "data/**",
+    ".env*",
+    "glossary.json",
+    "whisper/**",
+    "fixtures/**",
+    "package.json",
+    "package-lock.json",
+    ".husky/**",
+    "docs/plans/**",
+    "docs/PRD.md",
+    "docs/UI_GUIDE.md",
+    "docs/decisions/README.md",
+    "CHANGELOG.md",
+    "e2e/**",
+    "playwright.config.ts",
+    "src/app/**",
+    "src/components/**",
+    "src/domain/**",
+    "src/lib/**",
+    "src/services/llm/exec.ts",
+    "src/services/llm/claudeCli.ts",
+    "src/services/llm/ollama.ts",
+    "scripts/e2e-doctor.mjs",
+    "scripts/e2e-harness.mjs",
+    "scripts/e2e-server.mjs"
+  ],
+  "browserEvidence": {
+    "mode": "playwright",
+    "preflightCommand": "npm run test:e2e:doctor",
+    "verifyCommand": "npm run test:e2e",
+    "requiredArtifacts": [
+      "screenshots",
+      "assertions",
+      "console"
+    ],
+    "viewports": [
+      "desktop-1440",
+      "mobile-390",
+      "mobile-320"
+    ],
+    "dataPolicy": "synthetic-only"
+  },
+  "phases": [
+    {
+      "id": 1,
+      "name": "windows-safe-bootstrap-and-codex-diagnostics",
+      "file": "phase-1-windows-safe-bootstrap-and-codex-diagnostics.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R4"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "README.md",
+        "package.json",
+        "scripts/CLAUDE.md",
+        "scripts/setup.mjs",
+        "scripts/bootstrap.mjs",
+        "scripts/__tests__/setup.test.mjs",
+        "scripts/__tests__/bootstrap.test.mjs",
+        "src/app/api/library/route.ts",
+        "src/lib/libraryService.ts",
+        "src/services/llm/codexCli.ts",
+        "src/services/llm/__tests__/codexCli.test.ts",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0023-installation-and-first-run-ux.md"
+      ],
+      "allowedPaths": [
+        "scripts/setup.mjs",
+        "scripts/bootstrap.mjs",
+        "scripts/__tests__/setup.test.mjs",
+        "scripts/__tests__/bootstrap.test.mjs",
+        "src/services/llm/codexCli.ts",
+        "src/services/llm/__tests__/codexCli.test.ts"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "critical",
+      "verification": {
+        "testMode": "regression",
+        "testCommand": "npm test -- scripts/__tests__/setup.test.mjs scripts/__tests__/bootstrap.test.mjs src/services/llm/__tests__/codexCli.test.ts",
+        "additionalCommands": [
+          "npm run typecheck",
+          "npm run lint -- scripts/setup.mjs scripts/bootstrap.mjs scripts/__tests__/setup.test.mjs scripts/__tests__/bootstrap.test.mjs src/services/llm/codexCli.ts src/services/llm/__tests__/codexCli.test.ts"
+        ],
+        "evidence": [],
+        "reason": "실행 중 build mutation, Windows env mismatch, terminal startup wait와 CLI permission 진단을 각각 실패 테스트로 재현한 뒤 최소 구현으로 닫아야 process와 사용자 녹음 안전성을 보존할 수 있다."
+      },
+      "blockIf": [
+        "owned runtime을 bootstrap이 자동 종료하거나 재시작해야 하면 중단",
+        "stale, invalid 또는 ownership 불명 PID에 signal을 보내야 하면 중단",
+        "runtime state schema, build fingerprint, global PID/port scan 또는 .env.local rewrite가 필요하면 중단",
+        "first-use probe를 위해 새 API, UI 변경, Next asset crawler 또는 data 직접 write가 필요하면 중단",
+        "Windows PATH 중복 값을 합치거나 shell true, command string interpolation이 필요하면 중단",
+        "Codex alternate path search, executable 저장, auth/login 또는 generation/model 변경이 필요하면 중단",
+        "실제 Windows 증거가 npm .cmd invocation redesign을 요구하면 이 phase에서 확장하지 말고 plan amendment를 요청",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "windows-synthetic-smoke-ci",
+      "file": "phase-2-windows-synthetic-smoke-ci.md",
+      "requirements": [
+        "R5"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        ".github/workflows/ci.yml",
+        "package.json",
+        "package-lock.json",
+        "playwright.config.ts",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "scripts/run-e2e.mjs",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "scripts/__tests__/e2e-harness.test.mjs",
+        "scripts/__tests__/e2e-evidence-contract.test.ts",
+        "e2e/smoke.spec.ts",
+        "e2e/support/synthetic-test.ts",
+        "e2e/support/evidence-reporter.ts"
+      ],
+      "allowedPaths": [
+        ".github/workflows/ci.yml",
+        "scripts/run-e2e.mjs"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "verification": {
+        "testMode": "existing-tests",
+        "testCommand": "npm test -- scripts/__tests__/e2e-harness.test.mjs scripts/__tests__/e2e-evidence-contract.test.ts",
+        "additionalCommands": [
+          "npm run lint -- scripts/run-e2e.mjs",
+          "npm run build"
+        ],
+        "evidence": [],
+        "reason": "새 browser scenario나 product behavior를 만들지 않고 기존 synthetic smoke와 evidence contract를 Windows runner 및 공백 snapshot 경로에서 재사용하는 CI/harness 변경이다."
+      },
+      "blockIf": [
+        "Windows smoke를 위해 실제 uv, ffmpeg, Whisper model, Codex login, user data 또는 external network가 필요하면 중단",
+        "Playwright/package version, package-lock, browser spec, fixture, reporter 또는 product code 수정이 필요하면 중단",
+        "기존 smoke만 세 viewport에서 실행할 수 없어 전체 Windows E2E suite가 필요하면 중단",
+        "GitHub Actions secret, cache 밖 persistent artifact 또는 실제 회의 fixture가 필요하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "installation-contract-docs",
+      "file": "phase-3-installation-contract-docs.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "README.md",
+        "CONTRIBUTING.md",
+        ".claude/commands/setup.md",
+        "scripts/CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0023-installation-and-first-run-ux.md",
+        "scripts/setup.mjs",
+        "scripts/bootstrap.mjs",
+        "src/services/llm/codexCli.ts",
+        ".github/workflows/ci.yml"
+      ],
+      "allowedPaths": [
+        "README.md",
+        "CONTRIBUTING.md",
+        "AGENTS.md",
+        "docs/ARCHITECTURE.md",
+        "docs/decisions/0023-installation-and-first-run-ux.md",
+        "scripts/CLAUDE.md",
+        ".claude/commands/setup.md"
+      ],
+      "repairAllowedPaths": [],
+      "riskLevel": "low",
+      "verification": {
+        "testMode": "exempt",
+        "additionalCommands": [
+          "npm run check:links"
+        ],
+        "evidence": [],
+        "reason": "이 phase는 Phase 1과 2에서 검증된 설치 동작을 기존 정본과 ADR에 반영하는 문서 전용 변경이며 제품 코드를 소유하지 않는다."
+      },
+      "blockIf": [
+        "Phase 1과 2가 검증하지 않은 Windows behavior를 보장한다고 문서화해야 하면 중단",
+        "빈 화면의 단일 원인을 확정하거나 Codex health가 인증·실제 요약을 보장한다고 써야 하면 중단",
+        "새 ADR, PRD, UI guide, changelog 또는 screenshot 변경이 필요하면 중단",
+        "historical ADR 0023을 삭제하거나 다른 결정까지 기회적으로 재작성해야 하면 중단",
+        "allowedPaths 밖 수정이 필요하면 중단"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "synthetic-first-use-verification",
+      "file": "phase-4-synthetic-first-use-verification.md",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R5",
+        "R6"
+      ],
+      "requiredFiles": [
+        "AGENTS.md",
+        "package.json",
+        "playwright.config.ts",
+        "docs/decisions/0020-deterministic-synthetic-browser-verification.md",
+        "docs/decisions/0023-installation-and-first-run-ux.md",
+        ".github/workflows/ci.yml",
+        "scripts/run-e2e.mjs",
+        "scripts/e2e-doctor.mjs",
+        "scripts/e2e-harness.mjs",
+        "scripts/e2e-server.mjs",
+        "e2e/smoke.spec.ts",
+        "e2e/support/synthetic-test.ts",
+        "e2e/support/evidence-reporter.ts"
+      ],
+      "allowedPaths": [],
+      "repairAllowedPaths": [],
+      "riskLevel": "standard",
+      "verification": {
+        "testMode": "exempt",
+        "additionalCommands": [
+          "npm run test:e2e"
+        ],
+        "evidence": [
+          "browser"
+        ],
+        "reason": "제품 파일을 수정하지 않고 공백이 포함된 fresh synthetic snapshot에서 전체 repository browser contract를 실행해 AI NOTE 콘텐츠 렌더, 세 viewport와 외부 요청 0을 확인한다."
+      },
+      "blockIf": [
+        "npm run test:e2e:doctor가 pinned Playwright package와 matching Chromium을 확인하지 못하면 중단",
+        "workspace data, glossary, env secret, Git metadata 또는 실제 회의를 snapshot에 포함해야 하면 중단",
+        "실제 Whisper, LLM, CLI provider 또는 external network를 호출해야 하면 중단",
+        "desktop-1440, mobile-390, mobile-320 중 하나라도 실행할 수 없으면 중단",
+        "AI NOTE title, main content, 설명, library response 또는 회의 목록 smoke assertion이 실패하면 중단",
+        "console error, page error, external request 또는 required artifact 누락이 있으면 중단",
+        "검증 전후 product tree가 달라지면 중단"
+      ],
+      "executionMode": "verify-only",
+      "requiresBrowser": true,
+      "dataPolicy": "synthetic-only"
+    }
+  ],
+  "finalGate": [
+    "npm test",
+    "npm run typecheck",
+    "npm run lint",
+    "npm run check:links",
+    "npm run build",
+    "npm run test:e2e:doctor",
+    "npm run test:e2e"
+  ]
+}
