@@ -124,8 +124,10 @@ describe("CodexCliAdapter.run — structured JSONL salvage", () => {
     ]));
     expect(args).not.toContain("민감한 프롬프트");
     expect(runProcessMock.mock.calls[0]?.[2]?.stdin).toBe("민감한 프롬프트");
-    expect(cwdMode).toBe(0o700);
-    expect(schemaMode).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(cwdMode).toBe(0o700);
+      expect(schemaMode).toBe(0o600);
+    }
     expect(out).toBe(lastMessage);
     await expect(access(cwd)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -228,12 +230,11 @@ describe("CodexCliAdapter.health — binary detection only", () => {
   });
 
   it("returns an actionable static message for a missing binary", async () => {
-    runProcessMock.mockRejectedValueOnce(
-      Object.assign(new Error("private spawn output"), { code: "ENOENT" }),
-    );
+    const error = Object.assign(new Error("private spawn output"), { code: "ENOENT" });
+    runProcessMock.mockRejectedValueOnce(error);
     await expect(new CodexCliAdapter({ provider: "codex-cli" }).health()).resolves.toEqual({
       ok: false,
-      detail: "Codex CLI를 찾을 수 없습니다. 설치 후 PATH를 확인하세요.",
+      detail: codexHealthFailureDetail(error),
     });
   });
 

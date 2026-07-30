@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import {
   chmod,
+  lstat,
   mkdtemp,
   open,
   rm,
@@ -154,12 +155,32 @@ export class CodexCliAdapter implements LlmAdapter {
 async function readBoundedLastMessage(path: string): Promise<string | null> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
+    const beforeOpen = await lstat(path);
+    if (
+      beforeOpen.isSymbolicLink()
+      || !beforeOpen.isFile()
+      || beforeOpen.size > LAST_MESSAGE_MAX_BYTES
+    ) {
+      return null;
+    }
     handle = await open(
       path,
       constants.O_RDONLY | constants.O_NOFOLLOW,
     );
-    const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.size > LAST_MESSAGE_MAX_BYTES) return null;
+    const opened = await handle.stat();
+    const afterOpen = await lstat(path);
+    if (
+      !opened.isFile()
+      || opened.size > LAST_MESSAGE_MAX_BYTES
+      || afterOpen.isSymbolicLink()
+      || !afterOpen.isFile()
+      || beforeOpen.dev !== opened.dev
+      || beforeOpen.ino !== opened.ino
+      || opened.dev !== afterOpen.dev
+      || opened.ino !== afterOpen.ino
+    ) {
+      return null;
+    }
 
     const buffer = Buffer.alloc(LAST_MESSAGE_MAX_BYTES + 1);
     let offset = 0;
