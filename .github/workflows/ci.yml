@@ -64,4 +64,7 @@ jobs:
       - name: Verify Playwright environment
         run: npm run test:e2e:doctor
       - name: Existing synthetic first-use smoke only
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: npm run test:e2e -- e2e/smoke.spec.ts
