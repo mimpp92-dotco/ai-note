@@ -34,13 +34,65 @@ export function checkNode(versionStr, min = 20) {
     : { ok, detail: `Node ${versionStr} — need >= ${min} (use nvm or your OS package manager)` };
 }
 
+function windowsEnvironmentEntries(env) {
+  const seen = new Set();
+  const entries = [];
+  // Match Node's Windows spawn rule: sort keys, then keep the first
+  // case-insensitive occurrence.
+  for (const key of Object.keys(env).sort()) {
+    const folded = key.toUpperCase();
+    if (seen.has(folded)) continue;
+    seen.add(folded);
+    if (env[key] !== undefined) entries.push([key, env[key]]);
+  }
+  return entries;
+}
+
+export function normalizeChildEnvironment({
+  inheritedEnv = {},
+  overrideEnv = {},
+  platform = process.platform,
+} = {}) {
+  if (platform !== "win32") {
+    return { ...inheritedEnv, ...overrideEnv };
+  }
+
+  const normalized = {};
+  const selectedKeys = new Map();
+  for (const [key, value] of windowsEnvironmentEntries(inheritedEnv)) {
+    normalized[key] = value;
+    selectedKeys.set(key.toUpperCase(), key);
+  }
+  for (const [key, value] of windowsEnvironmentEntries(overrideEnv)) {
+    const folded = key.toUpperCase();
+    const inheritedKey = selectedKeys.get(folded);
+    if (inheritedKey !== undefined) delete normalized[inheritedKey];
+    normalized[key] = value;
+    selectedKeys.set(folded, key);
+  }
+  return normalized;
+}
+
+function environmentValue(env, name, platform) {
+  if (platform !== "win32") return env[name];
+  const normalized = normalizeChildEnvironment({ inheritedEnv: env, platform });
+  const key = Object.keys(normalized).find(
+    (candidate) => candidate.toUpperCase() === name.toUpperCase(),
+  );
+  return key === undefined ? undefined : normalized[key];
+}
+
 // which()는 실행 없이 PATH를 훑는다. win32는 PATHEXT 확장자를 순회한다.
 export function which(bin, { env = {}, platform = process.platform, existsSync: exists } = {}) {
   const isWin = platform === "win32";
   const sep = isWin ? ";" : ":";
   const joiner = isWin ? "\\" : "/";
-  const dirs = (env.PATH || "").split(sep).filter(Boolean);
-  const exts = isWin ? [...(env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";"), ""] : [""];
+  const pathValue = environmentValue(env, "PATH", platform);
+  const pathExtValue = environmentValue(env, "PATHEXT", platform);
+  const dirs = (pathValue || "").split(sep).filter(Boolean);
+  const exts = isWin
+    ? [...(pathExtValue || ".EXE;.CMD;.BAT;.COM").split(";"), ""]
+    : [""];
   for (const dir of dirs) {
     for (const ext of exts) {
       const candidate = `${dir}${joiner}${bin}${ext}`;
@@ -48,6 +100,37 @@ export function which(bin, { env = {}, platform = process.platform, existsSync: 
     }
   }
   return null;
+}
+
+export function codexWindowsAppsWarning({
+  codexPath,
+  env = {},
+  platform = process.platform,
+} = {}) {
+  if (platform !== "win32" || typeof codexPath !== "string") return null;
+  const programFiles = environmentValue(env, "ProgramFiles", platform);
+  if (typeof programFiles !== "string" || programFiles.length === 0) return null;
+
+  const normalizedPath = codexPath.replaceAll("/", "\\").toLowerCase();
+  const normalizedProgramFiles = programFiles
+    .replaceAll("/", "\\")
+    .replace(/\\+$/u, "")
+    .toLowerCase();
+  const prefix = `${normalizedProgramFiles}\\windowsapps\\openai.codex_`;
+  if (!normalizedPath.startsWith(prefix)) return null;
+
+  const packageRelative = normalizedPath.slice(prefix.length);
+  const components = packageRelative.split("\\").filter(Boolean);
+  if (
+    components.length < 2 ||
+    !/^codex(?:\.(?:exe|cmd|bat|com))?$/iu.test(components.at(-1) ?? "")
+  ) {
+    return null;
+  }
+  return (
+    "Codex 데스크톱 앱 package가 PATH의 첫 후보로 보입니다. " +
+    "요약에는 독립 Codex CLI가 필요하므로 설치와 PATH 순서를 확인하세요."
+  );
 }
 
 export function resolveFfmpeg({ env = {}, existsSync: exists, which: whichFn }) {
@@ -81,8 +164,8 @@ export function doctorCompletionMessage({ blocked }) {
 }
 
 // ── 부수효과 헬퍼 (가드 뒤에서만 호출) ───────────────────────────────
-function realWhich(bin) {
-  return which(bin, { env: process.env, platform: process.platform, existsSync });
+function realWhich(bin, env = process.env) {
+  return which(bin, { env, platform: process.platform, existsSync });
 }
 
 async function probeOllama() {
@@ -110,6 +193,10 @@ function line(mark, label, detail) {
 async function main() {
   console.log("AI NOTE 설치 점검\n");
   let blocked = false;
+  const effectiveEnv = normalizeChildEnvironment({
+    inheritedEnv: process.env,
+    platform: process.platform,
+  });
 
   // 1. Node (하드 블로커)
   const node = checkNode(process.versions.node);
@@ -117,18 +204,22 @@ async function main() {
   if (!node.ok) blocked = true;
 
   // 2. uv (하드 블로커)
-  const uv = realWhich("uv");
+  const uv = realWhich("uv", effectiveEnv);
   line(uv ? OK : FAIL, "uv", uv || UV_INSTALL);
   if (!uv) blocked = true;
 
   // 3. ffmpeg (하드 블로커)
-  const ffmpeg = resolveFfmpeg({ env: process.env, existsSync, which: realWhich });
+  const ffmpeg = resolveFfmpeg({
+    env: effectiveEnv,
+    existsSync,
+    which: (bin) => realWhich(bin, effectiveEnv),
+  });
   line(ffmpeg.ok ? OK : FAIL, "ffmpeg", ffmpeg.ok ? ffmpeg.path : ffmpeg.detail);
   if (!ffmpeg.ok) blocked = true;
 
   // 4. 요약기 (정보성 — 최소 하나 필요, 하드 블로커 아님)
-  const claude = realWhich("claude");
-  const codex = realWhich("codex");
+  const claude = realWhich("claude", effectiveEnv);
+  const codex = realWhich("codex", effectiveEnv);
   const ollama = await probeOllama();
   const summarizers = [];
   if (claude) summarizers.push("claude");
@@ -147,6 +238,12 @@ async function main() {
         "앱 기동 후 Settings에서 선택.",
     );
   }
+  const codexWarning = codexWindowsAppsWarning({
+    codexPath: codex,
+    env: effectiveEnv,
+    platform: process.platform,
+  });
+  if (codexWarning) line(WARN, "Codex CLI", codexWarning);
 
   // 5. .env.local (선택)
   if (existsSync(".env.local")) {

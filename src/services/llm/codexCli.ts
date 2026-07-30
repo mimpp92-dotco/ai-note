@@ -39,6 +39,39 @@ const CODEX_OPTIONAL_FLAGS = [
 ] as const;
 const LAST_MESSAGE_MAX_BYTES = 1024 * 1024;
 
+function hasErrorCode(error: unknown, code: string): boolean {
+  const candidate = error as NodeJS.ErrnoException | undefined;
+  return candidate?.code === code || (candidate?.message?.includes(code) ?? false);
+}
+
+export function codexHealthFailureDetail(
+  error: unknown,
+  platform = process.platform,
+): string {
+  if (platform === "win32") {
+    if (hasErrorCode(error, "EACCES") || hasErrorCode(error, "EPERM")) {
+      return (
+        "Windows에서 Codex CLI 실행 권한이 차단되었습니다. Codex 데스크톱 앱이 아닌 " +
+        "독립 Codex CLI와 PATH를 확인한 뒤 새 PowerShell을 여세요. 진행 중인 녹음이 " +
+        "없는지 확인하고 `npm run app:stop` 후 `node scripts/bootstrap.mjs --launch`로 " +
+        "owned AI NOTE runtime을 다시 시작하세요."
+      );
+    }
+    if (hasErrorCode(error, "ENOENT")) {
+      return (
+        "Windows에서 독립 Codex CLI를 찾을 수 없습니다. 독립 Codex CLI를 설치하고 " +
+        "PATH를 확인한 뒤 새 PowerShell을 여세요. 진행 중인 녹음이 없는지 확인하고 " +
+        "`npm run app:stop` 후 `node scripts/bootstrap.mjs --launch`로 owned AI NOTE " +
+        "runtime을 다시 시작하세요."
+      );
+    }
+  }
+  if (hasErrorCode(error, "ENOENT")) {
+    return "Codex CLI를 찾을 수 없습니다. 설치 후 PATH를 확인하세요.";
+  }
+  return "Codex CLI 상태를 확인할 수 없습니다. 설치와 PATH를 확인하세요.";
+}
+
 export class CodexCliAdapter implements LlmAdapter {
   readonly provider: LlmProvider = "codex-cli";
 
@@ -110,16 +143,9 @@ export class CodexCliAdapter implements LlmAdapter {
         detail: "Codex CLI가 감지되었습니다. 인증과 실제 요약 가능 여부는 첫 요약에서 확인합니다.",
       };
     } catch (err) {
-      const e = err as NodeJS.ErrnoException | undefined;
-      if (e?.code === "ENOENT" || (e?.message?.includes("ENOENT") ?? false)) {
-        return {
-          ok: false,
-          detail: "Codex CLI를 찾을 수 없습니다. 설치 후 PATH를 확인하세요.",
-        };
-      }
       return {
         ok: false,
-        detail: "Codex CLI 상태를 확인할 수 없습니다. 설치와 PATH를 확인하세요.",
+        detail: codexHealthFailureDetail(err),
       };
     }
   }

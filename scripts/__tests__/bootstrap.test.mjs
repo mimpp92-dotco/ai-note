@@ -12,6 +12,10 @@ import {
   buildRuntimeCommandPlan,
   canonicalAppUrl,
   classifyRuntimeOwnership,
+  createOwnedChildCleanup,
+  isAiNoteRootHtml,
+  isSupportedLibraryResponse,
+  isWhisperFfmpegMissing,
   isWhisperHealthReady,
   openBrowserWithFallback,
   parseBootstrapCommand,
@@ -103,13 +107,14 @@ describe("repository-owned paths and commands", () => {
   });
 
   it("constructs both runtime children with loopback ports only in child env", () => {
-    const repositoryRoot = resolve("/tmp", "ai-note");
+    const repositoryRoot = resolve("/tmp", "AI NOTE with spaces");
+    const uvExecutable = "C:\\Program Files\\uv bin\\uv.exe";
     const commands = buildRuntimeCommandPlan({
       repositoryRoot,
       appPort: 3004,
       whisperPort: 8128,
       nodeExecutable: "/opt/node",
-      uvExecutable: "uv",
+      uvExecutable,
     });
 
     expect(commands.app).toEqual({
@@ -130,7 +135,7 @@ describe("repository-owned paths and commands", () => {
       },
     });
     expect(commands.whisper).toEqual({
-      command: "uv",
+      command: uvExecutable,
       args: [
         "run",
         "--project",
@@ -145,6 +150,17 @@ describe("repository-owned paths and commands", () => {
     });
     expect(commands.app).not.toHaveProperty("shell");
     expect(commands.whisper).not.toHaveProperty("shell");
+  });
+
+  it("never falls back to a bare uv executable when the doctor path was not supplied", () => {
+    expect(() =>
+      buildRuntimeCommandPlan({
+        repositoryRoot: resolve("/tmp", "ai-note"),
+        appPort: 3004,
+        whisperPort: 8128,
+        nodeExecutable: "/opt/node",
+      }),
+    ).toThrow(/uv executable/);
   });
 });
 
@@ -235,6 +251,98 @@ describe("health readiness", () => {
     expect(isWhisperHealthReady({ connected: true, ok: true, ready: true })).toBe(true);
     expect(isWhisperHealthReady({ connected: false, ok: true, ready: true })).toBe(false);
     expect(isWhisperHealthReady({ connected: true, ok: true, ready: false })).toBe(false);
+  });
+
+  it("stops on the current public ffmpeg-missing condition without waiting for timeout", async () => {
+    let now = 0;
+    let probes = 0;
+    await expect(
+      waitForHealth({
+        name: "whisper",
+        url: "http://127.0.0.1:8123/health",
+        timeoutMs: 100,
+        intervalMs: 10,
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+        probe: async () => {
+          probes += 1;
+          return {
+            connected: true,
+            ok: true,
+            ready: false,
+            message: "ffmpeg not found; install ffmpeg before transcribing",
+          };
+        },
+        isReady: isWhisperHealthReady,
+        terminalError: (value) =>
+          isWhisperFfmpegMissing(value)
+            ? new Error(
+                "ffmpeg가 필요합니다. `node scripts/bootstrap.mjs --launch`를 다시 실행하세요.",
+              )
+            : null,
+      }),
+    ).rejects.toThrow(/ffmpeg.*bootstrap\.mjs --launch/);
+    expect(probes).toBe(1);
+    expect(now).toBe(0);
+  });
+
+  it("does not classify another generic not-ready response as terminal", () => {
+    expect(
+      isWhisperFfmpegMissing({
+        connected: true,
+        ok: true,
+        ready: false,
+        message: "model preparing",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("first-use content surface validators", () => {
+  it("identifies the AI NOTE root HTML without accepting an arbitrary page", () => {
+    expect(isAiNoteRootHtml("<html><head><title>AI NOTE</title></head></html>")).toBe(true);
+    expect(isAiNoteRootHtml("<html><head><title>Other app</title></head></html>")).toBe(false);
+    expect(isAiNoteRootHtml({ title: "AI NOTE" })).toBe(false);
+  });
+
+  it.each(["ready", "degraded_last_good", "degraded_fallback"])(
+    "accepts the supported public library mode %s",
+    (mode) => {
+      expect(isSupportedLibraryResponse({ mode })).toBe(true);
+    },
+  );
+
+  it("rejects malformed and unsupported library responses", () => {
+    expect(isSupportedLibraryResponse(null)).toBe(false);
+    expect(isSupportedLibraryResponse({})).toBe(false);
+    expect(isSupportedLibraryResponse({ mode: "corrupt" })).toBe(false);
+    expect(isSupportedLibraryResponse({ mode: "unsupported_version" })).toBe(false);
+  });
+});
+
+describe("owned pre-ready child cleanup", () => {
+  it("terminates only acquired child handles and does so once across interrupt/error races", async () => {
+    const first = { pid: 1001 };
+    const second = { pid: 1002 };
+    const unrelated = { pid: 9000 };
+    const terminateChild = vi.fn(async () => {});
+    const cleanup = createOwnedChildCleanup({ terminateChild });
+    cleanup.track(first);
+    cleanup.track(second);
+
+    await Promise.all([
+      cleanup.cleanupAll(),
+      cleanup.cleanupChild(first),
+      cleanup.cleanupAll(),
+      cleanup.cleanupChild(unrelated),
+    ]);
+
+    expect(terminateChild).toHaveBeenCalledTimes(2);
+    expect(terminateChild).toHaveBeenCalledWith(first);
+    expect(terminateChild).toHaveBeenCalledWith(second);
+    expect(terminateChild).not.toHaveBeenCalledWith(unrelated);
   });
 });
 
@@ -399,7 +507,15 @@ describe("runtime ownership and safe stop", () => {
 });
 
 describe("launch orchestration", () => {
-  it("runs install/build/start/health/browser in order and prints one canonical URL", async () => {
+  const readyValue = (name) => {
+    if (name === "app") return { ready: true };
+    if (name === "whisper") return { connected: true, ok: true, ready: true };
+    if (name === "root") return "<html><head><title>AI NOTE</title></head></html>";
+    if (name === "library") return { mode: "ready" };
+    throw new Error(`unexpected readiness probe: ${name}`);
+  };
+
+  it("checks absence before mutation, then runs install/build/start and all four probes", async () => {
     const repositoryRoot = resolve("/tmp", "ai-note");
     const events = [];
     const healthUrls = [];
@@ -412,6 +528,11 @@ describe("launch orchestration", () => {
 
     const result = await runLaunchFlow({
       repositoryRoot,
+      install: true,
+      readOwnership: async () => {
+        events.push("ownership");
+        return { kind: "absent", reason: "state_missing" };
+      },
       commandPlan,
       runCommand: async (spec) => {
         events.push(spec.name);
@@ -420,9 +541,10 @@ describe("launch orchestration", () => {
         events.push("start-runtime");
         return { appPort: 3003, whisperPort: 8126 };
       },
-      waitForEndpoint: async ({ name, url }) => {
+      waitForEndpoint: async ({ name, url, isReady }) => {
         events.push(name);
         healthUrls.push(url);
+        expect(isReady(readyValue(name))).toBe(true);
       },
       openBrowser: async ({ url }) => {
         events.push("browser");
@@ -433,25 +555,131 @@ describe("launch orchestration", () => {
     });
 
     expect(events).toEqual([
+      "ownership",
       "doctor",
       "dependencies",
       "build",
       "start-runtime",
       "app",
       "whisper",
+      "root",
+      "library",
       "browser",
     ]);
     expect(healthUrls).toEqual([
       "http://localhost:3003/",
       "http://localhost:3003/api/whisper/health",
+      "http://localhost:3003/",
+      "http://localhost:3003/api/library",
     ]);
     expect(output).toEqual(["AI_NOTE_URL=http://localhost:3003"]);
     expect(result.url).toBe(canonicalAppUrl(3003));
+    expect(result.mode).toBe("started");
+  });
+
+  it("reuses an owned runtime without install/build/start and reports the unapplied update", async () => {
+    const repositoryRoot = resolve("/tmp", "ai-note");
+    const runCommand = vi.fn();
+    const startRuntime = vi.fn();
+    const openBrowser = vi.fn(async () => ({ opened: true }));
+    const output = [];
+    const state = {
+      schemaVersion: 1,
+      repositoryRoot,
+      supervisorPid: 4242,
+      token: "a".repeat(64),
+      appPort: 3009,
+      whisperPort: 8130,
+      appPid: 5001,
+      whisperPid: 5002,
+      startedAt: 9_000,
+    };
+
+    const result = await runLaunchFlow({
+      repositoryRoot,
+      install: true,
+      readOwnership: async () => ({ kind: "owned", state }),
+      commandPlan: buildBootstrapCommandPlan({ repositoryRoot }),
+      runCommand,
+      startRuntime,
+      waitForEndpoint: async ({ name, isReady }) => {
+        expect(isReady(readyValue(name))).toBe(true);
+      },
+      openBrowser,
+      writeLine: (line) => output.push(line),
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(openBrowser).toHaveBeenCalledWith({ url: "http://localhost:3009" });
+    expect(output).toContain("AI_NOTE_URL=http://localhost:3009");
+    expect(output.join("\n")).toMatch(/이번 설치\/업데이트.*적용되지 않았/);
+    expect(output.join("\n")).toContain("npm run app:stop");
+    expect(output.join("\n")).toContain("node scripts/bootstrap.mjs --launch");
+    expect(result.mode).toBe("reused");
+  });
+
+  it.each([
+    { kind: "stale", reason: "heartbeat_stale" },
+    { kind: "unsafe", reason: "state_invalid" },
+  ])("fails closed before mutation for an untrusted runtime: $kind", async (ownership) => {
+    const runCommand = vi.fn();
+    const startRuntime = vi.fn();
+    const openBrowser = vi.fn();
+    const output = [];
+
+    await expect(
+      runLaunchFlow({
+        repositoryRoot: resolve("/tmp", "ai-note"),
+        install: true,
+        readOwnership: async () => ownership,
+        commandPlan: [{ name: "doctor" }],
+        runCommand,
+        startRuntime,
+        waitForEndpoint: vi.fn(),
+        openBrowser,
+        writeLine: (line) => output.push(line),
+      }),
+    ).rejects.toThrow(/runtime.*안전하게 확인/);
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(openBrowser).not.toHaveBeenCalled();
+    expect(output).toEqual([]);
+  });
+
+  it("sanitizes a malformed content-surface failure and never prints a premature URL", async () => {
+    const output = [];
+    let caught;
+    try {
+      await runLaunchFlow({
+        repositoryRoot: resolve("/tmp", "ai-note"),
+        install: true,
+        readOwnership: async () => ({ kind: "absent", reason: "state_missing" }),
+        commandPlan: [],
+        runCommand: vi.fn(),
+        startRuntime: async () => ({ appPort: 3003, whisperPort: 8126 }),
+        waitForEndpoint: async ({ name }) => {
+          if (name === "library") {
+            throw new Error('private body={"mode":"unsupported_version"} path=/secret');
+          }
+        },
+        openBrowser: vi.fn(),
+        writeLine: (line) => output.push(line),
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught.message).toBe("AI NOTE first-use readiness 확인에 실패했습니다.");
+    expect(caught.message).not.toMatch(/private|unsupported_version|secret/);
+    expect(output.some((line) => line.startsWith("AI_NOTE_URL="))).toBe(false);
   });
 });
 
 describe("owned runtime status", () => {
-  it("probes the app and proxied Whisper health through the canonical localhost authority", async () => {
+  it("prints the URL only after app, Whisper, root identity, and degraded library are supported", async () => {
     const repositoryRoot = resolve("/tmp", "ai-note");
     const paths = resolveRuntimePaths(repositoryRoot);
     const state = {
@@ -474,9 +702,12 @@ describe("owned runtime status", () => {
       readOwnership: async () => ({ kind: "owned", state }),
       probeEndpoint: async (url, options) => {
         probed.push([url, options]);
-        return options?.json
-          ? { connected: true, ok: true, ready: true }
-          : { ready: true };
+        if (url.endsWith("/api/whisper/health")) {
+          return { connected: true, ok: true, ready: true };
+        }
+        if (url.endsWith("/api/library")) return { mode: "degraded_last_good" };
+        if (options?.html) return "<html><head><title>AI NOTE</title></head></html>";
+        return { ready: true };
       },
       writeLine: (line) => output.push(line),
     });
@@ -484,9 +715,95 @@ describe("owned runtime status", () => {
     expect(probed).toEqual([
       ["http://localhost:3006/", undefined],
       ["http://localhost:3006/api/whisper/health", { json: true }],
+      ["http://localhost:3006/", { html: true }],
+      ["http://localhost:3006/api/library", { json: true }],
     ]);
     expect(output).toContain("AI_NOTE_URL=http://localhost:3006");
-    expect(output).toContain(`app=ready log=${paths.appLog}`);
-    expect(output).toContain(`whisper=ready log=${paths.whisperLog}`);
+    expect(output).toContain("app=ready");
+    expect(output).toContain("whisper=ready");
+    expect(output).toContain("root=ready");
+    expect(output).toContain("library=degraded_last_good");
+    expect(output.join("\n")).not.toContain(String(state.supervisorPid));
+    expect(output.join("\n")).not.toContain(paths.appLog);
+  });
+
+  it("reports a safe fixed failure and withholds the URL for an unsupported library body", async () => {
+    const output = [];
+
+    await expect(
+      runStatus({
+        repositoryRoot: resolve("/tmp", "ai-note"),
+        paths: resolveRuntimePaths(resolve("/tmp", "ai-note")),
+        readOwnership: async () => ({
+          kind: "owned",
+          state: {
+            schemaVersion: 1,
+            repositoryRoot: resolve("/tmp", "ai-note"),
+            supervisorPid: 4242,
+            token: "a".repeat(64),
+            appPort: 3006,
+            whisperPort: 8129,
+            appPid: 5001,
+            whisperPid: 5002,
+            startedAt: 9_000,
+          },
+        }),
+        probeEndpoint: async (url, options) => {
+          if (url.endsWith("/api/whisper/health")) {
+            return { connected: true, ok: true, ready: true };
+          }
+          if (url.endsWith("/api/library")) return { mode: "unsupported_version" };
+          if (options?.html) return "<html><head><title>AI NOTE</title></head></html>";
+          return { ready: true };
+        },
+        writeLine: (line) => output.push(line),
+      }),
+    ).rejects.toThrow(/^AI NOTE runtime readiness 확인에 실패했습니다\.$/);
+
+    expect(output).toContain("library=not_ready");
+    expect(output.some((line) => line.startsWith("AI_NOTE_URL="))).toBe(false);
+    expect(output.join("\n")).not.toMatch(/unsupported_version|token|pid=|\/secret/);
+  });
+
+  it("surfaces static ffmpeg installation and relaunch guidance without a generic wait", async () => {
+    const repositoryRoot = resolve("/tmp", "ai-note");
+    const output = [];
+    await expect(
+      runStatus({
+        repositoryRoot,
+        paths: resolveRuntimePaths(repositoryRoot),
+        readOwnership: async () => ({
+          kind: "owned",
+          state: {
+            schemaVersion: 1,
+            repositoryRoot,
+            supervisorPid: 4242,
+            token: "a".repeat(64),
+            appPort: 3006,
+            whisperPort: 8129,
+            appPid: 5001,
+            whisperPid: 5002,
+            startedAt: 9_000,
+          },
+        }),
+        probeEndpoint: async (url, options) => {
+          if (url.endsWith("/api/whisper/health")) {
+            return {
+              connected: true,
+              ok: true,
+              ready: false,
+              message: "ffmpeg not found; install ffmpeg before transcribing",
+            };
+          }
+          if (url.endsWith("/api/library")) return { mode: "ready" };
+          if (options?.html) return "<html><head><title>AI NOTE</title></head></html>";
+          return { ready: true };
+        },
+        writeLine: (line) => output.push(line),
+      }),
+    ).rejects.toThrow(/brew install ffmpeg.*choco install ffmpeg.*bootstrap\.mjs --launch/su);
+
+    expect(output).toContain("whisper=ffmpeg_missing");
+    expect(output.some((line) => line.startsWith("AI_NOTE_URL="))).toBe(false);
   });
 });

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkNode,
+  codexWindowsAppsWarning,
   doctorCompletionMessage,
   nodeMajor,
+  normalizeChildEnvironment,
   parseOllamaModels,
   resolveFfmpeg,
   which,
@@ -54,6 +56,90 @@ describe("which (injectable, cross-platform)", () => {
       existsSync: (p) => p === "C:\\bin\\ffmpeg.EXE",
     };
     expect(which("ffmpeg", d)).toBe("C:\\bin\\ffmpeg.EXE");
+  });
+
+  it("reads Windows Path and mixed-case PATHEXT keys case-insensitively", () => {
+    const d = {
+      env: { Path: "C:\\Program Files\\uv bin", PaThExT: ".Com;.Exe;.Cmd" },
+      platform: "win32",
+      existsSync: (p) => p === "C:\\Program Files\\uv bin\\uv.Exe",
+    };
+    expect(which("uv", d)).toBe("C:\\Program Files\\uv bin\\uv.Exe");
+  });
+});
+
+describe("Windows child environment normalization", () => {
+  it("matches Node's deterministic inherited duplicate precedence without merging PATH", () => {
+    const env = normalizeChildEnvironment({
+      inheritedEnv: {
+        Path: "C:\\inherited-path",
+        PATH: "C:\\node-precedence",
+        PaThExT: ".EXE;.CMD",
+        TEMP: "C:\\Temp",
+      },
+      platform: "win32",
+    });
+
+    expect(Object.keys(env).filter((key) => key.toUpperCase() === "PATH")).toEqual(["PATH"]);
+    expect(env.PATH).toBe("C:\\node-precedence");
+    expect(env.PATH).not.toContain("C:\\inherited-path");
+    expect(Object.keys(env).filter((key) => key.toUpperCase() === "PATHEXT")).toEqual([
+      "PaThExT",
+    ]);
+  });
+
+  it("lets an explicit child override win case-insensitively as one entry", () => {
+    const env = normalizeChildEnvironment({
+      inheritedEnv: {
+        PATH: "C:\\inherited",
+        Path: "C:\\ignored-inherited",
+        TEMP: "C:\\Temp",
+      },
+      overrideEnv: {
+        pAtH: "C:\\Program Files\\AI NOTE\\bin",
+      },
+      platform: "win32",
+    });
+
+    expect(Object.keys(env).filter((key) => key.toUpperCase() === "PATH")).toEqual(["pAtH"]);
+    expect(env.pAtH).toBe("C:\\Program Files\\AI NOTE\\bin");
+    expect(env.pAtH).not.toContain("C:\\inherited");
+    expect(env.TEMP).toBe("C:\\Temp");
+  });
+});
+
+describe("Codex Windows desktop package warning", () => {
+  const env = { ProgramFiles: "C:\\Program Files" };
+
+  it("warns only when the first resolved Codex path is clearly inside the desktop package", () => {
+    const warning = codexWindowsAppsWarning({
+      codexPath:
+        "C:\\Program Files\\WindowsApps\\OpenAI.Codex_1.2.3.0_x64__8wekyb3d8bbwe\\codex.exe",
+      env,
+      platform: "win32",
+    });
+
+    expect(warning).toMatch(/데스크톱 앱/);
+    expect(warning).toMatch(/독립 Codex CLI/);
+    expect(warning).toMatch(/PATH/);
+  });
+
+  it("does not warn for a standalone CLI or a non-Windows platform", () => {
+    expect(
+      codexWindowsAppsWarning({
+        codexPath: "C:\\Tools\\codex\\codex.exe",
+        env,
+        platform: "win32",
+      }),
+    ).toBe(null);
+    expect(
+      codexWindowsAppsWarning({
+        codexPath:
+          "C:\\Program Files\\WindowsApps\\OpenAI.Codex_1.2.3.0_x64__8wekyb3d8bbwe\\codex.exe",
+        env,
+        platform: "linux",
+      }),
+    ).toBe(null);
   });
 });
 

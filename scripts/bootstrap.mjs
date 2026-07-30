@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import {
   constants as fsConstants,
   createWriteStream,
+  existsSync,
 } from "node:fs";
 import {
   chmod,
@@ -21,6 +22,8 @@ import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { normalizeChildEnvironment, which } from "./setup.mjs";
+
 export const INTERNAL_SUPERVISOR_COMMAND = "__supervisor";
 
 const RUNTIME_DIRECTORY_NAME = ".ai-note-runtime";
@@ -32,7 +35,21 @@ const HEARTBEAT_MAX_AGE_MS = 15_000;
 const STARTUP_TIMEOUT_MS = 10 * 60_000;
 const ENDPOINT_TIMEOUT_MS = 3 * 60_000;
 const SECURE_JSON_MAX_BYTES = 64 * 1024;
+const PUBLIC_JSON_MAX_BYTES = 1024 * 1024;
+const ROOT_HTML_MAX_BYTES = 512 * 1024;
 const TOKEN_PATTERN = /^[a-f0-9]{64}$/u;
+const WHISPER_FFMPEG_MISSING_MESSAGE =
+  "ffmpeg not found; install ffmpeg before transcribing";
+const FIRST_USE_READINESS_ERROR =
+  "AI NOTE first-use readiness 확인에 실패했습니다.";
+const STATUS_READINESS_ERROR =
+  "AI NOTE runtime readiness 확인에 실패했습니다.";
+const FFMPEG_REMEDIATION =
+  "Whisper에 ffmpeg가 필요합니다. macOS: `brew install ffmpeg` · " +
+  "Debian/Ubuntu: `apt install ffmpeg` · Windows: `choco install ffmpeg` " +
+  "(또는 ffmpeg.org). 설치 후 `node scripts/bootstrap.mjs --launch`를 다시 실행하세요.";
+
+class WhisperFfmpegMissingError extends Error {}
 
 export function parseBootstrapCommand(args) {
   if (!Array.isArray(args) || args.length !== 1) {
@@ -121,8 +138,11 @@ function buildAppCommand({
 function buildWhisperCommand({
   repositoryRoot,
   whisperPort,
-  uvExecutable = process.platform === "win32" ? "uv.exe" : "uv",
+  uvExecutable,
 }) {
+  if (typeof uvExecutable !== "string" || uvExecutable.length === 0) {
+    throw new Error("uv executable을 안전하게 확인할 수 없습니다.");
+  }
   const root = resolve(repositoryRoot);
   return {
     command: uvExecutable,
@@ -145,7 +165,7 @@ export function buildRuntimeCommandPlan({
   appPort,
   whisperPort,
   nodeExecutable = process.execPath,
-  uvExecutable = process.platform === "win32" ? "uv.exe" : "uv",
+  uvExecutable,
 }) {
   return {
     app: buildAppCommand({
@@ -204,6 +224,7 @@ export async function waitForHealth({
   now = Date.now,
   sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)),
   retryError = () => true,
+  terminalError = () => null,
 }) {
   if (!(timeoutMs > 0) || !(intervalMs > 0)) {
     throw new Error("health timeout과 interval은 양수여야 합니다.");
@@ -211,12 +232,17 @@ export async function waitForHealth({
   const deadline = now() + timeoutMs;
   let lastError;
   while (true) {
+    let result;
     try {
-      const result = await probe(url);
-      if (isReady(result)) return result;
+      result = await probe(url);
     } catch (error) {
       if (!retryError(error)) throw error;
       lastError = error;
+    }
+    if (result !== undefined) {
+      if (isReady(result)) return result;
+      const terminal = terminalError(result);
+      if (terminal) throw terminal;
     }
     const remaining = deadline - now();
     if (remaining <= 0) {
@@ -234,6 +260,34 @@ export function isWhisperHealthReady(value) {
     value.connected === true &&
     value.ok === true &&
     value.ready === true
+  );
+}
+
+export function isWhisperFfmpegMissing(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value.connected === undefined || value.connected === true) &&
+    value.ok === true &&
+    value.ready === false &&
+    value.message === WHISPER_FFMPEG_MISSING_MESSAGE
+  );
+}
+
+export function isAiNoteRootHtml(value) {
+  return (
+    typeof value === "string" &&
+    /<title(?:\s[^>]*)?>\s*AI NOTE\s*<\/title>/iu.test(value)
+  );
+}
+
+export function isSupportedLibraryResponse(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    ["ready", "degraded_last_good", "degraded_fallback"].includes(value.mode)
   );
 }
 
@@ -487,8 +541,45 @@ export async function stopOwnedRuntime({
   return { stoppedPid: ownership.state.supervisorPid };
 }
 
+async function waitForRuntimeReadiness({
+  runtime,
+  waitForEndpoint,
+}) {
+  const appUrl = canonicalAppUrl(runtime.appPort);
+  try {
+    await waitForEndpoint({
+      name: "app",
+      url: `${appUrl}/`,
+      isReady: (value) => value?.ready === true,
+    });
+    await waitForEndpoint({
+      name: "whisper",
+      url: `${appUrl}/api/whisper/health`,
+      probeOptions: { json: true },
+      isReady: isWhisperHealthReady,
+    });
+    await waitForEndpoint({
+      name: "root",
+      url: `${appUrl}/`,
+      probeOptions: { html: true },
+      isReady: isAiNoteRootHtml,
+    });
+    await waitForEndpoint({
+      name: "library",
+      url: `${appUrl}/api/library`,
+      probeOptions: { json: true },
+      isReady: isSupportedLibraryResponse,
+    });
+  } catch (error) {
+    if (error instanceof WhisperFfmpegMissingError) throw error;
+    throw new Error(FIRST_USE_READINESS_ERROR);
+  }
+}
+
 export async function runLaunchFlow({
   repositoryRoot,
+  install = false,
+  readOwnership,
   commandPlan,
   runCommand,
   startRuntime,
@@ -496,26 +587,39 @@ export async function runLaunchFlow({
   openBrowser,
   writeLine,
 }) {
-  for (const spec of commandPlan) {
-    await runCommand(spec);
+  const ownership = await readOwnership();
+  let runtime;
+  let mode;
+  if (ownership.kind === "owned") {
+    runtime = ownership.state;
+    mode = "reused";
+  } else if (ownership.kind === "absent") {
+    for (const spec of commandPlan) {
+      await runCommand(spec);
+    }
+    runtime = await startRuntime();
+    mode = "started";
+  } else {
+    throw new Error(
+      "기존 runtime을 안전하게 확인할 수 없어 설치·빌드·시작을 수행하지 않았습니다.",
+    );
   }
-  const runtime = await startRuntime();
-  const loopbackBaseUrl = canonicalAppUrl(runtime.appPort);
-  await waitForEndpoint({
-    name: "app",
-    url: `${loopbackBaseUrl}/`,
-    isReady: (value) => value?.ready === true,
-  });
-  await waitForEndpoint({
-    name: "whisper",
-    url: `${loopbackBaseUrl}/api/whisper/health`,
-    isReady: isWhisperHealthReady,
-  });
+
+  await waitForRuntimeReadiness({ runtime, waitForEndpoint });
   const url = canonicalAppUrl(runtime.appPort);
   writeLine(`AI_NOTE_URL=${url}`);
+  if (mode === "reused" && install) {
+    writeLine(
+      "owned runtime을 그대로 사용하므로 이번 설치/업데이트는 적용되지 않았습니다.",
+    );
+    writeLine(
+      "변경을 적용하려면 진행 중인 녹음이 없는지 확인한 뒤 `npm run app:stop`을 실행하고 " +
+        "`node scripts/bootstrap.mjs --launch`를 다시 실행하세요.",
+    );
+  }
   const browser = await openBrowser({ url });
   if (!browser.opened && browser.message) writeLine(browser.message);
-  return { url, runtime, browser };
+  return { mode, url, runtime, browser };
 }
 
 async function ensureRuntimeDirectory(paths) {
@@ -639,11 +743,22 @@ function realIsProcessAlive(pid) {
   }
 }
 
-function runProcess(spec, { repositoryRoot, stdio = "inherit" } = {}) {
+function runProcess(
+  spec,
+  {
+    repositoryRoot,
+    stdio = "inherit",
+    inheritedEnvironment = process.env,
+  } = {},
+) {
   return new Promise((resolveRun, rejectRun) => {
     const child = nodeSpawn(spec.command, spec.args, {
       cwd: repositoryRoot,
-      env: { ...process.env, ...spec.env },
+      env: normalizeChildEnvironment({
+        inheritedEnv: inheritedEnvironment,
+        overrideEnv: spec.env,
+        platform: process.platform,
+      }),
       shell: false,
       stdio,
       windowsHide: true,
@@ -690,7 +805,50 @@ function realProbePort(port) {
   });
 }
 
-async function fetchEndpoint(url, { json = false } = {}) {
+async function readBoundedResponseText(response, maxBytes) {
+  const declaredLength = response.headers.get("content-length");
+  if (
+    declaredLength !== null &&
+    (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > maxBytes)
+  ) {
+    return null;
+  }
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchEndpoint(url, { json = false, html = false } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3_000);
   try {
@@ -700,33 +858,68 @@ async function fetchEndpoint(url, { json = false } = {}) {
       redirect: "error",
       signal: controller.signal,
     });
-    if (!response.ok) return json ? null : { ready: false };
-    return json ? await response.json() : { ready: true };
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      return json || html ? null : { ready: false };
+    }
+    if (html) {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!/^text\/html(?:;|$)/iu.test(contentType)) {
+        await response.body?.cancel().catch(() => {});
+        return null;
+      }
+      return await readBoundedResponseText(response, ROOT_HTML_MAX_BYTES);
+    }
+    if (json) {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!/^application\/json(?:;|$)/iu.test(contentType)) {
+        await response.body?.cancel().catch(() => {});
+        return null;
+      }
+      const text = await readBoundedResponseText(response, PUBLIC_JSON_MAX_BYTES);
+      if (text === null) return null;
+      try {
+        return JSON.parse(text);
+      } catch {
+        return null;
+      }
+    }
+    await response.body?.cancel().catch(() => {});
+    return { ready: true };
   } catch {
-    return json ? null : { ready: false };
+    return json || html ? null : { ready: false };
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function realWaitForEndpoint({ name, url, isReady }) {
+async function realWaitForEndpoint({
+  name,
+  url,
+  isReady,
+  probeOptions,
+}) {
   return waitForHealth({
     name,
     url,
     timeoutMs: ENDPOINT_TIMEOUT_MS,
     intervalMs: 500,
-    probe: (endpoint) =>
-      fetchEndpoint(endpoint, {
-        json: endpoint.endsWith("/api/whisper/health"),
-      }),
+    probe: (endpoint) => fetchEndpoint(endpoint, probeOptions),
     isReady,
+    terminalError: (value) =>
+      name === "whisper" && isWhisperFfmpegMissing(value)
+        ? new WhisperFfmpegMissingError(FFMPEG_REMEDIATION)
+        : null,
   });
 }
 
 function openBrowserProcess(spec) {
   return new Promise((resolveOpen, rejectOpen) => {
     const child = nodeSpawn(spec.command, spec.args, {
-      env: process.env,
+      env: normalizeChildEnvironment({
+        inheritedEnv: process.env,
+        platform: process.platform,
+      }),
       shell: false,
       stdio: "ignore",
       windowsHide: true,
@@ -772,13 +965,18 @@ async function spawnLoggedChild({
   spec,
   repositoryRoot,
   logPath,
+  inheritedEnvironment = process.env,
 }) {
   const log = await createSecureLogStream(logPath);
   let tail = "";
   let spawnError = null;
   const child = nodeSpawn(spec.command, spec.args, {
     cwd: repositoryRoot,
-    env: { ...process.env, ...spec.env },
+    env: normalizeChildEnvironment({
+      inheritedEnv: inheritedEnvironment,
+      overrideEnv: spec.env,
+      platform: process.platform,
+    }),
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -824,6 +1022,33 @@ async function terminateSpawnedChild(child) {
   }
 }
 
+export function createOwnedChildCleanup({ terminateChild }) {
+  const acquired = new Set();
+  const cleanupPromises = new Map();
+
+  const cleanupChild = async (child) => {
+    if (!acquired.has(child)) return false;
+    if (!cleanupPromises.has(child)) {
+      cleanupPromises.set(
+        child,
+        Promise.resolve().then(() => terminateChild(child)),
+      );
+    }
+    await cleanupPromises.get(child);
+    return true;
+  };
+  return {
+    track(child) {
+      acquired.add(child);
+      return child;
+    },
+    cleanupChild,
+    async cleanupAll() {
+      await Promise.all([...acquired].map(cleanupChild));
+    },
+  };
+}
+
 function containsBindConflict(output) {
   return /EADDRINUSE|address already in use|errno\s+(?:48|98)/iu.test(output);
 }
@@ -836,8 +1061,10 @@ async function launchServiceCandidate({
   readinessUrl,
   readinessMarker,
   isReady,
+  childCleanup,
 }) {
   const record = await spawnLoggedChild({ spec, repositoryRoot, logPath });
+  childCleanup?.track(record.child);
   try {
     await waitForHealth({
       name,
@@ -858,6 +1085,10 @@ async function launchServiceCandidate({
       },
       isReady,
       retryError: (error) => !(error instanceof ChildStoppedBeforeReady),
+      terminalError: (value) =>
+        name === "whisper" && isWhisperFfmpegMissing(value)
+          ? new WhisperFfmpegMissingError(FFMPEG_REMEDIATION)
+          : null,
     });
     return {
       kind: "started",
@@ -866,10 +1097,12 @@ async function launchServiceCandidate({
     };
   } catch (error) {
     const output = record.getTail();
-    await terminateSpawnedChild(record.child);
+    if (childCleanup) await childCleanup.cleanupChild(record.child);
+    else await terminateSpawnedChild(record.child);
     record.closeLog();
     if (containsBindConflict(output)) return { kind: "bind-conflict" };
-    throw error;
+    if (error instanceof WhisperFfmpegMissingError) throw error;
+    throw new Error(`${name} startup readiness 확인에 실패했습니다.`);
   }
 }
 
@@ -893,6 +1126,7 @@ async function runSupervisor({
   repositoryRoot,
   paths,
   token,
+  uvExecutable,
   sendMessage = (message) => process.send?.(message),
 }) {
   await ensureRuntimeDirectory(paths);
@@ -903,27 +1137,47 @@ async function runSupervisor({
     throw new Error("기존 runtime heartbeat를 덮어쓰지 않습니다.");
   }
 
-  const whisper = await startOnAvailablePort({
-    startPort: WHISPER_START_PORT,
-    candidateCount: PORT_CANDIDATE_COUNT,
-    probePort: realProbePort,
-    launchCandidate: (whisperPort) =>
-      launchServiceCandidate({
-        name: "whisper",
-        spec: buildWhisperCommand({ repositoryRoot, whisperPort }),
-        repositoryRoot,
-        logPath: paths.whisperLog,
-        readinessUrl: `http://127.0.0.1:${whisperPort}/health`,
-        readinessMarker: (output) =>
-          output.includes(
-            `WHISPER_LISTENING http://127.0.0.1:${whisperPort}`,
-          ),
-        isReady: (value) => value?.ok === true && value?.ready === true,
-      }),
+  const childCleanup = createOwnedChildCleanup({
+    terminateChild: terminateSpawnedChild,
   });
+  let preReadyClosing = false;
+  const preReadyShutdown = () => {
+    if (preReadyClosing) return;
+    preReadyClosing = true;
+    void childCleanup.cleanupAll().finally(() => process.exit(0));
+  };
+  process.once("SIGTERM", preReadyShutdown);
+  process.once("SIGINT", preReadyShutdown);
 
+  let whisper;
   let app;
+  let state;
   try {
+    whisper = await startOnAvailablePort({
+      startPort: WHISPER_START_PORT,
+      candidateCount: PORT_CANDIDATE_COUNT,
+      probePort: realProbePort,
+      launchCandidate: (whisperPort) =>
+        launchServiceCandidate({
+          name: "whisper",
+          spec: buildRuntimeCommandPlan({
+            repositoryRoot,
+            appPort: APP_START_PORT,
+            whisperPort,
+            uvExecutable,
+          }).whisper,
+          repositoryRoot,
+          logPath: paths.whisperLog,
+          readinessUrl: `http://127.0.0.1:${whisperPort}/health`,
+          readinessMarker: (output) =>
+            output.includes(
+              `WHISPER_LISTENING http://127.0.0.1:${whisperPort}`,
+            ),
+          isReady: (value) => value?.ok === true && value?.ready === true,
+          childCleanup,
+        }),
+    });
+
     app = await startOnAvailablePort({
       startPort: APP_START_PORT,
       candidateCount: PORT_CANDIDATE_COUNT,
@@ -931,36 +1185,54 @@ async function runSupervisor({
       launchCandidate: (appPort) =>
         launchServiceCandidate({
           name: "app",
-          spec: buildAppCommand({
+          spec: buildRuntimeCommandPlan({
             repositoryRoot,
             appPort,
             whisperPort: whisper.port,
-          }),
+            uvExecutable,
+          }).app,
           repositoryRoot,
           logPath: paths.appLog,
           readinessUrl: `http://127.0.0.1:${appPort}/`,
           readinessMarker: (output) =>
             output.includes(`:${appPort}`) && /\bReady in\b/iu.test(output),
           isReady: (value) => value?.ready === true,
+          childCleanup,
         }),
     });
+
+    state = {
+      schemaVersion: 1,
+      repositoryRoot,
+      supervisorPid: process.pid,
+      token,
+      appPort: app.port,
+      whisperPort: whisper.port,
+      appPid: app.child.pid,
+      whisperPid: whisper.child.pid,
+      startedAt: Date.now(),
+    };
+    const initialHeartbeat = {
+      schemaVersion: 1,
+      repositoryRoot,
+      supervisorPid: process.pid,
+      token,
+      updatedAt: Date.now(),
+    };
+    await writeSecureJson(paths.state, state);
+    await writeSecureJson(paths.heartbeat, initialHeartbeat);
+    await releaseLaunchLock(launchLockPath(paths), token);
   } catch (error) {
-    await terminateSpawnedChild(whisper.child);
-    whisper.closeLog();
+    process.removeListener("SIGTERM", preReadyShutdown);
+    process.removeListener("SIGINT", preReadyShutdown);
+    await childCleanup.cleanupAll();
+    app?.closeLog();
+    whisper?.closeLog();
     throw error;
   }
 
-  const state = {
-    schemaVersion: 1,
-    repositoryRoot,
-    supervisorPid: process.pid,
-    token,
-    appPort: app.port,
-    whisperPort: whisper.port,
-    appPid: app.child.pid,
-    whisperPid: whisper.child.pid,
-    startedAt: Date.now(),
-  };
+  process.removeListener("SIGTERM", preReadyShutdown);
+  process.removeListener("SIGINT", preReadyShutdown);
   const heartbeatValue = () => ({
     schemaVersion: 1,
     repositoryRoot,
@@ -968,9 +1240,6 @@ async function runSupervisor({
     token,
     updatedAt: Date.now(),
   });
-  await writeSecureJson(paths.state, state);
-  await writeSecureJson(paths.heartbeat, heartbeatValue());
-  await releaseLaunchLock(launchLockPath(paths), token);
 
   let closing = false;
   let heartbeatWriting = false;
@@ -982,10 +1251,7 @@ async function runSupervisor({
     closing = true;
     clearInterval(heartbeatTimer);
     await heartbeatWrite;
-    await Promise.all([
-      terminateSpawnedChild(app.child),
-      terminateSpawnedChild(whisper.child),
-    ]);
+    await childCleanup.cleanupAll();
     app.closeLog();
     whisper.closeLog();
     await removeOwnedRuntimeState(paths, token);
@@ -1015,7 +1281,15 @@ async function runSupervisor({
   sendMessage({ type: "ready", token, state });
 }
 
-async function spawnSupervisorProcess({ repositoryRoot, paths }) {
+async function spawnSupervisorProcess({
+  repositoryRoot,
+  paths,
+  uvExecutable,
+  inheritedEnvironment,
+}) {
+  if (typeof uvExecutable !== "string" || uvExecutable.length === 0) {
+    throw new Error("uv executable을 안전하게 확인할 수 없습니다.");
+  }
   await ensureRuntimeDirectory(paths);
   const existing = await readRuntimeOwnership({
     paths,
@@ -1041,10 +1315,14 @@ async function spawnSupervisorProcess({ repositoryRoot, paths }) {
       {
         cwd: repositoryRoot,
         detached: true,
-        env: {
-          ...process.env,
-          AI_NOTE_RUNTIME_TOKEN: token,
-        },
+        env: normalizeChildEnvironment({
+          inheritedEnv: inheritedEnvironment,
+          overrideEnv: {
+            AI_NOTE_RUNTIME_TOKEN: token,
+            AI_NOTE_UV_EXECUTABLE: uvExecutable,
+          },
+          platform: process.platform,
+        }),
         shell: false,
         stdio: ["ignore", supervisorLog, supervisorLog, "ipc"],
         windowsHide: true,
@@ -1053,19 +1331,21 @@ async function spawnSupervisorProcess({ repositoryRoot, paths }) {
 
     const state = await new Promise((resolveReady, rejectReady) => {
       const timer = setTimeout(() => {
-        rejectReady(new Error(`runtime supervisor startup timeout: ${paths.supervisorLog}`));
+        rejectReady(new Error("runtime supervisor startup 확인에 실패했습니다."));
       }, STARTUP_TIMEOUT_MS);
       const finish = (callback, value) => {
         clearTimeout(timer);
         callback(value);
       };
-      child.once("error", (error) => finish(rejectReady, error));
-      child.once("exit", (code, signal) => {
+      child.once("error", () =>
         finish(
           rejectReady,
-          new Error(
-            `runtime supervisor 종료(exit=${code ?? "null"}, signal=${signal ?? "none"}): ${paths.supervisorLog}`,
-          ),
+          new Error("runtime supervisor startup 확인에 실패했습니다."),
+        ));
+      child.once("exit", () => {
+        finish(
+          rejectReady,
+          new Error("runtime supervisor startup 확인에 실패했습니다."),
         );
       });
       child.on("message", (message) => {
@@ -1132,18 +1412,55 @@ export async function runStatus({
   }
   const { state } = ownership;
   const appUrl = canonicalAppUrl(state.appPort);
-  const app = await probeEndpoint(`${appUrl}/`);
-  const whisper = await probeEndpoint(
-    `${appUrl}/api/whisper/health`,
-    { json: true },
-  );
-  writeLine(`AI_NOTE_URL=${appUrl}`);
-  writeLine(`supervisor=owned pid=${state.supervisorPid}`);
-  writeLine(`app=${app?.ready === true ? "ready" : "not_ready"} log=${paths.appLog}`);
+  let app;
+  let whisper;
+  let root;
+  let library;
+  try {
+    app = await probeEndpoint(`${appUrl}/`);
+    whisper = await probeEndpoint(
+      `${appUrl}/api/whisper/health`,
+      { json: true },
+    );
+    root = await probeEndpoint(`${appUrl}/`, { html: true });
+    library = await probeEndpoint(`${appUrl}/api/library`, { json: true });
+  } catch {
+    throw new Error(STATUS_READINESS_ERROR);
+  }
+
+  const appReady = app?.ready === true;
+  const whisperReady = isWhisperHealthReady(whisper);
+  const rootReady = isAiNoteRootHtml(root);
+  const libraryReady = isSupportedLibraryResponse(library);
+  writeLine("supervisor=owned");
+  writeLine(`app=${appReady ? "ready" : "not_ready"}`);
   writeLine(
-    `whisper=${isWhisperHealthReady(whisper) ? "ready" : "not_ready"} log=${paths.whisperLog}`,
+    `whisper=${
+      whisperReady
+        ? "ready"
+        : isWhisperFfmpegMissing(whisper)
+          ? "ffmpeg_missing"
+          : "not_ready"
+    }`,
   );
-  writeLine(`supervisor_log=${paths.supervisorLog}`);
+  writeLine(`root=${rootReady ? "ready" : "not_ready"}`);
+  writeLine(
+    `library=${libraryReady ? library.mode : "not_ready"}`,
+  );
+  if (!appReady || !whisperReady || !rootReady || !libraryReady) {
+    if (isWhisperFfmpegMissing(whisper)) {
+      throw new WhisperFfmpegMissingError(FFMPEG_REMEDIATION);
+    }
+    throw new Error(STATUS_READINESS_ERROR);
+  }
+  writeLine(`AI_NOTE_URL=${appUrl}`);
+  return {
+    url: appUrl,
+    app: "ready",
+    whisper: "ready",
+    root: "ready",
+    library: library.mode,
+  };
 }
 
 async function runStop({ repositoryRoot, paths }) {
@@ -1162,14 +1479,40 @@ async function runStop({ repositoryRoot, paths }) {
 }
 
 async function runStart({ repositoryRoot, paths, install }) {
+  const childEnvironment = normalizeChildEnvironment({
+    inheritedEnv: process.env,
+    platform: process.platform,
+  });
+  const uvExecutable = which("uv", {
+    env: childEnvironment,
+    platform: process.platform,
+    existsSync,
+  });
   const commandPlan = install
     ? buildBootstrapCommandPlan({ repositoryRoot })
     : [];
   return runLaunchFlow({
     repositoryRoot,
+    install,
+    readOwnership: () =>
+      readRuntimeOwnership({
+        paths,
+        repositoryRoot,
+        isProcessAlive: realIsProcessAlive,
+      }),
     commandPlan,
-    runCommand: (spec) => runProcess(spec, { repositoryRoot }),
-    startRuntime: () => spawnSupervisorProcess({ repositoryRoot, paths }),
+    runCommand: (spec) =>
+      runProcess(spec, {
+        repositoryRoot,
+        inheritedEnvironment: childEnvironment,
+      }),
+    startRuntime: () =>
+      spawnSupervisorProcess({
+        repositoryRoot,
+        paths,
+        uvExecutable,
+        inheritedEnvironment: childEnvironment,
+      }),
     waitForEndpoint: realWaitForEndpoint,
     openBrowser: realOpenBrowser,
     writeLine: (line) => console.log(line),
@@ -1184,17 +1527,32 @@ async function main() {
 
   if (command === "supervisor") {
     const token = process.env.AI_NOTE_RUNTIME_TOKEN;
+    const uvExecutable = process.env.AI_NOTE_UV_EXECUTABLE;
     delete process.env.AI_NOTE_RUNTIME_TOKEN;
-    if (!TOKEN_PATTERN.test(token ?? "") || typeof process.send !== "function") {
+    delete process.env.AI_NOTE_UV_EXECUTABLE;
+    if (
+      !TOKEN_PATTERN.test(token ?? "") ||
+      typeof uvExecutable !== "string" ||
+      uvExecutable.length === 0 ||
+      typeof process.send !== "function"
+    ) {
       throw new Error("internal supervisor ownership token/IPC가 유효하지 않습니다.");
     }
     try {
-      await runSupervisor({ repositoryRoot, paths, token });
+      await runSupervisor({
+        repositoryRoot,
+        paths,
+        token,
+        uvExecutable,
+      });
     } catch (error) {
       process.send?.({
         type: "error",
         token,
-        error: error instanceof Error ? error.message : String(error),
+        error:
+          error instanceof WhisperFfmpegMissingError
+            ? error.message
+            : "runtime supervisor startup 확인에 실패했습니다.",
       });
       throw error;
     }
