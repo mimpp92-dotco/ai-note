@@ -40,6 +40,15 @@ when no stored pipeline settings exist. See
 use `node scripts/bootstrap.mjs --launch`; do not use its owned background
 runtime as the development server.
 
+That canonical command checks repository-local runtime ownership before
+install/build mutation. An absent runtime follows doctor → install → build →
+start; an owned runtime is verified and reused without automatic
+stop/restart/install/build, and unsafe or unverifiable state fails closed.
+Applying an update requires the user to confirm no recording is active, run
+`npm run app:stop`, and rerun `--launch`. Both new and reused runtimes expose
+`AI_NOTE_URL` only after app health, Whisper health, AI NOTE root identity, and
+the existing `/api/library` public mode all pass.
+
 ## Before you open a PR
 
 Every PR must pass the same gates CI runs. Run them locally first:
@@ -85,6 +94,17 @@ The scenario uses an allowlisted temporary snapshot, empty `data/`, synthetic
 `HOME`, disabled worker, disconnected Whisper, and no external browser traffic.
 Chrome DevTools MCP is optional qualitative inspection, not a gate or runtime
 dependency. See [ADR 0020](docs/decisions/0020-deterministic-synthetic-browser-verification.md).
+
+The `windows-latest` merge job pins Node 22, runs `npm ci`, the targeted
+setup/bootstrap/Codex regression tests, a no-secrets build, pinned Chromium
+installation, and the Playwright doctor. Its browser command is limited to the
+existing `e2e/smoke.spec.ts` at `desktop-1440`, `mobile-390`, and `mobile-320`;
+the runner-owned source snapshot path intentionally contains a space. This is
+install/build plus synthetic first-use browser coverage, not an end-to-end run
+of the real bootstrap lifecycle. Runtime lifecycle is covered by injected
+regression tests, while browser hydration uses empty synthetic data. The job
+does not use a microphone, user data, `uv`, `ffmpeg`, a Whisper model or
+service, Codex login, a local provider, or external browser network.
 
 The real-data pipeline benchmark is never a unit, build, or Playwright gate.
 Run `npm run benchmark:pipeline -- --meeting-id <exact-id>` only after explicitly

@@ -39,12 +39,19 @@ flowchart LR
 ### Clone 뒤 정본 실행
 
 1. **Node ≥ 20 확보** — `node -v`. 없거나 낮으면 nvm 또는 OS package manager 설치 명령을 사용자에게 보여 주고 필요한 권한을 받는다.
-2. Target root에서 `node scripts/bootstrap.mjs --launch`를 실행한다. 이 무의존 command가 먼저 doctor를 실행하고, 통과하면 `HUSKY=0 npm ci` → `npm run build` → repository-owned background app/Whisper 기동 → 두 health 확인 → 실제 브라우저 열기 순서로 완료한다.
-3. Doctor가 필수 `uv` 또는 `ffmpeg` 누락으로 멈추면 출력된 OS별 조치를 사용자에게 보여 주고 설치한 뒤 같은 `--launch` command를 다시 실행한다. Bootstrap은 `sudo`, package manager, provider 로그인, `ollama pull`, Whisper model download를 몰래 실행하지 않는다.
-4. 요약기는 녹음·전사의 설치 blocker가 아니다. 앱이 열린 뒤 **설정 → 요약 모델**에서 Claude/Codex CLI 또는 Ollama를 선택하고 저장한다. 필요한 CLI 로그인, `ollama serve`/`ollama pull <model>`은 사용자 권한과 선택으로 수행하며 `data/settings.json`을 직접 쓰지 않는다.
-5. 성공 시 `AI_NOTE_URL=http://localhost:<actual-port>`를 정본으로 사용한다. Headless/opener 실패도 server 성공을 유지하므로 출력된 exact URL을 사용 가능한 agent browser surface로 연다. 최종 handoff에는 absolute install path, branch 또는 revision, 실제 앱 URL을 함께 보고한다.
+2. Target root에서 `node scripts/bootstrap.mjs --launch`를 실행한다. 이 무의존 command는 `node_modules`·`.next` mutation 전에 repository-local runtime ownership을 먼저 판정한다.
+   - `absent`일 때만 doctor → `HUSKY=0 npm ci` → `npm run build` → repository-owned background app/Whisper 기동 순서를 수행한다.
+   - `owned`이면 자동 stop/restart/install/build하지 않고 현재 runtime을 검증·개방하며 이번 install/update가 적용되지 않았음을 알린다. 변경 적용이 필요하면 사용자가 진행 중 녹음이 없는지 확인한 뒤 `npm run app:stop`을 실행하고 같은 `--launch` command를 다시 실행한다.
+   - stale·invalid·unsafe·unverifiable이면 process signal과 build mutation 없이 fail-closed한다.
+3. 새 runtime과 재사용한 owned runtime 모두 app health, Whisper health, AI NOTE로 식별되는 root HTML, 기존 `/api/library` public response의 네 bounded probe를 통과해야 한다. Library의 `ready`, `degraded_last_good`, `degraded_fallback`만 지원 상태이며 corrupt·unsupported version·I/O failure를 bootstrap이 복구하거나 덮어쓰지 않는다. Library data write는 기존 app-api owner만 수행한다.
+4. Doctor가 필수 `uv` 또는 `ffmpeg` 누락으로 멈추면 출력된 OS별 조치를 사용자에게 보여 주고 설치한 뒤 같은 `--launch` command를 다시 실행한다. Whisper가 현재의 명확한 ffmpeg-missing public health를 반환하면 일반 timeout을 기다리지 않고 같은 설치·재실행 조치를 안내한다. Bootstrap은 `sudo`, package manager, provider 로그인, `ollama pull`, Whisper model download를 몰래 실행하지 않는다.
+5. Windows에서는 `Path`/`PATH`와 `PATHEXT`를 case-insensitive effective child environment 하나로 해석하고 값을 합치지 않는다. Doctor와 supervisor는 같은 규칙으로 resolve한 exact `uv.exe`를 사용하며 공백 경로도 argv와 `shell:false`로 전달한다. 전제 도구나 독립 Codex CLI 설치 뒤 새 PowerShell을 열고, 이미 owned runtime이 있었다면 녹음이 없는지 확인해 `app:stop` 후 같은 `--launch`로 재기동한다.
+6. 요약기는 녹음·전사의 설치 blocker가 아니다. 앱이 열린 뒤 **설정 → 요약 모델**에서 Claude/Codex CLI 또는 Ollama를 선택하고 저장한다. Windows에서 Codex desktop WindowsApps package는 독립 Codex CLI가 아니며, doctor warning이나 Codex health failure도 bootstrap을 막지 않는다. `codex --version` health는 binary 실행 감지일 뿐 인증·실제 요약 성공 보장이 아니다. 필요한 CLI 로그인, `ollama serve`/`ollama pull <model>`은 사용자 권한과 선택으로 수행하며 `data/settings.json`을 직접 쓰지 않는다.
+7. 네 probe 성공 뒤에만 출력되는 `AI_NOTE_URL=http://localhost:<actual-port>`를 정본으로 사용한다. Headless/opener 실패도 server 성공을 유지하므로 출력된 exact URL을 사용 가능한 agent browser surface로 연다. 최종 handoff에는 absolute install path, branch 또는 revision, 실제 앱 URL을 함께 보고한다.
 
 앱은 `127.0.0.1:3000`부터, Whisper는 `127.0.0.1:8123`부터 bounded 후보를 고르며 기존 process에 연결하거나 종료하지 않는다. 선택 포트는 child environment에만 전달하고 `.env.local`을 만들거나 덮어쓰지 않는다. Runtime state/heartbeat/log는 gitignored `.ai-note-runtime/`에 mode를 제한해 저장하며 credential이나 inherited environment를 기록하지 않는다. `npm run app:status`/`npm run app:stop`은 live ownership token이 검증된 supervisor만 조회·종료하고 stale 또는 검증 불가 PID에는 signal을 보내지 않는다.
+
+Supervisor ready 전 interrupt/error cleanup은 이번 시도가 확보한 app/Whisper child handle에만 idempotent하게 적용한다. Global PID/port scan이나 소유권 불명 process signal은 금지한다. `app:status`도 네 readiness surface를 `app`·`whisper`·`root`·`library`로 구분하며 안전한 고정 오류만 외부에 낸다.
 
 Claude Code 세션은 같은 계약의 `/setup` command를 사용할 수 있다. `npm run dev`는 contributor용 foreground command이며 end-user 설치 성공 경로가 아니다.
 
